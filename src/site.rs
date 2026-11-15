@@ -47,6 +47,111 @@ fn check_template(t: &str, errs: &mut Vec<String>) {
     }
 }
 
+fn env_name_ok(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with(|c: char| c.is_ascii_digit())
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Report unknown or unbalanced `{placeholder}` uses in `text`.
+fn check_placeholders(key: &str, text: &str, allowed: &[&str], errs: &mut Vec<String>) {
+    let mut rest = text;
+    while let Some(i) = rest.find('{') {
+        match rest[i..].find('}') {
+            Some(j) => {
+                let name = &rest[i + 1..i + j];
+                if !allowed.contains(&name) {
+                    errs.push(format!("{key}: unknown placeholder {{{name}}}"));
+                }
+                rest = &rest[i + j + 1..];
+            }
+            None => {
+                errs.push(format!("{key}: unbalanced `{{`"));
+                break;
+            }
+        }
+    }
+}
+
+const ROUTE_ALL: &[&str] = &[
+    "phase_dir",
+    "log_dir",
+    "work_dir",
+    "target",
+    "phase",
+    "runtime_root",
+    "shares_ro",
+    "shares_rw",
+];
+const ROUTE_BASIC: &[&str] = &["phase_dir", "log_dir", "work_dir", "target", "phase"];
+
+fn validate_route(t: &str, r: &Route, e: &mut Vec<String>) {
+    let extra = !r.args.is_empty()
+        || !r.env.is_empty()
+        || r.runtime_root.is_some()
+        || !r.shares_ro.is_empty()
+        || !r.shares_rw.is_empty()
+        || r.receipt_digest_env.is_some()
+        || r.phases != ["build"];
+    if r.kind == "none" && extra {
+        e.push(format!(
+            "targets.{t}.route: args, env, runtime_root, shares, receipt_digest_env and phases need kind command"
+        ));
+    }
+    for p in &r.phases {
+        if !matches!(p.as_str(), "build" | "sources") {
+            e.push(format!(
+                "targets.{t}.route.phases: expected build or sources, found `{p}`"
+            ));
+        }
+    }
+    if r.phases.is_empty() {
+        e.push(format!("targets.{t}.route.phases: must not be empty"));
+    }
+    for a in &r.args {
+        check_placeholders(&format!("targets.{t}.route.args"), a, ROUTE_ALL, e);
+    }
+    for (k, v) in &r.env {
+        check_placeholders(&format!("targets.{t}.route.env.{k}"), v, ROUTE_ALL, e);
+    }
+    for s in r.shares_ro.iter().chain(&r.shares_rw) {
+        check_placeholders(&format!("targets.{t}.route.shares"), s, ROUTE_BASIC, e);
+    }
+    if let Some(n) = &r.receipt_digest_env {
+        if !env_name_ok(n) {
+            e.push(format!(
+                "targets.{t}.route.receipt_digest_env: use letters, digits and `_`"
+            ));
+        }
+    }
+}
+
+fn validate_select(t: &str, s: &Select, e: &mut Vec<String>) {
+    if !s.option.starts_with("--") || s.option.len() < 3 || s.option.contains(['=', ' ']) {
+        e.push(format!(
+            "targets.{t}.select.option: expected a long option such as `--name`, found `{}`",
+            s.option
+        ));
+    }
+    if s.value.trim().is_empty() {
+        e.push(format!("targets.{t}.select.value: must not be empty"));
+    }
+    if s.separator.is_empty() {
+        e.push(format!("targets.{t}.select.separator: must not be empty"));
+    } else if s.value.contains(&s.separator) {
+        e.push(format!(
+            "targets.{t}.select.value: contains the separator `{}`",
+            s.separator
+        ));
+    }
+    if !matches!(s.when_absent.as_str(), "all" | "none") {
+        e.push(format!(
+            "targets.{t}.select.when_absent: expected all or none, found `{}`",
+            s.when_absent
+        ));
+    }
+}
+
 /// Semantic validation. Returns every problem found.
 pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
     let mut e = Vec::new();
@@ -120,6 +225,10 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
                     t.name
                 )),
             }
+            validate_route(&t.name, r, &mut e);
+        }
+        if let Some(s) = &t.select {
+            validate_select(&t.name, s, &mut e);
         }
         if let Some(dir) = lists_dir {
             for l in &t.build_lists {
@@ -136,6 +245,12 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
     }
 
     let fs = &site.filesystems;
+    if !matches!(fs.export_install_vars.as_str(), "single" | "split") {
+        e.push(format!(
+            "filesystems.export_install_vars: expected single or split, found `{}`",
+            fs.export_install_vars
+        ));
+    }
     for (k, v) in [
         ("scratch", &fs.scratch),
         ("tmp", &fs.tmp),
@@ -170,6 +285,13 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
         }
     }
     if let Some(s) = &site.shards {
+        for n in &s.installed_modules_dirs_from_env {
+            if !env_name_ok(n) {
+                e.push(format!(
+                    "shards.installed_modules_dirs_from_env: `{n}` is not a variable name"
+                ));
+            }
+        }
         if s.enabled && s.count >= 2 && s.easyconfigs.is_empty() {
             e.push("shards.easyconfigs: at least one tree is required when count >= 2".into());
         }

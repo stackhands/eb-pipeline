@@ -74,6 +74,21 @@ fn d_backend() -> String {
 fn d_route_kind() -> String {
     "none".into()
 }
+fn d_sep() -> String {
+    ",".into()
+}
+fn d_all() -> String {
+    "all".into()
+}
+fn d_route_phases() -> Vec<String> {
+    vec!["build".into()]
+}
+fn d_single() -> String {
+    "single".into()
+}
+fn d_ro_value() -> String {
+    "1".into()
+}
 fn d_job_env() -> String {
     "SLURM_JOB_ID".into()
 }
@@ -165,6 +180,42 @@ doc_struct! {
         kind: String => ("string", "none", false, "`none` or `command`."),
         command: Option<String> => ("string", "none", false,
             "Wrapper command placed before the launch line of CPU-role phases; required for kind `command`."),
+        #[serde(default)]
+        args: Vec<String> => ("array of string", "[]", false,
+            "Argument templates placed after `command`. When present, a `--` follows them and the phase command comes after it. Placeholders: {phase_dir}, {log_dir}, {work_dir}, {target}, {phase}, {runtime_root}, {shares_ro}, {shares_rw}. {phase_dir} is `<log_dir>/<phase>` and is created before the command starts; {work_dir} is `filesystems.build_path`; the share placeholders join the rendered lists with `:`."),
+        #[serde(default)]
+        env: BTreeMap<String, String> => ("table of string", "{}", false,
+            "Environment exported to the routed command; values accept the same placeholders as `args`."),
+        runtime_root: Option<String> => ("string", "none", false,
+            "Root of the route's runtime; exported as EB_PIPELINE_ROUTE_RUNTIME_ROOT and available as {runtime_root}."),
+        #[serde(default)]
+        shares_ro: Vec<String> => ("array of string", "[]", false,
+            "Paths shared read-only into the route; placeholders {phase_dir}, {log_dir}, {work_dir} allowed. Exported joined with `:` as EB_PIPELINE_ROUTE_SHARES_RO."),
+        #[serde(default)]
+        shares_rw: Vec<String> => ("array of string", "[]", false,
+            "Paths shared read-write into the route; same placeholders as `shares_ro`. Exported as EB_PIPELINE_ROUTE_SHARES_RW."),
+        receipt_digest_env: Option<String> => ("string", "none", false,
+            "Name of an environment variable that holds a receipt digest. `run` refuses with exit 78 when it is unset or empty and passes the value to the routed command as EB_PIPELINE_ROUTE_RECEIPT_DIGEST; `plan` shows `${NAME}`."),
+        #[serde(default = "d_route_phases")]
+        phases: Vec<String> => ("array of string", "[\"build\"]", false,
+            "Phases whose CPU-role commands go through the route: `build`, `sources`."),
+    }
+}
+
+doc_struct! {
+    /// Per-target line selection by a build list option.
+    Select {
+        option: String => ("string", "", true,
+            "Long option name that carries the selection on a build list line, written `--name=a,b` or `--name a,b`."),
+        value: String => ("string", "", true, "This target's token in the option's value list."),
+        #[serde(default = "d_sep")]
+        separator: String => ("string", ",", false, "Separator between tokens in the option's value."),
+        #[serde(default = "d_all")]
+        when_absent: String => ("string", "all", false,
+            "`all` plans a line that lacks the option for this target; `none` skips it."),
+        #[serde(default)]
+        strip: bool => ("boolean", "false", false,
+            "Remove the option from the line before `eb` is called."),
     }
 }
 
@@ -215,7 +266,16 @@ doc_struct! {
         phases: Option<PhaseArgs> => ("table", "phase_defaults", false,
             "Overrides of `[phase_defaults]` for this target."),
         route: Option<Route> => ("table", "none", false, "CPU phase wrapper."),
+        select: Option<Select> => ("table", "none", false,
+            "Per-line target selection; without it every line is planned for every target."),
         hardware: Option<Hardware> => ("table", "none", false, "Hardware identity."),
+        cpu_hardware: Option<Hardware> => ("table", "none", false,
+            "Hardware identity of CPU-role phases. When set, every command exports its class as EB_PIPELINE_HW_VENDOR_ID, EB_PIPELINE_HW_CPU_FAMILY and EB_PIPELINE_HW_MODEL: `cpu_hardware` for CPU-role commands, `hardware` for the rest."),
+        fetch_profile: Option<toml::Table> => ("table", "none", false,
+            "Free-form table passed to source prefetch commands as EB_PIPELINE_FETCH_PROFILE, serialised as JSON with sorted keys."),
+        #[serde(default)]
+        package_env: BTreeMap<String, BTreeMap<String, String>> => ("table of tables", "{}", false,
+            "Environment per package name for this target, `[targets.package_env.<Name>]`; per key it wins over `modules.package_env`."),
         #[serde(default)]
         build_types: BTreeMap<String, BuildTypeOverride> => ("table of tables", "{}", false,
             "Per build type overrides, `[targets.build_types.<name>]`."),
@@ -232,12 +292,18 @@ doc_struct! {
         source_paths: Vec<String> => ("array of string", "[]", false,
             "EASYBUILD_SOURCEPATH entries, joined with `:`."),
         install_root: String => ("string", "", true, "EASYBUILD_INSTALLPATH unless a target sets `site_prefix`."),
+        #[serde(default = "d_single")]
+        export_install_vars: String => ("string", "single", false,
+            "`single` exports EASYBUILD_INSTALLPATH; `split` exports EASYBUILD_INSTALLPATH_SOFTWARE and EASYBUILD_INSTALLPATH_MODULES from the target's software and modules roots instead."),
         log_root: String => ("string", "", true,
             "Root of per-run log directories, `<log_root>/<run-id>/`."),
         shard_dir: Option<String> => ("string", "<scratch>/shards", false,
             "Output directory of `stack shard`; one subdirectory per run id."),
         #[serde(default)]
         read_only_installdir: bool => ("boolean", "false", false, "EASYBUILD_READ_ONLY_INSTALLDIR."),
+        #[serde(default = "d_ro_value")]
+        read_only_installdir_value: String => ("string", "1", false,
+            "Value exported as EASYBUILD_READ_ONLY_INSTALLDIR when `read_only_installdir` is set."),
         configs_repo: Option<String> => ("string", "none", false, "EASYBUILD_CONFIGS_REPOPATH."),
     }
 }
@@ -303,6 +369,9 @@ doc_struct! {
         #[serde(default)]
         installed_modules_dirs: Vec<String> => ("array of string", "[]", false,
             "Module trees counted as installed, `--installed-modules-dir`."),
+        #[serde(default)]
+        installed_modules_dirs_from_env: Vec<String> => ("array of string", "[]", false,
+            "Environment variables whose colon-separated values are appended to `installed_modules_dirs` at run time; `run` refuses with exit 78 when one is unset, an empty value adds nothing, and `plan` shows `${NAME}`."),
     }
 }
 
@@ -373,6 +442,8 @@ doc_struct! {
         command: Option<String> => ("string", "none", false,
             "Cache writer, run once per run for the selected target with EB_PIPELINE_CACHE_* in the environment. Without it the phase is not configured."),
         bindings: Option<String> => ("string", "none", false, "EB_PIPELINE_CACHE_BINDINGS."),
+        init_module: Option<String> => ("string", "none", false,
+            "Default EB_PIPELINE_CACHE_INIT_MODULE for entries that set none."),
         targets: Vec<CacheTarget> => ("array of table", "[]", false, "`[[caches.targets]]` entries."),
     }
 }
@@ -481,7 +552,9 @@ pub const SECTIONS: &[(&str, &[FieldDoc])] = &[
     ("targets[]", Target::FIELDS),
     ("targets[].phases", PhaseArgs::FIELDS),
     ("targets[].route", Route::FIELDS),
+    ("targets[].select", Select::FIELDS),
     ("targets[].hardware", Hardware::FIELDS),
+    ("targets[].cpu_hardware", Hardware::FIELDS),
     ("targets[].build_types.<name>", BuildTypeOverride::FIELDS),
     ("filesystems", Filesystems::FIELDS),
     ("admission", Admission::FIELDS),
@@ -585,6 +658,7 @@ mod tests {
             PhaseArgs,
             Target,
             Route,
+            Select,
             Hardware,
             BuildTypeOverride,
             Filesystems,

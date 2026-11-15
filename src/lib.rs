@@ -6,6 +6,7 @@ pub mod plan;
 pub mod resolve;
 pub mod run;
 pub mod schema;
+pub mod select;
 pub mod site;
 pub mod tools;
 pub mod util;

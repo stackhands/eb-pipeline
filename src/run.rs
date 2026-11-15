@@ -1,7 +1,9 @@
 //! Execution of a plan as subprocesses.
 
 use crate::exit::{self, Fail};
-use crate::plan::{build_plan, read_units, shell_line, valid_job_id, Cmd, Planner, StemSeq, Unit};
+use crate::plan::{
+    build_plan, read_units, shell_line, valid_job_id, Cmd, Deselected, Planner, StemSeq, Unit,
+};
 use crate::resolve::Role;
 use crate::tools::{map_staged, StagedOutcome};
 use crate::util::ListLine;
@@ -114,6 +116,9 @@ pub struct RunResult {
     pub admission: Vec<AdmissionResult>,
     pub phases: Vec<PhaseResult>,
     pub lines: Vec<LineResult>,
+    /// Lines the target's selector left out; not counted as results.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub deselected: Vec<Deselected>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -252,6 +257,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
             admission: vec![],
             phases: vec![],
             lines: vec![],
+            deselected: vec![],
             message: None,
             interrupted_by: None,
         },
@@ -323,6 +329,32 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                 return finish(st, Some(exit::REFUSED));
             }
         }
+    }
+    if let Some(sh) = site
+        .shards_on()
+        .filter(|s| !s.installed_modules_dirs_from_env.is_empty())
+    {
+        let mut vars = BTreeMap::new();
+        for n in &sh.installed_modules_dirs_from_env {
+            match std::env::var(n) {
+                Ok(v) => {
+                    vars.insert(n.clone(), v);
+                }
+                Err(_) => {
+                    let msg = format!("shards.installed_modules_dirs_from_env: {n} is unset");
+                    log("ERROR", "preflight", &target, &msg);
+                    st.phase(
+                        "preflight",
+                        "refused",
+                        Some(exit::REFUSED),
+                        Some(msg.clone()),
+                    );
+                    st.res.message = Some(msg);
+                    return finish(st, Some(exit::REFUSED));
+                }
+            }
+        }
+        p.runtime_env = Some(vars);
     }
     let p: &Planner = p;
     st.phase("preflight", "ok", None, None);
@@ -417,6 +449,44 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
         }
     }
 
+    // selection: lines the target's selector leaves out are recorded, not built
+    let (selected, deselected) = p.select_units(units);
+    units = selected;
+    if !deselected.is_empty() {
+        log(
+            "INFO",
+            "build",
+            &target,
+            &format!("{} line(s) deselected for this target", deselected.len()),
+        );
+    }
+    st.res.deselected = deselected;
+
+    // the route's receipt digest is read once a CPU-role unit needs it
+    let mut routed = p.clone();
+    if units.iter().any(|u| u.role == Role::Cpu) {
+        if let Some(n) = p
+            .scope
+            .target
+            .route
+            .as_ref()
+            .filter(|r| r.kind == "command")
+            .and_then(|r| r.receipt_digest_env.as_ref())
+        {
+            match std::env::var(n) {
+                Ok(v) if !v.is_empty() => routed.route_digest = Some(v),
+                _ => {
+                    let msg = format!("route.receipt_digest_env: {n} is unset or empty");
+                    log("ERROR", "build", &target, &msg);
+                    st.phase("build", "refused", Some(exit::REFUSED), Some(msg.clone()));
+                    st.res.message = Some(msg);
+                    return finish(st, Some(exit::REFUSED));
+                }
+            }
+        }
+    }
+    let p = &routed;
+
     // sources: prefetch every line once; a failed fetch fails the line.
     let mut stems = StemSeq::default();
     let mut unit_stems: Vec<Vec<String>> = Vec::new();
@@ -428,7 +498,8 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
         let mut any_failed = false;
         for (u, ss) in units.iter().zip(&unit_stems) {
             for (l, s) in u.lines.iter().zip(ss) {
-                let cmd = match p.prefetch_cmd(l, s) {
+                make_route_dirs(p, u.role, "sources");
+                let cmd = match p.prefetch_cmd(l, s, u.role) {
                     Ok(c) => c,
                     Err(f) => {
                         st.res.message = Some(f.msg);
@@ -615,6 +686,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
             if interrupted().is_some() {
                 break;
             }
+            make_route_dirs(p, u.role, "build");
             let cmd = match p.build_cmd(u.role, l, s) {
                 Ok(c) => c,
                 Err(f) => {
@@ -786,6 +858,16 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
     }
 
     finish(st, None)
+}
+
+/// Create the directories a routed command expects; a failure surfaces when
+/// the command itself fails.
+fn make_route_dirs(p: &Planner, role: Role, phase: &str) {
+    if role == Role::Cpu {
+        for d in p.scope.route_dirs(phase) {
+            let _ = std::fs::create_dir_all(d);
+        }
+    }
 }
 
 fn stop_if_signalled(st: &mut State, phase: &str) -> Option<i32> {

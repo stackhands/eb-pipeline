@@ -48,6 +48,16 @@ pub struct Plan {
     pub log_dir: String,
     pub lines: usize,
     pub phases: Vec<PlanPhase>,
+    /// Lines left out by the target's selector.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub deselected: Vec<Deselected>,
+}
+
+/// A line that the target's selector left out.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Deselected {
+    pub easyconfig: String,
+    pub unit: String,
 }
 
 pub const PHASES: [&str; 8] = [
@@ -77,6 +87,11 @@ pub struct Planner<'a> {
     pub list_path: String,
     /// Scheduler job id read at run time; `None` plans the `${NAME}` placeholder.
     pub job_id: Option<String>,
+    /// Value of the route's receipt digest variable read at run time.
+    pub route_digest: Option<String>,
+    /// Values of the `installed_modules_dirs_from_env` variables read at run
+    /// time; `None` plans the `${NAME}` placeholders.
+    pub runtime_env: Option<BTreeMap<String, String>>,
 }
 
 /// Module path of an easyconfig relative to `<modules_root>/all`, without extension.
@@ -134,7 +149,38 @@ impl<'a> Planner<'a> {
             scope,
             list_path,
             job_id: None,
+            route_digest: None,
+            runtime_env: None,
         }
+    }
+
+    /// Apply the target's selector to the units. Units left without lines
+    /// are dropped only when a selector is configured.
+    pub fn select_units(&self, units: Vec<Unit>) -> (Vec<Unit>, Vec<Deselected>) {
+        let Some(sel) = &self.scope.target.select else {
+            return (units, Vec::new());
+        };
+        let mut kept = Vec::new();
+        let mut out = Vec::new();
+        for mut u in units {
+            let mut lines = Vec::new();
+            for l in u.lines {
+                let r = crate::select::select_line(sel, &l);
+                if r.planned {
+                    lines.push(ListLine { args: r.args, ..l });
+                } else {
+                    out.push(Deselected {
+                        easyconfig: l.easyconfig,
+                        unit: u.name.clone(),
+                    });
+                }
+            }
+            if !lines.is_empty() {
+                u.lines = lines;
+                kept.push(u);
+            }
+        }
+        (kept, out)
     }
 
     fn site(&self) -> &crate::schema::Site {
@@ -148,7 +194,24 @@ impl<'a> Planner<'a> {
         inner: Vec<String>,
         modules: bool,
     ) -> Result<Vec<String>, Fail> {
-        let mut v = self.scope.launch(role, phase)?;
+        self.wrapped_routed(
+            role,
+            phase,
+            inner,
+            modules,
+            (role == Role::Cpu).then_some(phase),
+        )
+    }
+
+    fn wrapped_routed(
+        &self,
+        role: Role,
+        phase: &str,
+        inner: Vec<String>,
+        modules: bool,
+        route_phase: Option<&str>,
+    ) -> Result<Vec<String>, Fail> {
+        let mut v = self.scope.launch_routed(role, phase, None, route_phase)?;
         if modules {
             v.extend(self.scope.module_wrap());
         }
@@ -187,6 +250,26 @@ impl<'a> Planner<'a> {
             a.push("--installed-modules-dir".into());
             a.push(d.clone());
         }
+        for n in &s.installed_modules_dirs_from_env {
+            match &self.runtime_env {
+                None => {
+                    a.push("--installed-modules-dir".into());
+                    a.push(format!("${{{n}}}"));
+                }
+                Some(vars) => {
+                    for d in vars
+                        .get(n)
+                        .map(String::as_str)
+                        .unwrap_or("")
+                        .split(':')
+                        .filter(|d| !d.is_empty())
+                    {
+                        a.push("--installed-modules-dir".into());
+                        a.push(d.to_string());
+                    }
+                }
+            }
+        }
         if let Some(w) = &s.weights {
             a.push("--weights".into());
             a.push(w.clone());
@@ -223,7 +306,20 @@ impl<'a> Planner<'a> {
         })
     }
 
-    pub fn prefetch_cmd(&self, line: &ListLine, name: &str) -> Result<Cmd, Fail> {
+    /// Route phase of a command of `role`; only CPU-role units are routed.
+    fn route_phase(role: Role, phase: &'static str) -> Option<&'static str> {
+        (role == Role::Cpu).then_some(phase)
+    }
+
+    /// Environment of a routed command of `role` in `phase`.
+    fn route_env(&self, role: Role, phase: &'static str) -> BTreeMap<String, String> {
+        match Self::route_phase(role, phase) {
+            Some(p) => self.scope.route_env(p, self.route_digest.as_deref()),
+            None => BTreeMap::new(),
+        }
+    }
+
+    pub fn prefetch_cmd(&self, line: &ListLine, name: &str, unit_role: Role) -> Result<Cmd, Fail> {
         let extra = self
             .site()
             .sources_on()
@@ -242,10 +338,20 @@ impl<'a> Planner<'a> {
                 .cloned(),
         );
         a.extend(extra);
+        let mut env = self.scope.line_env(&line.easyconfig);
+        env.extend(self.scope.fetch_env());
+        env.extend(self.scope.hardware_env(unit_role));
+        env.extend(self.route_env(unit_role, "sources"));
         Ok(Cmd {
             name: format!("fetch:{name}"),
-            argv: self.wrapped(Role::Short, "sources", a, true)?,
-            env: self.scope.line_env(&line.easyconfig),
+            argv: self.wrapped_routed(
+                Role::Short,
+                "sources",
+                a,
+                true,
+                Self::route_phase(unit_role, "sources"),
+            )?,
+            env,
             note: None,
         })
     }
@@ -373,10 +479,13 @@ impl<'a> Planner<'a> {
         if self.site().logs_on().is_some_and(|l| l.keep_failed) {
             inner.push(format!("--tmp-logdir={}", self.tmp_logdir(stem)));
         }
+        let mut env = self.scope.line_env(&line.easyconfig);
+        env.extend(self.scope.hardware_env(role));
+        env.extend(self.route_env(role, "build"));
         Ok(Cmd {
             name: format!("build:{stem}"),
             argv: self.wrapped(role, "build", inner, true)?,
-            env: self.scope.line_env(&line.easyconfig),
+            env,
             note,
         })
     }
@@ -445,7 +554,7 @@ impl<'a> Planner<'a> {
         if let Some(b) = &c.bindings {
             env.insert("EB_PIPELINE_CACHE_BINDINGS".into(), b.clone());
         }
-        if let Some(m) = &entry.init_module {
+        if let Some(m) = entry.init_module.as_ref().or(c.init_module.as_ref()) {
             env.insert("EB_PIPELINE_CACHE_INIT_MODULE".into(), m.clone());
         }
         let mut v = self
@@ -538,6 +647,7 @@ pub fn build_plan(
             footprint: None,
         }],
     };
+    let (units, deselected) = p.select_units(units);
     let mut seq = StemSeq::default();
     let stems: Vec<Vec<String>> = units
         .iter()
@@ -547,7 +657,7 @@ pub fn build_plan(
         let mut cmds = Vec::new();
         for (u, ss) in units.iter().zip(&stems) {
             for (l, s) in u.lines.iter().zip(ss) {
-                cmds.push(p.prefetch_cmd(l, s)?);
+                cmds.push(p.prefetch_cmd(l, s, u.role)?);
             }
         }
         planned("sources", Some(Role::Short), cmds)
@@ -615,6 +725,7 @@ pub fn build_plan(
         log_dir: p.scope.log_dir(),
         lines: lines.len(),
         phases,
+        deselected,
     })
 }
 

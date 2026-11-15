@@ -129,13 +129,21 @@ impl<'a> Scope<'a> {
         phase: &str,
         args: Option<&str>,
     ) -> Result<Vec<String>, Fail> {
+        self.launch_routed(role, phase, args, (role == Role::Cpu).then_some(phase))
+    }
+
+    /// Like `launch_with`; `route_phase` names the phase to look up in the
+    /// route's `phases` list, or `None` for a command that is not routed.
+    pub fn launch_routed(
+        &self,
+        role: Role,
+        phase: &str,
+        args: Option<&str>,
+        route_phase: Option<&str>,
+    ) -> Result<Vec<String>, Fail> {
         let mut v = Vec::new();
-        if role == Role::Cpu {
-            if let Some(r) = &self.target.route {
-                if r.kind == "command" {
-                    v.extend(split_args(r.command.as_deref().unwrap_or(""))?);
-                }
-            }
+        if let Some(rp) = route_phase {
+            v.extend(self.route_prefix(rp)?);
         }
         if self.site.scheduler.kind == "slurm" {
             v.extend(split_args(&self.site.scheduler.launch)?);
@@ -151,6 +159,138 @@ impl<'a> Scope<'a> {
         Ok(v)
     }
 
+    /// The target's route when it applies to `phase`.
+    fn active_route(&self, phase: &str) -> Option<&Route> {
+        self.target
+            .route
+            .as_ref()
+            .filter(|r| r.kind == "command" && r.phases.iter().any(|p| p == phase))
+    }
+
+    fn render_basic(&self, t: &str, phase: &str) -> String {
+        let log_dir = self.log_dir();
+        t.replace("{phase_dir}", &format!("{log_dir}/{phase}"))
+            .replace("{log_dir}", &log_dir)
+            .replace("{work_dir}", &self.site.filesystems.build_path)
+            .replace("{target}", &self.target.name)
+            .replace("{phase}", phase)
+    }
+
+    fn render_shares(&self, l: &[String], phase: &str) -> String {
+        l.iter()
+            .map(|s| self.render_basic(s, phase))
+            .collect::<Vec<_>>()
+            .join(":")
+    }
+
+    /// Render a route template: the basic placeholders, then the route's own.
+    fn render_route(&self, r: &Route, t: &str, phase: &str) -> String {
+        self.render_basic(t, phase)
+            .replace("{runtime_root}", r.runtime_root.as_deref().unwrap_or(""))
+            .replace("{shares_ro}", &self.render_shares(&r.shares_ro, phase))
+            .replace("{shares_rw}", &self.render_shares(&r.shares_rw, phase))
+    }
+
+    /// Route command, rendered arguments and the `--` separator.
+    fn route_prefix(&self, phase: &str) -> Result<Vec<String>, Fail> {
+        let Some(r) = self.active_route(phase) else {
+            return Ok(Vec::new());
+        };
+        let mut v = split_args(r.command.as_deref().unwrap_or(""))?;
+        if !r.args.is_empty() {
+            v.extend(r.args.iter().map(|a| self.render_route(r, a, phase)));
+            v.push("--".into());
+        }
+        Ok(v)
+    }
+
+    /// Environment of a routed command. `digest` is the run-time value of
+    /// the receipt digest variable; `None` plans the `${NAME}` placeholder.
+    pub fn route_env(&self, phase: &str, digest: Option<&str>) -> BTreeMap<String, String> {
+        let mut e = BTreeMap::new();
+        let Some(r) = self.active_route(phase) else {
+            return e;
+        };
+        for (k, v) in &r.env {
+            e.insert(k.clone(), self.render_route(r, v, phase));
+        }
+        if let Some(root) = &r.runtime_root {
+            e.insert("EB_PIPELINE_ROUTE_RUNTIME_ROOT".into(), root.clone());
+        }
+        if !r.shares_ro.is_empty() {
+            e.insert(
+                "EB_PIPELINE_ROUTE_SHARES_RO".into(),
+                self.render_shares(&r.shares_ro, phase),
+            );
+        }
+        if !r.shares_rw.is_empty() {
+            e.insert(
+                "EB_PIPELINE_ROUTE_SHARES_RW".into(),
+                self.render_shares(&r.shares_rw, phase),
+            );
+        }
+        if let Some(n) = &r.receipt_digest_env {
+            e.insert(
+                "EB_PIPELINE_ROUTE_RECEIPT_DIGEST".into(),
+                digest.map_or_else(|| format!("${{{n}}}"), str::to_string),
+            );
+        }
+        e
+    }
+
+    /// Directories a routed command expects to exist.
+    pub fn route_dirs(&self, phase: &str) -> Vec<String> {
+        match self.active_route(phase) {
+            Some(r)
+                if r.args
+                    .iter()
+                    .chain(&r.shares_ro)
+                    .chain(&r.shares_rw)
+                    .any(|a| a.contains("{phase_dir}")) =>
+            {
+                vec![format!("{}/{}", self.log_dir(), phase)]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Hardware class variables of a command, exported only when the target
+    /// defines a CPU class.
+    pub fn hardware_env(&self, role: Role) -> BTreeMap<String, String> {
+        let mut e = BTreeMap::new();
+        let Some(cpu) = &self.target.cpu_hardware else {
+            return e;
+        };
+        let hw = if role == Role::Cpu {
+            Some(cpu)
+        } else {
+            self.target.hardware.as_ref()
+        };
+        if let Some(h) = hw {
+            if let Some(v) = &h.vendor_id {
+                e.insert("EB_PIPELINE_HW_VENDOR_ID".into(), v.clone());
+            }
+            if let Some(v) = h.cpu_family {
+                e.insert("EB_PIPELINE_HW_CPU_FAMILY".into(), v.to_string());
+            }
+            if let Some(v) = h.model {
+                e.insert("EB_PIPELINE_HW_MODEL".into(), v.to_string());
+            }
+        }
+        e
+    }
+
+    /// The target's fetch profile as JSON, for source prefetch commands.
+    pub fn fetch_env(&self) -> BTreeMap<String, String> {
+        let mut e = BTreeMap::new();
+        if let Some(p) = &self.target.fetch_profile {
+            if let Ok(j) = serde_json::to_string(p) {
+                e.insert("EB_PIPELINE_FETCH_PROFILE".into(), j);
+            }
+        }
+        e
+    }
+
     /// Environment exported to every phase.
     pub fn env(&self) -> BTreeMap<String, String> {
         let s = self.site;
@@ -164,7 +304,12 @@ impl<'a> Scope<'a> {
         if !fs.source_paths.is_empty() {
             put("EASYBUILD_SOURCEPATH", fs.source_paths.join(":"));
         }
-        put("EASYBUILD_INSTALLPATH", self.install_prefix());
+        if fs.export_install_vars == "split" {
+            put("EASYBUILD_INSTALLPATH_SOFTWARE", self.software_root());
+            put("EASYBUILD_INSTALLPATH_MODULES", self.modules_root());
+        } else {
+            put("EASYBUILD_INSTALLPATH", self.install_prefix());
+        }
         if let Some(o) = self.optarch() {
             put("EASYBUILD_OPTARCH", o);
         }
@@ -175,7 +320,10 @@ impl<'a> Scope<'a> {
             put("EASYBUILD_CUDA_COMPUTE_CAPABILITIES", c.clone());
         }
         if fs.read_only_installdir {
-            put("EASYBUILD_READ_ONLY_INSTALLDIR", "1".into());
+            put(
+                "EASYBUILD_READ_ONLY_INSTALLDIR",
+                fs.read_only_installdir_value.clone(),
+            );
         }
         if let Some(c) = &fs.configs_repo {
             put("EASYBUILD_CONFIGS_REPOPATH", c.clone());
@@ -226,6 +374,9 @@ impl<'a> Scope<'a> {
         let (name, version) = package_of(easyconfig);
         let mut e = BTreeMap::new();
         if let Some(p) = self.site.modules.package_env.get(&name) {
+            e.extend(p.clone());
+        }
+        if let Some(p) = self.target.package_env.get(&name) {
             e.extend(p.clone());
         }
         if let Some(l) = self.site.licences_on() {
@@ -318,7 +469,12 @@ pub fn explain(site: &Site, target: Option<&str>, build_type: Option<&str>) -> R
                 role.name().into(),
                 json!({
                     "args": role_args(site, t, role),
-                    "launch": scope.launch(role, role.name())?,
+                    "launch": scope.launch_routed(
+                        role,
+                        role.name(),
+                        None,
+                        (role == Role::Cpu).then_some("build"),
+                    )?,
                 }),
             );
         }
@@ -336,7 +492,11 @@ pub fn explain(site: &Site, target: Option<&str>, build_type: Option<&str>) -> R
             "modules_root": scope.modules_root(),
             "staged": t.staged,
             "route": t.route,
+            "select": t.select,
             "hardware": t.hardware,
+            "cpu_hardware": t.cpu_hardware,
+            "fetch_profile": t.fetch_profile,
+            "package_env": if t.package_env.is_empty() { Value::Null } else { json!(t.package_env) },
             "phases": phases,
             "env": scope.env(),
         }));
