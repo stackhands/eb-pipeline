@@ -155,6 +155,16 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
                 a.lock_kind
             ));
         }
+        if a.enabled && a.default_footprint.is_none() {
+            e.push("admission.default_footprint: required when admission is enabled".into());
+        }
+        let env_ok = !a.job_id_env.is_empty()
+            && a.job_id_env
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !env_ok {
+            e.push("admission.job_id_env: use letters, digits and `_`".into());
+        }
         if a.attempts == 0 {
             e.push("admission.attempts: must be at least 1".into());
         }
@@ -241,7 +251,9 @@ impl Site {
         self.logs.as_ref().filter(|l| l.enabled)
     }
     pub fn rebuild_on(&self) -> Option<&Rebuild> {
-        self.rebuild.as_ref().filter(|r| r.enabled && r.staged)
+        self.rebuild.as_ref().filter(|r| {
+            r.enabled && (r.staged || self.targets.iter().any(|t| t.staged == Some(true)))
+        })
     }
     pub fn licences_on(&self) -> Option<&Licences> {
         self.licences.as_ref().filter(|l| l.enabled && l.enforce)

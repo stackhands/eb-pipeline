@@ -11,7 +11,7 @@ stack_generation = "<generation>"
 
 [site.tools.eb_stack]
 bin = "/opt/eb-tools/bin/eb-stack"
-min_version = "0.7.4"
+min_version = "0.7.3"
 
 [site.tools.eb_keep_logs]
 bin = "/opt/eb-tools/bin/eb-keep-logs"
@@ -39,7 +39,7 @@ build_lists = ["cpu-a.list"]
 eb_optarch = "GCC:-march=<march>"
 max_parallel = 128
 cpu_target = "<vendor>/<uarch>"
-site_prefix = "/opt/eb/site/cpu-a"
+site_prefix = "/opt/eb/cpu-a"
 default = true
 
 [targets.phases]
@@ -59,7 +59,7 @@ build_lists = ["cpu-b.list"]
 eb_optarch = "GCC:-march=<march>"
 max_parallel = 96
 cpu_target = "<vendor>/<uarch>"
-site_prefix = "/opt/eb/site/cpu-b"
+site_prefix = "/opt/eb/cpu-b"
 default = true
 
 [targets.phases]
@@ -72,7 +72,7 @@ eb_optarch = "GCC:-march=<march>"
 cuda_compute_capabilities = "9.0"
 cpu_target = "<vendor>/<uarch>"
 accel_target = "<accel>/<model>"
-site_prefix = "/opt/eb/site/gpu-a"
+site_prefix = "/opt/eb/gpu-a"
 
 [targets.phases]
 build = "-p <gpu-partition> -N 1 --ntasks-per-node=1 -c 72 --gpus-per-node=4 -t 2-00:00:00"
@@ -89,7 +89,7 @@ eb_optarch = "GCC:-march=<march>"
 cuda_compute_capabilities = "8.0"
 cpu_target = "<vendor>/<uarch>"
 accel_target = "<accel>/<model>"
-site_prefix = "/opt/eb/site/gpu-b"
+site_prefix = "/opt/eb/gpu-b"
 
 [targets.phases]
 build = "-p <gpu-partition-b> -N 1 --ntasks-per-node=1 -c 32 --gpus-per-node=4 -t 2-00:00:00"
@@ -98,9 +98,9 @@ build = "-p <gpu-partition-b> -N 1 --ntasks-per-node=1 -c 32 --gpus-per-node=4 -
 scratch = "/scratch/<build-user>"
 tmp = "/scratch/<build-user>/tmp"
 build_path = "/scratch/<build-user>/build"
-source_paths = ["/opt/sw/sources", "/srv/shared/sources"]
-install_root = "/opt/eb/site"
-log_root = "/opt/sw/logs"
+source_paths = ["/opt/eb/sources", "/srv/shared/sources"]
+install_root = "/opt/eb"
+log_root = "/opt/eb/logs"
 shard_dir = "/scratch/<build-user>/shards"
 read_only_installdir = true
 
@@ -114,6 +114,8 @@ lock_kind = "posix"
 reservations = "/scratch/<build-user>/reservations"
 margin = 100000
 unknown_reserve = 150000
+default_footprint = 150000
+job_id_env = "SLURM_JOB_ID"
 quota_total = 4000000
 line_overhead = 1000
 attempts = 5
@@ -124,7 +126,7 @@ max_wait_seconds = 600
 count = 4
 planner_exit_unsharded = 3
 easyconfigs = ["/opt/eb-tools/easyconfigs"]
-installed_modules_dirs = ["/opt/eb/site/modules/all"]
+installed_modules_dirs = ["/opt/eb/noarch/modules/all"]
 
 [sources]
 prefetch = true
@@ -135,7 +137,7 @@ unuse_path = true
 
 [modules.eessi]
 site_install = true
-bootstrap_modulepath = "/opt/eb/site/noarch/modules/all"
+bootstrap_modulepath = "/opt/eb/noarch/modules/all"
 
 [modules.package_env."<Name>"]
 OPTARCH = "<value>"
@@ -164,7 +166,7 @@ delete_after_days = 365
 
 [rebuild]
 staged = true
-state_root = "/opt/sw/.eb-staged-rebuild"
+state_root = "/opt/eb/.eb-staged-rebuild"
 backend = "auto"
 grace_hours = 24
 prepare = "/opt/eb-tools/bin/apply-group"

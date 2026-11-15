@@ -74,6 +74,9 @@ fn d_backend() -> String {
 fn d_route_kind() -> String {
     "none".into()
 }
+fn d_job_env() -> String {
+    "SLURM_JOB_ID".into()
+}
 fn d_cpu_var() -> String {
     "EESSI_SOFTWARE_SUBDIR_OVERRIDE".into()
 }
@@ -202,6 +205,12 @@ doc_struct! {
         site_prefix: Option<String> => ("string", "none", false,
             "Install prefix of the target; EASYBUILD_INSTALLPATH and EESSI_SITE_SOFTWARE_PREFIX. Falls back to `filesystems.install_root`."),
         #[serde(default)]
+        software_root: Option<String> => ("string", "<install prefix>/software", false,
+            "Live software root of the target; passed to eb-staged-rebuild `--software`."),
+        modules_root: Option<String> => ("string", "<install prefix>/modules", false,
+            "Live modules root of the target; passed to eb-staged-rebuild `--modules` and searched for installed modules at `<modules_root>/all/<Name>/<version>[.lua]`."),
+        staged: Option<bool> => ("boolean", "rebuild.staged", false,
+            "Overrides `rebuild.staged` for this target."),
         default: bool => ("boolean", "false", false, "Marks the default target of the site; informational."),
         phases: Option<PhaseArgs> => ("table", "phase_defaults", false,
             "Overrides of `[phase_defaults]` for this target."),
@@ -251,7 +260,12 @@ doc_struct! {
         reservations: Option<String> => ("string", "none", false, "Directory of reservations."),
         margin: Option<u64> => ("integer", "tool default", false, "Inodes kept free."),
         unknown_reserve: Option<u64> => ("integer", "0", false,
-            "Inodes counted per live job without a reservation; also the footprint of a unit that has no shard plan."),
+            "Inodes counted per live job that has no reservation record (`stack admit --unknown-reserve`)."),
+        default_footprint: Option<u64> => ("integer", "none", false,
+            "Inode footprint of a unit when the shard plan gives none. Required when admission is enabled; `check` exits 2 without it."),
+        #[serde(default = "d_job_env")]
+        job_id_env: String => ("string", "SLURM_JOB_ID", false,
+            "Environment variable that holds the scheduler job id at run time. `run` refuses with exit 78 before any build when it is unset or not a positive integer without a leading zero; `plan` shows `${NAME}`."),
         quota_total: Option<u64> => ("integer", "none", false,
             "Planning cap, passed to `stack shard --inode-quota`."),
         footprints: Option<String> => ("string", "none", false,
@@ -391,7 +405,7 @@ doc_struct! {
         enabled: bool => ("boolean", "true", false, "Set false to skip the phase."),
         #[serde(default = "yes")]
         staged: bool => ("boolean", "true", false,
-            "Route lines that carry `--rebuild` or `--force` through `eb-staged-rebuild run`."),
+            "Route a line through `eb-staged-rebuild run` when it carries `--rebuild`, `-f` or `--force` as a whole option and its module is already installed. A target can override this with `staged`."),
         state_root: Option<String> => ("string", "tool default", false, "`--state-root`."),
         #[serde(default = "d_backend")]
         backend: String => ("string", "auto", false, "`auto`, `bwrap`, `userns` or `installpath`."),

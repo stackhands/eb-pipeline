@@ -2,12 +2,13 @@
 //!
 //! The planner is pure. `run` executes the commands built here.
 
-use crate::exit::Fail;
+use crate::exit::{self, Fail};
 use crate::resolve::{Role, Scope};
 use crate::tools::Tool;
-use crate::util::ListLine;
+use crate::util::{parse_list, ListLine};
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::path::Path;
 
 /// One subprocess the driver starts.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -70,9 +71,33 @@ pub struct Unit {
     pub footprint: Option<u64>,
 }
 
+#[derive(Clone)]
 pub struct Planner<'a> {
     pub scope: Scope<'a>,
     pub list_path: String,
+    /// Scheduler job id read at run time; `None` plans the `${NAME}` placeholder.
+    pub job_id: Option<String>,
+}
+
+/// Module path of an easyconfig relative to `<modules_root>/all`, without extension.
+pub fn module_rel(easyconfig: &str) -> Option<String> {
+    let (name, _) = crate::util::package_of(easyconfig);
+    let base = easyconfig.rsplit('/').next().unwrap_or(easyconfig);
+    let stem = base.strip_suffix(".eb").unwrap_or(base);
+    let version = stem.strip_prefix(&format!("{name}-"))?;
+    Some(format!("{name}/{version}"))
+}
+
+/// Whether a build list line asks for a rebuild, by whole options only.
+pub fn wants_rebuild(line: &ListLine) -> bool {
+    line.args
+        .iter()
+        .any(|a| a == "--rebuild" || a == "-f" || a == "--force")
+}
+
+/// A scheduler job id: digits only, positive, no leading zero.
+pub fn valid_job_id(s: &str) -> bool {
+    !s.is_empty() && !s.starts_with('0') && s.chars().all(|c| c.is_ascii_digit())
 }
 
 fn stem(easyconfig: &str) -> String {
@@ -105,7 +130,11 @@ pub fn unique_stems(lines: &[ListLine]) -> Vec<String> {
 
 impl<'a> Planner<'a> {
     pub fn new(scope: Scope<'a>, list_path: String) -> Self {
-        Planner { scope, list_path }
+        Planner {
+            scope,
+            list_path,
+            job_id: None,
+        }
     }
 
     fn site(&self) -> &crate::schema::Site {
@@ -223,7 +252,10 @@ impl<'a> Planner<'a> {
 
     pub fn admission_cmd(&self, unit: &str, footprint: u64) -> Result<Cmd, Fail> {
         let adm = self.site().admission_on().expect("admission active");
-        let job = format!("{}-{}", self.scope.run_id, unit);
+        let job = self
+            .job_id
+            .clone()
+            .unwrap_or_else(|| format!("${{{}}}", adm.job_id_env));
         let mut a = vec![
             Tool::EbStack.bin(self.site()),
             "stack".into(),
@@ -266,13 +298,28 @@ impl<'a> Planner<'a> {
         })
     }
 
-    /// Whether a line replaces a live install and goes through staged rebuild.
+    /// Whether the target routes rebuilds through staged rebuild.
+    pub fn staged_enabled(&self) -> bool {
+        match self.site().rebuild_on() {
+            Some(r) => self.scope.target.staged.unwrap_or(r.staged),
+            None => false,
+        }
+    }
+
+    /// Whether the line's module file exists under the target's modules root.
+    pub fn installed(&self, line: &ListLine) -> bool {
+        let Some(rel) = module_rel(&line.easyconfig) else {
+            return false;
+        };
+        let base = format!("{}/all/{}", self.scope.modules_root(), rel);
+        std::path::Path::new(&format!("{base}.lua")).is_file()
+            || std::path::Path::new(&base).is_file()
+    }
+
+    /// Staged rebuild applies when it is enabled for the target, the line
+    /// carries a whole rebuild option, and the module is already installed.
     pub fn is_staged(&self, line: &ListLine) -> bool {
-        self.site().rebuild_on().is_some()
-            && line
-                .args
-                .iter()
-                .any(|a| a == "--rebuild" || a == "--force" || a.starts_with("--rebuild="))
+        self.staged_enabled() && wants_rebuild(line) && self.installed(line)
     }
 
     pub fn log_stdout(&self, stem: &str) -> String {
@@ -288,14 +335,13 @@ impl<'a> Planner<'a> {
         let mut note = None;
         if self.is_staged(line) {
             let r = self.site().rebuild_on().expect("rebuild active");
-            let prefix = self.scope.install_prefix();
             inner = vec![
                 Tool::EbStagedRebuild.bin(self.site()),
                 "run".into(),
                 "--software".into(),
-                format!("{prefix}/software"),
+                self.scope.software_root(),
                 "--modules".into(),
-                format!("{prefix}/modules"),
+                self.scope.modules_root(),
                 "--backend".into(),
                 r.backend.clone(),
                 "--run-id".into(),
@@ -417,7 +463,11 @@ impl<'a> Planner<'a> {
 }
 
 /// Build the whole plan for one target and list.
-pub fn build_plan(p: &Planner, lines: &[ListLine]) -> Result<Plan, Fail> {
+pub fn build_plan(
+    p: &Planner,
+    lines: &[ListLine],
+    shard_units: Option<&[Unit]>,
+) -> Result<Plan, Fail> {
     let site = p.scope.site;
     let env = p.scope.env();
     let mut phases = Vec::new();
@@ -479,11 +529,26 @@ pub fn build_plan(p: &Planner, lines: &[ListLine]) -> Result<Plan, Fail> {
         skip("shard", "not configured")
     });
 
-    let stems = unique_stems(lines);
+    let units: Vec<Unit> = match shard_units {
+        Some(u) if !u.is_empty() => u.to_vec(),
+        _ => vec![Unit {
+            name: "all".into(),
+            role: Role::Build,
+            lines: lines.to_vec(),
+            footprint: None,
+        }],
+    };
+    let mut seq = StemSeq::default();
+    let stems: Vec<Vec<String>> = units
+        .iter()
+        .map(|u| u.lines.iter().map(|l| seq.next(&l.easyconfig)).collect())
+        .collect();
     phases.push(if site.sources_on().is_some() {
         let mut cmds = Vec::new();
-        for (l, s) in lines.iter().zip(&stems) {
-            cmds.push(p.prefetch_cmd(l, s)?);
+        for (u, ss) in units.iter().zip(&stems) {
+            for (l, s) in u.lines.iter().zip(ss) {
+                cmds.push(p.prefetch_cmd(l, s)?);
+            }
         }
         planned("sources", Some(Role::Short), cmds)
     } else {
@@ -508,18 +573,23 @@ pub fn build_plan(p: &Planner, lines: &[ListLine]) -> Result<Plan, Fail> {
                 skip("admission", "not configured")
             }
         }
-        Some(a) => planned(
-            "admission",
-            Some(Role::Short),
-            vec![p.admission_cmd("all", a.unknown_reserve.unwrap_or(0))?],
-        ),
+        Some(a) => {
+            let mut cmds = Vec::new();
+            for u in &units {
+                let fp = u.footprint.or(a.default_footprint).unwrap_or(0);
+                cmds.push(p.admission_cmd(&u.name, fp)?);
+            }
+            planned("admission", Some(Role::Short), cmds)
+        }
     });
 
     let mut cmds = Vec::new();
-    for (l, s) in lines.iter().zip(&stems) {
-        cmds.push(p.build_cmd(Role::Build, l, s)?);
-        if site.logs_on().is_some_and(|l| l.keep_failed) {
-            cmds.push(p.keep_failed_cmd(s, "<exit-status>")?);
+    for (u, ss) in units.iter().zip(&stems) {
+        for (l, s) in u.lines.iter().zip(ss) {
+            cmds.push(p.build_cmd(u.role, l, s)?);
+            if site.logs_on().is_some_and(|l| l.keep_failed) {
+                cmds.push(p.keep_failed_cmd(s, "<exit-status>")?);
+            }
         }
     }
     phases.push(planned("build", Some(Role::Build), cmds));
@@ -573,4 +643,56 @@ fn quote(a: &str) -> String {
     } else {
         format!("'{}'", a.replace('\'', "'\\''"))
     }
+}
+
+/// Read the units a `stack shard` run wrote into `dir`.
+pub fn read_units(dir: &Path) -> Result<Vec<Unit>, Fail> {
+    let plan_path = dir.join("plan.json");
+    let text = std::fs::read_to_string(&plan_path).map_err(|e| {
+        Fail::new(
+            exit::FAILED,
+            format!("cannot read {}: {e}", plan_path.display()),
+        )
+    })?;
+    let v: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| Fail::new(exit::FAILED, format!("{}: {e}", plan_path.display())))?;
+    let mut units = Vec::new();
+    let mut add = |name: String, role: Role, entry: &serde_json::Value| -> Result<(), Fail> {
+        let Some(file) = entry["file"].as_str() else {
+            return Ok(());
+        };
+        let list = std::fs::read_to_string(dir.join(file)).map_err(|e| {
+            Fail::new(
+                exit::FAILED,
+                format!("cannot read {}: {e}", dir.join(file).display()),
+            )
+        })?;
+        let lines = parse_list(&list)?;
+        if lines.is_empty() {
+            return Ok(());
+        }
+        units.push(Unit {
+            name,
+            role,
+            lines,
+            footprint: entry["inode_footprint"].as_u64(),
+        });
+        Ok(())
+    };
+    add(
+        "cpu-prerequisites".into(),
+        Role::Cpu,
+        &v["cpu_prerequisites"],
+    )?;
+    add("prelude".into(), Role::Build, &v["prelude"])?;
+    if let Some(shards) = v["shards"].as_array() {
+        for (i, s) in shards.iter().enumerate() {
+            let name = s["name"]
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("shard-{:02}", i + 1));
+            add(name, Role::Build, s)?;
+        }
+    }
+    Ok(units)
 }

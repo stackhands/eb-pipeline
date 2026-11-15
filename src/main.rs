@@ -1,6 +1,6 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use eb_pipeline::exit::{self, Fail};
-use eb_pipeline::plan::{build_plan, Planner};
+use eb_pipeline::plan::{build_plan, read_units, Planner};
 use eb_pipeline::resolve::{explain, Scope};
 use eb_pipeline::run::{install_handlers, log, run, Options};
 use eb_pipeline::{schema, site, tools, util};
@@ -69,6 +69,9 @@ enum Cmd {
         /// Write the plan JSON here; `-` or absent prints it on stdout.
         #[arg(long)]
         out: Option<PathBuf>,
+        /// Directory written by `stack shard`; expands its units and build lines.
+        #[arg(long)]
+        shard_plan: Option<PathBuf>,
     },
     /// Execute the plan's phases as subprocesses.
     #[command(after_long_help = exit::TABLE)]
@@ -98,10 +101,14 @@ struct Common {
     /// Build type name (selects per-build-type overrides).
     #[arg(long)]
     build_type: String,
-    /// Run identifier; names the log directory. Default: a UTC timestamp for
-    /// `run`, `<run-id>` for `plan`.
+    /// Run label recorded in the result and passed to tools. Default: the log
+    /// stamp for `run`, `<run-id>` for `plan`.
     #[arg(long)]
     run_id: Option<String>,
+    /// Timestamp directory under the log root (`YYYYMMDD_HHMMSS`). Default:
+    /// the current UTC time, taken once per run; `<log-stamp>` for `plan`.
+    #[arg(long)]
+    log_stamp: Option<String>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -222,9 +229,16 @@ fn cmd_plan_or_run(
             c.list.display()
         )));
     }
-    let run_id = c.run_id.clone().unwrap_or_else(|| {
+    let log_stamp = c.log_stamp.clone().unwrap_or_else(|| {
         if is_run {
             timestamp_id()
+        } else {
+            "<log-stamp>".into()
+        }
+    });
+    let run_id = c.run_id.clone().unwrap_or_else(|| {
+        if is_run {
+            log_stamp.clone()
         } else {
             "<run-id>".into()
         }
@@ -234,10 +248,15 @@ fn cmd_plan_or_run(
         target,
         build_type: Some(&c.build_type),
         run_id,
+        log_stamp,
     };
     let planner = Planner::new(scope, c.list.display().to_string());
     if !is_run {
-        let plan = build_plan(&planner, &lines)?;
+        let units = match shard_plan {
+            Some(d) => Some(read_units(d)?),
+            None => None,
+        };
+        let plan = build_plan(&planner, &lines, units.as_deref())?;
         write_json(&to_sorted(&plan), out)?;
         return Ok(exit::OK);
     }

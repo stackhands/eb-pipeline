@@ -1,7 +1,7 @@
 //! Execution of a plan as subprocesses.
 
 use crate::exit::{self, Fail};
-use crate::plan::{build_plan, shell_line, Cmd, Planner, StemSeq, Unit};
+use crate::plan::{build_plan, read_units, shell_line, valid_job_id, Cmd, Planner, StemSeq, Unit};
 use crate::resolve::Role;
 use crate::tools::{map_staged, StagedOutcome};
 use crate::util::{parse_list, ListLine};
@@ -104,6 +104,7 @@ pub struct RunResult {
     pub build_type: String,
     pub run_id: String,
     pub list: String,
+    pub log_dir: String,
     pub started_at: String,
     pub ended_at: String,
     pub exit_code: i32,
@@ -223,60 +224,11 @@ impl State {
     }
 }
 
-fn read_units(dir: &Path) -> Result<Vec<Unit>, Fail> {
-    let plan_path = dir.join("plan.json");
-    let text = std::fs::read_to_string(&plan_path).map_err(|e| {
-        Fail::new(
-            exit::FAILED,
-            format!("cannot read {}: {e}", plan_path.display()),
-        )
-    })?;
-    let v: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| Fail::new(exit::FAILED, format!("{}: {e}", plan_path.display())))?;
-    let mut units = Vec::new();
-    let mut add = |name: String, role: Role, entry: &serde_json::Value| -> Result<(), Fail> {
-        let Some(file) = entry["file"].as_str() else {
-            return Ok(());
-        };
-        let list = std::fs::read_to_string(dir.join(file)).map_err(|e| {
-            Fail::new(
-                exit::FAILED,
-                format!("cannot read {}: {e}", dir.join(file).display()),
-            )
-        })?;
-        let lines = parse_list(&list)?;
-        if lines.is_empty() {
-            return Ok(());
-        }
-        units.push(Unit {
-            name,
-            role,
-            lines,
-            footprint: entry["inode_footprint"].as_u64(),
-        });
-        Ok(())
-    };
-    add(
-        "cpu-prerequisites".into(),
-        Role::Cpu,
-        &v["cpu_prerequisites"],
-    )?;
-    add("prelude".into(), Role::Build, &v["prelude"])?;
-    if let Some(shards) = v["shards"].as_array() {
-        for (i, s) in shards.iter().enumerate() {
-            let name = s["name"]
-                .as_str()
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("shard-{:02}", i + 1));
-            add(name, Role::Build, s)?;
-        }
-    }
-    Ok(units)
-}
-
 /// Execute the plan. Returns the result; its `exit_code` is the process
 /// exit code.
-pub fn run(p: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
+pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
+    let mut owned = planner.clone();
+    let p = &mut owned;
     let site = p.scope.site;
     let target = p.scope.target.name.clone();
     let env = p.scope.env();
@@ -290,6 +242,7 @@ pub fn run(p: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
             build_type: p.scope.build_name().to_string(),
             run_id: p.scope.run_id.clone(),
             list: p.list_path.clone(),
+            log_dir: p.scope.log_dir(),
             started_at: chrono::Utc::now().to_rfc3339(),
             ended_at: String::new(),
             exit_code: 0,
@@ -308,7 +261,7 @@ pub fn run(p: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
         forced_code: None,
     };
 
-    let plan = match build_plan(p, lines) {
+    let plan = match build_plan(p, lines, None) {
         Ok(pl) => pl,
         Err(f) => {
             st.res.message = Some(f.msg.clone());
@@ -348,6 +301,30 @@ pub fn run(p: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
             _ => {}
         }
     }
+    if let Some(a) = site
+        .admission_on()
+        .filter(|a| a.quota_cmd.is_some() && a.reservations.is_some())
+    {
+        match std::env::var(&a.job_id_env) {
+            Ok(v) if valid_job_id(&v) => p.job_id = Some(v),
+            _ => {
+                let msg = format!(
+                    "admission: {} is unset or not a positive integer without a leading zero",
+                    a.job_id_env
+                );
+                log("ERROR", "preflight", &target, &msg);
+                st.phase(
+                    "preflight",
+                    "refused",
+                    Some(exit::REFUSED),
+                    Some(msg.clone()),
+                );
+                st.res.message = Some(msg);
+                return finish(st, Some(exit::REFUSED));
+            }
+        }
+    }
+    let p: &Planner = p;
     st.phase("preflight", "ok", None, None);
     if site.licences_on().is_some() {
         st.phase("licences", "ok", None, None);
@@ -522,7 +499,7 @@ pub fn run(p: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
             continue;
         }
         if let Some(a) = adm {
-            let fp = u.footprint.unwrap_or(a.unknown_reserve.unwrap_or(0));
+            let fp = u.footprint.or(a.default_footprint).unwrap_or(0);
             let cmd = match p.admission_cmd(&u.name, fp) {
                 Ok(c) => c,
                 Err(f) => {

@@ -158,11 +158,13 @@ fn driver(env: &Env, list: &str, vars: &[(&str, &str)], extra: &[&str]) -> std::
             "--run-id",
             "r1",
         ])
+        .args(["--log-stamp", "20260101_000000"])
         .arg("--result")
         .arg(root.join("result.json"))
         .args(extra)
         .env("PATH", path)
         .env("STUB_DIR", root)
+        .env("SLURM_JOB_ID", "12345")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -194,6 +196,13 @@ fn calls(env: &Env, name: &str) -> Vec<String> {
     std::fs::read_to_string(env.dir.path().join(name))
         .map(|t| t.lines().map(str::to_string).collect())
         .unwrap_or_default()
+}
+
+/// Install the module file the staged-rebuild check looks for.
+fn install_module(env: &Env, rel: &str) {
+    let p = env.dir.path().join("install/modules/all").join(rel);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(p, "-- module\n").unwrap();
 }
 
 const LIST: &str = "Foo-1.0-foss-2025a.eb\nBar-2.0-foss-2025a.eb\n";
@@ -242,6 +251,7 @@ const ADMISSION: &str = r#"
 [admission]
 quota_cmd = "/opt/q"
 reservations = "/scratch/res"
+default_footprint = 500
 attempts = 3
 wait_seconds = 0
 max_wait_seconds = 0
@@ -294,6 +304,7 @@ fn admission_required_without_config_refuses() {
 #[test]
 fn staged_rebuild_refusal_is_translated() {
     let env = setup("[rebuild]\nstaged = true\n");
+    install_module(&env, "Foo/1.0-foss-2025a.lua");
     let o = go(
         &env,
         "Foo-1.0-foss-2025a.eb --rebuild\n",
@@ -312,6 +323,7 @@ fn staged_rebuild_refusal_is_translated() {
 #[test]
 fn staged_rebuild_failure_is_a_failure() {
     let env = setup("[rebuild]\nstaged = true\n");
+    install_module(&env, "Foo/1.0-foss-2025a.lua");
     let o = go(
         &env,
         "Foo-1.0-foss-2025a.eb --rebuild\n",
@@ -419,4 +431,141 @@ fn dry_run_starts_nothing() {
     let out = String::from_utf8_lossy(&o.stdout);
     assert!(out.contains("[build] eb Foo-1.0-foss-2025a.eb"), "{out}");
     assert!(calls(&env, "eb.calls").is_empty());
+}
+
+fn staged_or_plain(env: &Env, line: &str) -> (usize, usize) {
+    let o = go(env, line, &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    (
+        calls(env, "staged.calls").len(),
+        calls(env, "eb.calls").len(),
+    )
+}
+
+#[test]
+fn staged_rebuild_needs_all_three_conditions() {
+    // all three: enabled, whole option, module installed
+    for opt in ["--rebuild", "-f", "--force"] {
+        let env = setup("[rebuild]\nstaged = true\n");
+        install_module(&env, "Foo/1.0-foss-2025a.lua");
+        assert_eq!(
+            staged_or_plain(&env, &format!("Foo-1.0-foss-2025a.eb {opt}\n")),
+            (1, 0),
+            "{opt}"
+        );
+    }
+    // a module file without the .lua extension counts
+    let env = setup("[rebuild]\nstaged = true\n");
+    install_module(&env, "Foo/1.0-foss-2025a");
+    assert_eq!(
+        staged_or_plain(&env, "Foo-1.0-foss-2025a.eb --rebuild\n"),
+        (1, 0)
+    );
+    // module not installed
+    let env = setup("[rebuild]\nstaged = true\n");
+    assert_eq!(
+        staged_or_plain(&env, "Foo-1.0-foss-2025a.eb --rebuild\n"),
+        (0, 1)
+    );
+    // no rebuild option
+    let env = setup("[rebuild]\nstaged = true\n");
+    install_module(&env, "Foo/1.0-foss-2025a.lua");
+    assert_eq!(
+        staged_or_plain(&env, "Foo-1.0-foss-2025a.eb --robot\n"),
+        (0, 1)
+    );
+    // staged = false
+    let env = setup("[rebuild]\nstaged = false\n");
+    install_module(&env, "Foo/1.0-foss-2025a.lua");
+    assert_eq!(
+        staged_or_plain(&env, "Foo-1.0-foss-2025a.eb --rebuild\n"),
+        (0, 1)
+    );
+    // no [rebuild] section
+    let env = setup("");
+    install_module(&env, "Foo/1.0-foss-2025a.lua");
+    assert_eq!(
+        staged_or_plain(&env, "Foo-1.0-foss-2025a.eb --rebuild\n"),
+        (0, 1)
+    );
+}
+
+#[test]
+fn lookalike_options_do_not_trigger_staged_rebuild() {
+    for opt in [
+        "--force-download",
+        "--rebuild-from-scratch",
+        "--forcefoo",
+        "-fx",
+    ] {
+        let env = setup("[rebuild]\nstaged = true\n");
+        install_module(&env, "Foo/1.0-foss-2025a.lua");
+        assert_eq!(
+            staged_or_plain(&env, &format!("Foo-1.0-foss-2025a.eb {opt}\n")),
+            (0, 1),
+            "{opt}"
+        );
+    }
+}
+
+#[test]
+fn target_can_override_staged() {
+    let env = setup("[rebuild]\nstaged = true\n");
+    let text = std::fs::read_to_string(&env.site)
+        .unwrap()
+        .replace("name = \"cpu\"", "name = \"cpu\"\nstaged = false");
+    std::fs::write(&env.site, text).unwrap();
+    install_module(&env, "Foo/1.0-foss-2025a.lua");
+    assert_eq!(
+        staged_or_plain(&env, "Foo-1.0-foss-2025a.eb --rebuild\n"),
+        (0, 1)
+    );
+}
+
+#[test]
+fn staged_rebuild_gets_the_target_roots() {
+    let env = setup("[rebuild]\nstaged = true\n");
+    let text = std::fs::read_to_string(&env.site).unwrap().replace(
+        "name = \"cpu\"",
+        "name = \"cpu\"\nsoftware_root = \"/opt/eb/x/software\"\nmodules_root = \"/opt/eb/x/modules\"",
+    );
+    std::fs::write(&env.site, text).unwrap();
+    let p = std::path::Path::new("/opt/eb/x/modules/all/Foo/1.0-foss-2025a.lua");
+    if !p.exists() {
+        // The installed check reads the configured root, which is absent here.
+        let o = go(&env, "Foo-1.0-foss-2025a.eb --rebuild\n", &[]);
+        assert_eq!(o.code, 0, "{}", o.stderr);
+        assert_eq!(calls(&env, "staged.calls").len(), 0);
+    }
+}
+
+#[test]
+fn job_id_must_be_a_positive_integer_without_leading_zero() {
+    for bad in ["", "0123", "abc", "0", "12x"] {
+        let env = setup(ADMISSION);
+        let o = go(&env, LIST, &[("SLURM_JOB_ID", bad)]);
+        assert_eq!(o.code, 78, "{bad:?}: {}", o.stderr);
+        assert!(calls(&env, "eb.calls").is_empty());
+        assert!(
+            calls(&env, "eb-stack.calls").is_empty(),
+            "no admit before the id is valid"
+        );
+    }
+    let env = setup(ADMISSION);
+    let o = go(&env, LIST, &[("SLURM_JOB_ID", "987")]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let c = calls(&env, "eb-stack.calls");
+    assert!(c[0].contains("--job 987"), "{c:?}");
+    assert!(c[0].contains("--footprint 500"), "{c:?}");
+}
+
+#[test]
+fn logs_go_under_stamp_and_target() {
+    let env = setup("");
+    let o = go(&env, LIST, &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = o.result.unwrap();
+    assert_eq!(r["run_id"], "r1");
+    let log = r["lines"][0]["log"].as_str().unwrap();
+    assert!(log.contains("/logs/20260101_000000/cpu/"), "{log}");
 }

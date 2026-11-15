@@ -58,6 +58,11 @@ fn check_token(key: &str, raw: &str, out: &mut Vec<String>) {
 }
 
 fn check_value(key: &str, v: &str, out: &mut Vec<String>) {
+    if v.contains("eb/site") {
+        out.push(format!(
+            "{key}: `eb/site` mirrors a real site layout; use /opt/eb/<target>"
+        ));
+    }
     for word in v.split_whitespace() {
         if let Some((_, rest)) = word.split_once("://") {
             let host = rest.split(['/', ':']).next().unwrap_or("");
@@ -125,7 +130,8 @@ a = "/home/builder/eb"
 b = "login.cluster.net"
 c = "https://git.corp.example.com/x"
 d = "-o /projects/lab/x"
+e = "/opt/eb/site/x"
 "#;
-        assert_eq!(lint_example(t).len(), 4, "{:?}", lint_example(t));
+        assert_eq!(lint_example(t).len(), 5, "{:?}", lint_example(t));
     }
 }

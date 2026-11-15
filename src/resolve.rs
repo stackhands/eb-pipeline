@@ -51,6 +51,8 @@ pub struct Scope<'a> {
     pub target: &'a Target,
     pub build_type: Option<&'a str>,
     pub run_id: String,
+    /// Timestamp directory name under `filesystems.log_root`.
+    pub log_stamp: String,
 }
 
 impl<'a> Scope<'a> {
@@ -60,10 +62,25 @@ impl<'a> Scope<'a> {
 
     pub fn log_dir(&self) -> String {
         format!(
-            "{}/{}",
+            "{}/{}/{}",
             self.site.filesystems.log_root.trim_end_matches('/'),
-            self.run_id
+            self.log_stamp,
+            self.target.name
         )
+    }
+
+    pub fn software_root(&self) -> String {
+        self.target
+            .software_root
+            .clone()
+            .unwrap_or_else(|| format!("{}/software", self.install_prefix()))
+    }
+
+    pub fn modules_root(&self) -> String {
+        self.target
+            .modules_root
+            .clone()
+            .unwrap_or_else(|| format!("{}/modules", self.install_prefix()))
     }
 
     pub fn install_prefix(&self) -> String {
@@ -167,6 +184,7 @@ impl<'a> Scope<'a> {
         put("EB_PIPELINE_TARGET", self.target.name.clone());
         put("EB_PIPELINE_BUILD_TYPE", self.build_name().to_string());
         put("EB_PIPELINE_RUN_ID", self.run_id.clone());
+        put("EB_PIPELINE_LOG_STAMP", self.log_stamp.clone());
         put("EB_PIPELINE_LOG_DIR", self.log_dir());
         if let Some(a) = &s.site.build_account {
             put("EB_PIPELINE_BUILD_ACCOUNT", a.clone());
@@ -292,6 +310,7 @@ pub fn explain(site: &Site, target: Option<&str>, build_type: Option<&str>) -> R
             target: t,
             build_type,
             run_id: "<run-id>".into(),
+            log_stamp: "<log-stamp>".into(),
         };
         let mut phases = serde_json::Map::new();
         for role in Role::ALL {
@@ -313,6 +332,9 @@ pub fn explain(site: &Site, target: Option<&str>, build_type: Option<&str>) -> R
             "cpu_target": t.cpu_target,
             "accel_target": t.accel_target,
             "site_prefix": scope.install_prefix(),
+            "software_root": scope.software_root(),
+            "modules_root": scope.modules_root(),
+            "staged": t.staged,
             "route": t.route,
             "hardware": t.hardware,
             "phases": phases,

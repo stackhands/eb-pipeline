@@ -248,3 +248,113 @@ fn explain_prints_toml_and_json() {
         assert!(t.contains("EESSI_ACCELERATOR_TARGET_OVERRIDE"), "{fmt}");
     }
 }
+
+#[test]
+fn plan_shows_job_id_placeholder_and_default_footprint() {
+    let d = tempfile::tempdir().unwrap();
+    let list = d.path().join("l.txt");
+    std::fs::write(&list, "Foo-1.0-foss-2025a.eb\n").unwrap();
+    let o = bin()
+        .args(["plan", "--site"])
+        .arg(example("eessi-site.toml"))
+        .arg("--list")
+        .arg(&list)
+        .args(["--target", "cpu-a", "--build-type", "production"])
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(0));
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    let adm = v["phases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "admission")
+        .unwrap()["commands"][0]["argv"]
+        .to_string();
+    assert!(adm.contains("${SLURM_JOB_ID}"), "{adm}");
+    assert!(adm.contains("150000"), "{adm}");
+    assert!(v["log_dir"]
+        .as_str()
+        .unwrap()
+        .ends_with("/<log-stamp>/cpu-a"));
+}
+
+#[test]
+fn plan_expands_a_shard_plan() {
+    let d = tempfile::tempdir().unwrap();
+    let list = d.path().join("l.txt");
+    std::fs::write(&list, "Foo-1.0-foss-2025a.eb\nBar-2.0-foss-2025a.eb\n").unwrap();
+    let sp = d.path().join("shards");
+    std::fs::create_dir(&sp).unwrap();
+    std::fs::write(sp.join("prelude.list"), "Zed-1.0-foss-2025a.eb\n").unwrap();
+    std::fs::write(sp.join("shard-01.list"), "Foo-1.0-foss-2025a.eb\n").unwrap();
+    std::fs::write(sp.join("shard-02.list"), "Bar-2.0-foss-2025a.eb\n").unwrap();
+    std::fs::write(
+        sp.join("plan.json"),
+        r#"{"prelude":{"file":"prelude.list","inode_footprint":7},
+            "shards":[{"name":"shard-01","file":"shard-01.list","inode_footprint":111},
+                      {"name":"shard-02","file":"shard-02.list","inode_footprint":222}]}"#,
+    )
+    .unwrap();
+    let o = bin()
+        .args(["plan", "--site"])
+        .arg(example("eessi-site.toml"))
+        .arg("--list")
+        .arg(&list)
+        .args([
+            "--target",
+            "cpu-a",
+            "--build-type",
+            "production",
+            "--shard-plan",
+        ])
+        .arg(&sp)
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    let phase = |n: &str| {
+        v["phases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == n)
+            .unwrap()
+            .clone()
+    };
+    let adm = phase("admission")["commands"].as_array().unwrap().clone();
+    assert_eq!(adm.len(), 3);
+    assert!(adm[0]["argv"].to_string().contains("\"7\""));
+    assert!(adm[2]["argv"].to_string().contains("\"222\""));
+    let builds: Vec<String> = phase("build")["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["name"].as_str().unwrap().starts_with("build:"))
+        .map(|c| c["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        builds,
+        [
+            "build:Zed-1.0-foss-2025a",
+            "build:Foo-1.0-foss-2025a",
+            "build:Bar-2.0-foss-2025a"
+        ]
+    );
+}
+
+#[test]
+fn admission_needs_a_default_footprint() {
+    let text = std::fs::read_to_string(example("eessi-site.toml"))
+        .unwrap()
+        .replace("default_footprint = 150000\n", "");
+    let s = site::parse(&text).unwrap();
+    assert!(site::validate(&s, None)
+        .iter()
+        .any(|e| e.contains("default_footprint")));
+}
