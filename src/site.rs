@@ -11,11 +11,112 @@ pub fn parse(text: &str) -> Result<Site, Fail> {
     toml::from_str::<Site>(text).map_err(|e| Fail::usage(format!("invalid site file: {e}")))
 }
 
-/// Read and parse a site file.
+/// Read and parse a site file, then apply the `EB_PIPELINE__*` overrides
+/// from the environment (see [`parse_with_overrides`]).
 pub fn load(path: &Path) -> Result<Site, Fail> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| Fail::usage(format!("cannot read {}: {e}", path.display())))?;
-    parse(&text)
+    let vars: Vec<(String, String)> = std::env::vars()
+        .filter(|(k, _)| k.starts_with(OVERRIDE_PREFIX))
+        .collect();
+    parse_with_overrides(&text, &vars)
+}
+
+/// Prefix of an environment variable that overrides one site file value.
+pub const OVERRIDE_PREFIX: &str = "EB_PIPELINE__";
+
+/// Parse a site file and set one value per `(name, value)` pair over it.
+///
+/// `EB_PIPELINE__FILESYSTEMS__SCRATCH=/scratch/x` sets `filesystems.scratch`:
+/// the name after the prefix is split on `__` and each part lowercased. The
+/// value is read as a TOML value (`true`, `16`, `["a", "b"]`, `"16"`) and
+/// taken as a string when it does not parse as one. Missing tables are
+/// created. A path through an array of tables (`targets`) is refused, so
+/// per-target values stay in the file. The result is checked by the same
+/// schema as the file, so an unknown key or a wrong type is a usage error.
+/// Pairs apply in name order, so the outcome does not depend on the order of
+/// the environment.
+pub fn parse_with_overrides(text: &str, vars: &[(String, String)]) -> Result<Site, Fail> {
+    if vars.is_empty() {
+        return parse(text);
+    }
+    let mut table: toml::Table =
+        toml::from_str(text).map_err(|e| Fail::usage(format!("invalid site file: {e}")))?;
+    let mut sorted: Vec<&(String, String)> = vars.iter().collect();
+    sorted.sort();
+    for (name, raw) in sorted {
+        apply_override(&mut table, name, raw)?;
+    }
+    toml::Value::Table(table)
+        .try_into::<Site>()
+        .map_err(|e| Fail::usage(format!("invalid site file after environment overrides: {e}")))
+}
+
+fn override_path(name: &str) -> Result<Vec<String>, Fail> {
+    let rest = name.strip_prefix(OVERRIDE_PREFIX).unwrap_or(name);
+    let parts: Vec<String> = rest.split("__").map(str::to_ascii_lowercase).collect();
+    let ok = parts.iter().all(|p| {
+        !p.is_empty()
+            && p
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+    });
+    if !ok {
+        return Err(Fail::usage(format!(
+            "{name}: an override names SECTION__KEY in letters, digits and single underscores"
+        )));
+    }
+    Ok(parts)
+}
+
+fn override_value(raw: &str) -> toml::Value {
+    toml::from_str::<toml::Table>(&format!("v = {raw}"))
+        .ok()
+        .and_then(|mut t| t.remove("v"))
+        .unwrap_or_else(|| toml::Value::String(raw.to_string()))
+}
+
+fn apply_override(table: &mut toml::Table, name: &str, raw: &str) -> Result<(), Fail> {
+    let path = override_path(name)?;
+    let (last, parents) = path.split_last().expect("split yields one part");
+    let mut here = table;
+    for (i, part) in parents.iter().enumerate() {
+        let entry = here
+            .entry(part.clone())
+            .or_insert(toml::Value::Table(toml::Table::new()));
+        here = match entry {
+            toml::Value::Table(t) => t,
+            _ => {
+                return Err(Fail::usage(format!(
+                    "{name}: `{}` is not a table; an override cannot reach inside it",
+                    path[..=i].join(".")
+                )))
+            }
+        };
+    }
+    match here.get(last) {
+        Some(toml::Value::Array(a)) if a.iter().any(|x| x.is_table()) => {
+            return Err(Fail::usage(format!(
+                "{name}: `{}` is an array of tables; set it in the site file",
+                path.join(".")
+            )))
+        }
+        Some(toml::Value::Table(_)) => {
+            return Err(Fail::usage(format!(
+                "{name}: `{}` is a table; name one of its keys",
+                path.join(".")
+            )))
+        }
+        _ => {}
+    }
+    crate::run::log(
+        "INFO",
+        "site",
+        "-",
+        &format!("{} set from {name}", path.join(".")),
+    );
+    here.insert(last.clone(), override_value(raw));
+    Ok(())
 }
 
 const PLACEHOLDERS: &[&str] = &["project", "build", "phase", "target"];
@@ -397,5 +498,83 @@ impl Site {
     }
     pub fn project(&self) -> &str {
         self.site.project.as_deref().unwrap_or(&self.site.name)
+    }
+}
+
+#[cfg(test)]
+mod override_tests {
+    use super::*;
+
+    const BASE: &str = include_str!("../examples/small-cluster.toml");
+
+    fn set(pairs: &[(&str, &str)]) -> Result<Site, Fail> {
+        let v: Vec<(String, String)> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        parse_with_overrides(BASE, &v)
+    }
+
+    #[test]
+    fn no_overrides_is_plain_parse() {
+        let a = set(&[]).unwrap();
+        let b = parse(BASE).unwrap();
+        assert_eq!(
+            serde_json::to_string(&a).unwrap(),
+            serde_json::to_string(&b).unwrap()
+        );
+    }
+
+    #[test]
+    fn sets_strings_and_arrays() {
+        let s = set(&[
+            ("EB_PIPELINE__FILESYSTEMS__SCRATCH", "/scratch/other"),
+            ("EB_PIPELINE__FILESYSTEMS__SOURCE_PATHS", r#"["/opt/a", "/opt/b"]"#),
+            ("EB_PIPELINE__SITE__STACK_GENERATION", "2027a"),
+        ])
+        .unwrap();
+        assert_eq!(s.filesystems.scratch, "/scratch/other");
+        assert_eq!(s.filesystems.source_paths, vec!["/opt/a", "/opt/b"]);
+        assert_eq!(s.site.stack_generation.as_deref(), Some("2027a"));
+    }
+
+    #[test]
+    fn refuses_unknown_key_and_wrong_type() {
+        assert_eq!(set(&[("EB_PIPELINE__SITE__NO_SUCH", "x")]).unwrap_err().code, 2);
+        assert_eq!(
+            set(&[("EB_PIPELINE__FILESYSTEMS__SOURCE_PATHS", "7")]).unwrap_err().code,
+            2
+        );
+    }
+
+    #[test]
+    fn refuses_tables_arrays_of_tables_and_bad_names() {
+        for (k, v) in [
+            ("EB_PIPELINE__TARGETS__NAME", "x"),
+            ("EB_PIPELINE__TARGETS", "x"),
+            ("EB_PIPELINE__SITE", "x"),
+            ("EB_PIPELINE__SITE____NAME", "x"),
+            ("EB_PIPELINE__SITE__NA-ME", "x"),
+        ] {
+            assert_eq!(set(&[(k, v)]).unwrap_err().code, 2, "{k}");
+        }
+    }
+
+    #[test]
+    fn order_of_the_environment_does_not_matter() {
+        let a = set(&[
+            ("EB_PIPELINE__SITE__NAME", "one"),
+            ("EB_PIPELINE__SITE__PROJECT", "p"),
+        ])
+        .unwrap();
+        let b = set(&[
+            ("EB_PIPELINE__SITE__PROJECT", "p"),
+            ("EB_PIPELINE__SITE__NAME", "one"),
+        ])
+        .unwrap();
+        assert_eq!(
+            serde_json::to_string(&a).unwrap(),
+            serde_json::to_string(&b).unwrap()
+        );
     }
 }
