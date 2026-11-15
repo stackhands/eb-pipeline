@@ -81,7 +81,7 @@ the three tools above the site file enables.
 | `check --site FILE [--lists-dir DIR] [--probe-tools]` | parse and validate; exit 0 or 2 |
 | `schema` | print every key with type, default, required flag and meaning |
 | `explain --site FILE [--target T] [--build-type B] [--format toml\|json]` | resolved per-target configuration |
-| `plan --site FILE --list LIST --target T --build-type B [--run-id ID] [--out FILE.json]` | phases, launch lines, environment, tool calls |
+| `plan --site FILE --list LIST --target T --build-type B [--run-id ID] [--log-stamp S] [--shard-plan DIR] [--out FILE.json]` | phases, launch lines, environment, tool calls |
 | `run` (arguments of `plan`, plus `--result FILE.json`, `--dry-run`) | execute the plan |
 
 `eb-pipeline schema` is generated from the same declarations the parser uses,
@@ -103,21 +103,40 @@ the result.
   as one unit.
 - `admission`: `eb-stack stack admit` before each build unit. Exit 78 retries
   with the backoff in `[admission]` (`attempts`, `wait_seconds`, doubling up to
-  `max_wait_seconds`). A refusal after the last attempt ends the run with exit
+  `max_wait_seconds`). The job id comes from the variable named by
+  `job_id_env` (default `SLURM_JOB_ID`); `run` refuses with 78 before any build
+  when it is unset or not a positive integer without a leading zero, and `plan`
+  shows `${SLURM_JOB_ID}`. A unit's footprint is the shard plan's
+  `inode_footprint`, else `default_footprint`, which `check` requires when
+  admission is enabled. `unknown_reserve` stays the reserve for live jobs that
+  have no record. A refusal after the last attempt ends the run with exit
   78 and a message that names the attempt count and the tool's last JSON line.
   With `required = true`, a missing `quota_cmd` or `reservations` refuses with 78.
 - `build`: one `eb` call per list line, started through the scheduler launch
-  line of the target. A line that carries `--rebuild` or `--force` goes through
-  `eb-staged-rebuild run` when `[rebuild]` is enabled. A failed line triggers
+  line of the target. A line goes through `eb-staged-rebuild run` only when
+  all three hold: `[rebuild] staged = true` (a target can override it with
+  `staged`), the line carries `--rebuild`, `-f` or `--force` as a whole option
+  (`--force-download` and `--rebuild-from-scratch` do not count), and the module
+  is installed, meaning `<modules_root>/all/<Name>/<version>.lua` or a file of
+  that name without `.lua` exists. Otherwise it is a normal `eb` call.
+  `software_root` and `modules_root` are per-target keys, defaulting to
+  `<install_root>/software` and `<install_root>/modules`; they go to
+  `eb-staged-rebuild --software` and `--modules` and to the installed check. A failed line triggers
   `eb-keep-logs failed` when `[logs].keep_failed` is set.
 - `caches`: runs `[caches].command` once for the selected target, after a clean
   build, with `EB_PIPELINE_CACHE_*` in the environment.
-- `logs`: `eb-keep-logs rotate` on `filesystems.log_root`. Rotation only looks
-  at run directories named `YYYYMMDD_HHMMSS`, which is what `run` creates when
-  `--run-id` is absent.
+- `logs`: `eb-keep-logs rotate` on `filesystems.log_root`.
 
-Every child writes to `<log_root>/<run-id>/`; the result JSON records the log
-path of each line.
+Every child writes to `<log_root>/<YYYYMMDD_HHMMSS>/<target>/`. The timestamp
+is taken once per run and `--log-stamp` overrides it. `--run-id` is a separate
+label recorded in the result. The result JSON records the log path of each line.
+
+`plan --shard-plan DIR` reads the `plan.json` that `stack shard` wrote in `DIR`
+and expands the per-shard admission and build commands.
+
+Limitation: the licence gate checks configuration only. It confirms that every
+required package has a group, a threshold or an exemption; it does not verify
+file permissions or group membership on the host.
 
 ## Exit codes
 

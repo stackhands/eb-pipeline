@@ -16,5 +16,9 @@ All notable changes to this project are documented here.
   per-line results, a result JSON, and SIGTERM/SIGINT forwarding.
 - Exit-code contract: 0, 1, 2, 3, 75, 78, 130, 143, with explicit mapping of the
   eb-stack and eb-staged-rebuild codes.
+- Staged rebuild only for installed modules, whole rebuild options and an enabled
+  target; `software_root` and `modules_root` per target.
+- `admission.job_id_env`, `admission.default_footprint`, `plan --shard-plan`,
+  `--log-stamp` and `<log_root>/<stamp>/<target>/` log directories.
 - Example site files for a small Slurm cluster and an EESSI site, and a lint
   that rejects site-specific values in examples.
