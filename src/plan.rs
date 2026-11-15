@@ -80,22 +80,27 @@ fn stem(easyconfig: &str) -> String {
     base.strip_suffix(".eb").unwrap_or(base).to_string()
 }
 
-/// Log stems, unique across the lines of a unit.
+/// Hands out log stems that stay unique across a whole run.
+#[derive(Default)]
+pub struct StemSeq(BTreeMap<String, usize>);
+
+impl StemSeq {
+    pub fn next(&mut self, easyconfig: &str) -> String {
+        let s = stem(easyconfig);
+        let n = self.0.entry(s.clone()).or_insert(0);
+        *n += 1;
+        if *n == 1 {
+            s
+        } else {
+            format!("{s}.{n}")
+        }
+    }
+}
+
+/// Log stems, unique across the lines.
 pub fn unique_stems(lines: &[ListLine]) -> Vec<String> {
-    let mut seen: BTreeMap<String, usize> = BTreeMap::new();
-    lines
-        .iter()
-        .map(|l| {
-            let s = stem(&l.easyconfig);
-            let n = seen.entry(s.clone()).or_insert(0);
-            *n += 1;
-            if *n == 1 {
-                s
-            } else {
-                format!("{s}.{n}")
-            }
-        })
-        .collect()
+    let mut seq = StemSeq::default();
+    lines.iter().map(|l| seq.next(&l.easyconfig)).collect()
 }
 
 impl<'a> Planner<'a> {
