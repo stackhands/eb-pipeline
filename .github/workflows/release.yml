@@ -132,13 +132,21 @@ jobs:
         with:
           name: release-notes
           path: notes
-      - name: list assets
+      # dist's global step hashes only the files it builds itself (source.tar.gz),
+      # so sha256.sum is written here over every asset, after each per-file
+      # .sha256 has been checked.
+      - name: check assets and write sha256.sum
+        working-directory: artifacts
         run: |
-          ls -l artifacts
+          ls -l
           for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
-            test -f "artifacts/eb-pipeline-${t}.tar.xz" || { echo "missing archive for ${t}"; exit 1; }
+            test -f "eb-pipeline-${t}.tar.xz" || { echo "missing archive for ${t}"; exit 1; }
           done
-          test -f artifacts/sha256.sum || { echo "missing sha256.sum"; exit 1; }
+          for f in *.sha256; do sha256sum --check "$f"; done
+          rm -f sha256.sum
+          sha256sum --binary eb-pipeline-*.tar.xz source.tar.gz > sha256.sum
+          cat sha256.sum
+          test "$(wc -l < sha256.sum)" -eq 3
       - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-path: artifacts/*.tar.xz
