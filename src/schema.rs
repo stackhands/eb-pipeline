@@ -512,3 +512,89 @@ pub fn reference() -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Keys a struct accepts, read from serde's unknown-field error.
+    fn accepted<T: serde::de::DeserializeOwned>() -> Vec<String> {
+        let err = match toml::from_str::<T>("zz_probe = 1") {
+            Ok(_) => panic!("probe key accepted"),
+            Err(e) => e.to_string(),
+        };
+        let line = err
+            .lines()
+            .find(|l| l.contains("expected one of") || l.contains("expected `"))
+            .unwrap_or_else(|| panic!("no key list in: {err}"));
+        let rest = line.split("expected").nth(1).unwrap();
+        let mut keys: Vec<String> = rest
+            .split('`')
+            .skip(1)
+            .step_by(2)
+            .map(str::to_string)
+            .collect();
+        keys.sort();
+        keys
+    }
+
+    fn documented(f: &[FieldDoc]) -> Vec<String> {
+        let mut k: Vec<String> = f.iter().map(|d| d.key.to_string()).collect();
+        k.sort();
+        k
+    }
+
+    macro_rules! check_all {
+        ($($t:ident),* $(,)?) => {{
+            let mut seen: Vec<Vec<String>> = Vec::new();
+            $(
+                assert_eq!(
+                    accepted::<$t>(),
+                    documented($t::FIELDS),
+                    "{} fields and documentation differ",
+                    stringify!($t)
+                );
+                seen.push(documented($t::FIELDS));
+            )*
+            seen
+        }};
+    }
+
+    #[test]
+    fn every_field_is_documented() {
+        let seen = check_all!(
+            Site, SiteInfo, Tools, ToolSpec, Scheduler, PhaseArgs, Target, Route, Hardware,
+            BuildTypeOverride, Filesystems, Admission, Shards, Sources, Modules, Eessi, Caches,
+            CacheTarget, Logs, Rotate, Rebuild, Licences, LicenceRequired,
+        );
+        // Every documented table appears in the printed reference.
+        for (_, fields) in SECTIONS {
+            assert!(seen.contains(&documented(fields)));
+        }
+        let text = reference();
+        for (_, fields) in SECTIONS {
+            for f in *fields {
+                assert!(!f.doc.is_empty() && !f.ty.is_empty(), "{}", f.key);
+                assert!(text.contains(f.doc), "{} missing from reference", f.key);
+            }
+        }
+    }
+
+    #[test]
+    fn required_keys_match_the_contract() {
+        let req: Vec<&str> = Site::FIELDS
+            .iter()
+            .filter(|f| f.required)
+            .map(|f| f.key)
+            .collect();
+        for k in ["site", "scheduler", "targets", "filesystems", "modules"] {
+            assert!(req.contains(&k), "{k} must be required");
+        }
+        for k in [
+            "admission", "shards", "sources", "caches", "logs", "rebuild", "licences",
+            "phase_defaults",
+        ] {
+            assert!(!req.contains(&k), "{k} must be optional");
+        }
+    }
+}
