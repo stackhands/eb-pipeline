@@ -2,7 +2,10 @@
 
 All notable changes to this project are documented here.
 
-## 0.3.0 - Unreleased
+## 0.3.0 - 2026-11-16
+
+The first tagged release. It also carries the changes of 0.2.0 and 0.1.0,
+listed below, which were never tagged.
 
 ### Added
 
@@ -23,7 +26,7 @@ All notable changes to this project are documented here.
 - `examples/` is now `templates/`, and the templates are built into the binary.
 - The template lint no longer names any one site's directory layout.
 
-## 0.2.0 - Unreleased
+## 0.2.0 - not tagged; released as part of 0.3.0
 
 Every new key is optional and its default reproduces 0.1.0 behaviour;
 `schema_version` stays 1.
@@ -56,7 +59,7 @@ Every new key is optional and its default reproduces 0.1.0 behaviour;
 - `examples/eessi-site.toml` exercises selection, the route contract, a CPU
   hardware class, a fetch profile and per-target package environment.
 
-## 0.1.0 - Unreleased
+## 0.1.0 - not tagged; released as part of 0.3.0
 
 ### Added
 
