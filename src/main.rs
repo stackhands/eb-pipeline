@@ -235,8 +235,9 @@ fn cmd_init(template: Option<&str>, list: bool, out: Option<&Path>) -> Result<i3
                 .create_new(true)
                 .open(p)
                 .map_err(|e| Fail::usage(format!("cannot create {}: {e}", p.display())))?;
-            f.write_all(t.text.as_bytes())
-                .map_err(|e| Fail::new(exit::FAILED, format!("cannot write {}: {e}", p.display())))?;
+            f.write_all(t.text.as_bytes()).map_err(|e| {
+                Fail::new(exit::FAILED, format!("cannot write {}: {e}", p.display()))
+            })?;
             log(
                 "INFO",
                 "init",

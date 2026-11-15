@@ -47,9 +47,11 @@ pub fn parse_with_overrides(text: &str, vars: &[(String, String)]) -> Result<Sit
     for (name, raw) in sorted {
         apply_override(&mut table, name, raw)?;
     }
-    toml::Value::Table(table)
-        .try_into::<Site>()
-        .map_err(|e| Fail::usage(format!("invalid site file after environment overrides: {e}")))
+    toml::Value::Table(table).try_into::<Site>().map_err(|e| {
+        Fail::usage(format!(
+            "invalid site file after environment overrides: {e}"
+        ))
+    })
 }
 
 fn override_path(name: &str) -> Result<Vec<String>, Fail> {
@@ -57,8 +59,7 @@ fn override_path(name: &str) -> Result<Vec<String>, Fail> {
     let parts: Vec<String> = rest.split("__").map(str::to_ascii_lowercase).collect();
     let ok = parts.iter().all(|p| {
         !p.is_empty()
-            && p
-                .chars()
+            && p.chars()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
     });
     if !ok {
@@ -529,7 +530,10 @@ mod override_tests {
     fn sets_strings_and_arrays() {
         let s = set(&[
             ("EB_PIPELINE__FILESYSTEMS__SCRATCH", "/scratch/other"),
-            ("EB_PIPELINE__FILESYSTEMS__SOURCE_PATHS", r#"["/opt/a", "/opt/b"]"#),
+            (
+                "EB_PIPELINE__FILESYSTEMS__SOURCE_PATHS",
+                r#"["/opt/a", "/opt/b"]"#,
+            ),
             ("EB_PIPELINE__SITE__STACK_GENERATION", "2027a"),
         ])
         .unwrap();
@@ -540,9 +544,16 @@ mod override_tests {
 
     #[test]
     fn refuses_unknown_key_and_wrong_type() {
-        assert_eq!(set(&[("EB_PIPELINE__SITE__NO_SUCH", "x")]).unwrap_err().code, 2);
         assert_eq!(
-            set(&[("EB_PIPELINE__FILESYSTEMS__SOURCE_PATHS", "7")]).unwrap_err().code,
+            set(&[("EB_PIPELINE__SITE__NO_SUCH", "x")])
+                .unwrap_err()
+                .code,
+            2
+        );
+        assert_eq!(
+            set(&[("EB_PIPELINE__FILESYSTEMS__SOURCE_PATHS", "7")])
+                .unwrap_err()
+                .code,
             2
         );
     }

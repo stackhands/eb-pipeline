@@ -20,7 +20,8 @@ pub const TEMPLATES: &[Template] = &[
     },
     Template {
         name: "eessi-site",
-        summary: "Slurm, CPU and GPU targets on an EESSI site layer, with quota, caches and licences",
+        summary:
+            "Slurm, CPU and GPU targets on an EESSI site layer, with quota, caches and licences",
         text: include_str!("../templates/eessi-site.toml"),
     },
 ];
