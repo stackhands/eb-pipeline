@@ -524,19 +524,49 @@ fn target_can_override_staged() {
 
 #[test]
 fn staged_rebuild_gets_the_target_roots() {
+    // defaults: <install_root>/software and <install_root>/modules
     let env = setup("[rebuild]\nstaged = true\n");
+    install_module(&env, "Foo/1.0-foss-2025a.lua");
+    let o = go(&env, "Foo-1.0-foss-2025a.eb --rebuild\n", &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let root = env.dir.path().display().to_string();
+    let c = calls(&env, "staged.calls");
+    assert_eq!(c.len(), 1);
+    assert!(
+        c[0].contains(&format!("--software {root}/install/software ")),
+        "{c:?}"
+    );
+    assert!(
+        c[0].contains(&format!("--modules {root}/install/modules ")),
+        "{c:?}"
+    );
+
+    // overrides: both values reach the tool and the installed check reads
+    // the overridden modules root
+    let env = setup("[rebuild]\nstaged = true\n");
+    let r = env.dir.path().display().to_string();
     let text = std::fs::read_to_string(&env.site).unwrap().replace(
         "name = \"cpu\"",
-        "name = \"cpu\"\nsoftware_root = \"/opt/eb/x/software\"\nmodules_root = \"/opt/eb/x/modules\"",
+        &format!(
+            "name = \"cpu\"\nsoftware_root = \"{r}/live/sw\"\nmodules_root = \"{r}/live/mod\""
+        ),
     );
     std::fs::write(&env.site, text).unwrap();
-    let p = std::path::Path::new("/opt/eb/x/modules/all/Foo/1.0-foss-2025a.lua");
-    if !p.exists() {
-        // The installed check reads the configured root, which is absent here.
-        let o = go(&env, "Foo-1.0-foss-2025a.eb --rebuild\n", &[]);
-        assert_eq!(o.code, 0, "{}", o.stderr);
-        assert_eq!(calls(&env, "staged.calls").len(), 0);
-    }
+    // a module under the default root does not count
+    install_module(&env, "Foo/1.0-foss-2025a.lua");
+    let o = go(&env, "Foo-1.0-foss-2025a.eb --rebuild\n", &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(calls(&env, "staged.calls").is_empty());
+    // a module under the overridden root does
+    let m = env.dir.path().join("live/mod/all/Foo");
+    std::fs::create_dir_all(&m).unwrap();
+    std::fs::write(m.join("1.0-foss-2025a.lua"), "-- module\n").unwrap();
+    let o = go(&env, "Foo-1.0-foss-2025a.eb --rebuild\n", &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let c = calls(&env, "staged.calls");
+    assert_eq!(c.len(), 1);
+    assert!(c[0].contains(&format!("--software {r}/live/sw ")), "{c:?}");
+    assert!(c[0].contains(&format!("--modules {r}/live/mod ")), "{c:?}");
 }
 
 #[test]
