@@ -112,7 +112,13 @@ impl<'a> Planner<'a> {
         self.scope.site
     }
 
-    fn wrapped(&self, role: Role, phase: &str, inner: Vec<String>, modules: bool) -> Result<Vec<String>, Fail> {
+    fn wrapped(
+        &self,
+        role: Role,
+        phase: &str,
+        inner: Vec<String>,
+        modules: bool,
+    ) -> Result<Vec<String>, Fail> {
         let mut v = self.scope.launch(role, phase)?;
         if modules {
             v.extend(self.scope.module_wrap());
@@ -200,7 +206,12 @@ impl<'a> Planner<'a> {
             "--fetch".into(),
             "--robot".into(),
         ];
-        a.extend(line.args.iter().filter(|x| !x.starts_with("--rebuild")).cloned());
+        a.extend(
+            line.args
+                .iter()
+                .filter(|x| !x.starts_with("--rebuild"))
+                .cloned(),
+        );
         a.extend(extra);
         Ok(Cmd {
             name: format!("fetch:{name}"),
@@ -376,7 +387,11 @@ impl<'a> Planner<'a> {
         let Some(command) = &c.command else {
             return Ok(None);
         };
-        let Some(entry) = c.targets.iter().find(|t| t.target == self.scope.target.name) else {
+        let Some(entry) = c
+            .targets
+            .iter()
+            .find(|t| t.target == self.scope.target.name)
+        else {
             return Ok(None);
         };
         let mut env = BTreeMap::new();
@@ -539,7 +554,13 @@ pub fn shell_line(c: &Cmd) -> String {
     for (k, v) in &c.env {
         s.push_str(&format!("{k}={} ", quote(v)));
     }
-    s.push_str(&c.argv.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" "));
+    s.push_str(
+        &c.argv
+            .iter()
+            .map(|a| quote(a))
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
     s
 }
 

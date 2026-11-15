@@ -150,7 +150,14 @@ fn driver(env: &Env, list: &str, vars: &[(&str, &str)], extra: &[&str]) -> std::
         .arg(&env.site)
         .arg("--list")
         .arg(&list_path)
-        .args(["--target", "cpu", "--build-type", "production", "--run-id", "r1"])
+        .args([
+            "--target",
+            "cpu",
+            "--build-type",
+            "production",
+            "--run-id",
+            "r1",
+        ])
         .arg("--result")
         .arg(root.join("result.json"))
         .args(extra)
@@ -206,7 +213,12 @@ fn success_exits_zero_and_records_lines() {
         .iter()
         .any(|p| p == "admission"));
     assert!(calls(&env, "keeplogs.calls").is_empty());
-    assert!(o.stderr.contains("INFO [build] cpu: Foo-1.0-foss-2025a: ok"), "{}", o.stderr);
+    assert!(
+        o.stderr
+            .contains("INFO [build] cpu: Foo-1.0-foss-2025a: ok"),
+        "{}",
+        o.stderr
+    );
 }
 
 #[test]
@@ -240,9 +252,20 @@ fn admission_refused_after_n_attempts_exits_78() {
     let env = setup(ADMISSION);
     let o = go(&env, LIST, &[("STUB_ADMIT_OK_AT", "0")]);
     assert_eq!(o.code, 78, "{}", o.stderr);
-    assert!(o.stderr.contains("admission refused after 3 attempts"), "{}", o.stderr);
-    assert!(o.stderr.contains(r#"{"admitted":false,"attempt":3}"#), "{}", o.stderr);
-    assert!(calls(&env, "eb.calls").is_empty(), "no build step may start");
+    assert!(
+        o.stderr.contains("admission refused after 3 attempts"),
+        "{}",
+        o.stderr
+    );
+    assert!(
+        o.stderr.contains(r#"{"admitted":false,"attempt":3}"#),
+        "{}",
+        o.stderr
+    );
+    assert!(
+        calls(&env, "eb.calls").is_empty(),
+        "no build step may start"
+    );
     let r = o.result.unwrap();
     assert_eq!(r["admission"][0]["attempts"], 3);
     assert_eq!(r["admission"][0]["outcome"], "refused");
@@ -371,7 +394,10 @@ fn sigterm_is_forwarded_and_exit_is_143() {
         if let Some(s) = child.try_wait().unwrap() {
             break s;
         }
-        assert!(t0.elapsed() < Duration::from_secs(20), "driver did not exit");
+        assert!(
+            t0.elapsed() < Duration::from_secs(20),
+            "driver did not exit"
+        );
         std::thread::sleep(Duration::from_millis(20));
     };
     assert_eq!(status.code(), Some(143));

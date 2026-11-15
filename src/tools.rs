@@ -77,7 +77,8 @@ pub fn probe(bin: &str) -> Result<Vec<u64>, String> {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    find_version(&text).ok_or_else(|| format!("`{bin} --version` printed no version: {}", text.trim()))
+    find_version(&text)
+        .ok_or_else(|| format!("`{bin} --version` printed no version: {}", text.trim()))
 }
 
 /// Check minimum versions of the tools the site needs. With `probe_all`,

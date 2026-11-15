@@ -137,10 +137,7 @@ mod tests {
     fn versions() {
         assert_eq!(find_version("eb-stack 0.7.4 (abc)"), Some(vec![0, 7, 4]));
         assert_eq!(find_version("tool v1.2"), Some(vec![1, 2]));
-        assert_eq!(
-            cmp_version(&[1, 2], &[1, 2, 0]),
-            std::cmp::Ordering::Equal
-        );
+        assert_eq!(cmp_version(&[1, 2], &[1, 2, 0]), std::cmp::Ordering::Equal);
         assert_eq!(cmp_version(&[0, 7, 4], &[0, 10]), std::cmp::Ordering::Less);
     }
 

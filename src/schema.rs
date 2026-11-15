@@ -563,9 +563,29 @@ mod tests {
     #[test]
     fn every_field_is_documented() {
         let seen = check_all!(
-            Site, SiteInfo, Tools, ToolSpec, Scheduler, PhaseArgs, Target, Route, Hardware,
-            BuildTypeOverride, Filesystems, Admission, Shards, Sources, Modules, Eessi, Caches,
-            CacheTarget, Logs, Rotate, Rebuild, Licences, LicenceRequired,
+            Site,
+            SiteInfo,
+            Tools,
+            ToolSpec,
+            Scheduler,
+            PhaseArgs,
+            Target,
+            Route,
+            Hardware,
+            BuildTypeOverride,
+            Filesystems,
+            Admission,
+            Shards,
+            Sources,
+            Modules,
+            Eessi,
+            Caches,
+            CacheTarget,
+            Logs,
+            Rotate,
+            Rebuild,
+            Licences,
+            LicenceRequired,
         );
         // Every documented table appears in the printed reference.
         for (_, fields) in SECTIONS {
@@ -591,7 +611,13 @@ mod tests {
             assert!(req.contains(&k), "{k} must be required");
         }
         for k in [
-            "admission", "shards", "sources", "caches", "logs", "rebuild", "licences",
+            "admission",
+            "shards",
+            "sources",
+            "caches",
+            "logs",
+            "rebuild",
+            "licences",
             "phase_defaults",
         ] {
             assert!(!req.contains(&k), "{k} must be optional");

@@ -135,7 +135,10 @@ fn load_valid(path: &Path, lists_dir: Option<&Path>) -> Result<schema::Site, Fai
         for e in &errs {
             log("ERROR", "check", &s.site.name, e);
         }
-        Err(Fail::usage(format!("{} problem(s) in the site file", errs.len())))
+        Err(Fail::usage(format!(
+            "{} problem(s) in the site file",
+            errs.len()
+        )))
     }
 }
 
@@ -181,7 +184,13 @@ fn timestamp_id() -> String {
     chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string()
 }
 
-fn cmd_plan_or_run(c: &Common, out: Option<&Path>, result: Option<&Path>, dry: bool, is_run: bool) -> Result<i32, Fail> {
+fn cmd_plan_or_run(
+    c: &Common,
+    out: Option<&Path>,
+    result: Option<&Path>,
+    dry: bool,
+    is_run: bool,
+) -> Result<i32, Fail> {
     let (s, errs) = {
         let s = site::load(&c.site)?;
         let e = site::validate(&s, None);
@@ -193,15 +202,25 @@ fn cmd_plan_or_run(c: &Common, out: Option<&Path>, result: Option<&Path>, dry: b
         }
         // A licence gate failure refuses the run; every other problem is invalid input.
         let licence_only = errs.iter().all(|e| e.starts_with("licences"));
-        let code = if is_run && licence_only { exit::REFUSED } else { exit::USAGE };
-        return Err(Fail::new(code, format!("{} problem(s) in the site file", errs.len())));
+        let code = if is_run && licence_only {
+            exit::REFUSED
+        } else {
+            exit::USAGE
+        };
+        return Err(Fail::new(
+            code,
+            format!("{} problem(s) in the site file", errs.len()),
+        ));
     }
     let target = s.target(&c.target)?;
     let list_text = std::fs::read_to_string(&c.list)
         .map_err(|e| Fail::usage(format!("cannot read list {}: {e}", c.list.display())))?;
     let lines = util::parse_list(&list_text)?;
     if lines.is_empty() {
-        return Err(Fail::usage(format!("list {} holds no lines", c.list.display())));
+        return Err(Fail::usage(format!(
+            "list {} holds no lines",
+            c.list.display()
+        )));
     }
     let run_id = c.run_id.clone().unwrap_or_else(|| {
         if is_run {
@@ -241,18 +260,27 @@ fn cmd_plan_or_run(c: &Common, out: Option<&Path>, result: Option<&Path>, dry: b
 fn main() {
     let cli = Cli::parse();
     let r = match &cli.command {
-        Cmd::Check { site, lists_dir, probe_tools } => cmd_check(site, lists_dir.as_deref(), *probe_tools),
+        Cmd::Check {
+            site,
+            lists_dir,
+            probe_tools,
+        } => cmd_check(site, lists_dir.as_deref(), *probe_tools),
         Cmd::Schema => {
             print!("{}", schema::reference());
             Ok(exit::OK)
         }
-        Cmd::Explain { site, target, build_type, format } => {
-            cmd_explain(site, target.as_deref(), build_type.as_deref(), *format)
-        }
+        Cmd::Explain {
+            site,
+            target,
+            build_type,
+            format,
+        } => cmd_explain(site, target.as_deref(), build_type.as_deref(), *format),
         Cmd::Plan { common, out } => cmd_plan_or_run(common, out.as_deref(), None, false, false),
-        Cmd::Run { common, result, dry_run } => {
-            cmd_plan_or_run(common, None, result.as_deref(), *dry_run, true)
-        }
+        Cmd::Run {
+            common,
+            result,
+            dry_run,
+        } => cmd_plan_or_run(common, None, result.as_deref(), *dry_run, true),
     };
     let code = match r {
         Ok(c) => c,

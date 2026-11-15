@@ -280,11 +280,7 @@ fn strip_nulls(v: Value) -> Value {
 }
 
 /// Resolved view of one or all targets after defaults and overrides.
-pub fn explain(
-    site: &Site,
-    target: Option<&str>,
-    build_type: Option<&str>,
-) -> Result<Value, Fail> {
+pub fn explain(site: &Site, target: Option<&str>, build_type: Option<&str>) -> Result<Value, Fail> {
     let selected: Vec<&Target> = match target {
         Some(t) => vec![site.target(t)?],
         None => site.targets.iter().collect(),

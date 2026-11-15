@@ -22,8 +22,7 @@ const PLACEHOLDERS: &[&str] = &["project", "build", "phase", "target"];
 
 fn name_ok(s: &str) -> bool {
     !s.is_empty()
-        && s
-            .chars()
+        && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
@@ -76,14 +75,18 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
         ] {
             if let Some(v) = s.as_ref().and_then(|s| s.min_version.as_ref()) {
                 if parse_version(v).is_none() {
-                    e.push(format!("site.tools.{k}.min_version: `{v}` is not dotted numbers"));
+                    e.push(format!(
+                        "site.tools.{k}.min_version: `{v}` is not dotted numbers"
+                    ));
                 }
             }
         }
     }
     match site.scheduler.kind.as_str() {
         "slurm" | "local" => {}
-        k => e.push(format!("scheduler.kind: expected slurm or local, found `{k}`")),
+        k => e.push(format!(
+            "scheduler.kind: expected slurm or local, found `{k}`"
+        )),
     }
     if site.scheduler.launch.trim().is_empty() {
         e.push("scheduler.launch: must not be empty".into());
@@ -106,7 +109,10 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
                 "none" => {}
                 "command" => {
                     if r.command.as_deref().is_none_or(|c| c.trim().is_empty()) {
-                        e.push(format!("targets.{}.route: kind command needs `command`", t.name));
+                        e.push(format!(
+                            "targets.{}.route: kind command needs `command`",
+                            t.name
+                        ));
                     }
                 }
                 k => e.push(format!(
@@ -159,7 +165,10 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
         }
     }
     if let Some(r) = &site.rebuild {
-        if !matches!(r.backend.as_str(), "auto" | "bwrap" | "userns" | "installpath") {
+        if !matches!(
+            r.backend.as_str(),
+            "auto" | "bwrap" | "userns" | "installpath"
+        ) {
             e.push(format!(
                 "rebuild.backend: expected auto, bwrap, userns or installpath, found `{}`",
                 r.backend
@@ -180,7 +189,10 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
     if let Some(l) = &site.licences {
         if l.enabled && l.enforce {
             if l.groups.is_empty() && l.below_version.is_empty() && l.exempt.is_empty() {
-                e.push("licences: enforce is set but no group, threshold or exemption is configured".into());
+                e.push(
+                    "licences: enforce is set but no group, threshold or exemption is configured"
+                        .into(),
+                );
             }
             let required: &[String] = l.required.as_ref().map_or(&[], |r| &r.software);
             for n in required {
@@ -196,10 +208,14 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
         }
         for (n, v) in &l.below_version {
             if parse_version(v).is_none() {
-                e.push(format!("licences.below_version.{n}: `{v}` is not dotted numbers"));
+                e.push(format!(
+                    "licences.below_version.{n}: `{v}` is not dotted numbers"
+                ));
             }
             if !l.groups.contains_key(n) {
-                e.push(format!("licences.below_version.{n}: no group set for `{n}`"));
+                e.push(format!(
+                    "licences.below_version.{n}: no group set for `{n}`"
+                ));
             }
         }
     }
@@ -213,9 +229,7 @@ impl Site {
     }
     /// Shard section when it plans shards.
     pub fn shards_on(&self) -> Option<&Shards> {
-        self.shards
-            .as_ref()
-            .filter(|s| s.enabled && s.count >= 2)
+        self.shards.as_ref().filter(|s| s.enabled && s.count >= 2)
     }
     pub fn sources_on(&self) -> Option<&Sources> {
         self.sources.as_ref().filter(|s| s.enabled && s.prefetch)

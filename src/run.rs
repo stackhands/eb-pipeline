@@ -128,11 +128,19 @@ struct Exec {
 /// arrives is forwarded to the child once.
 fn exec(cmd: &Cmd, base_env: &BTreeMap<String, String>, log: &Path) -> Result<Exec, Fail> {
     if let Some(dir) = log.parent() {
-        std::fs::create_dir_all(dir)
-            .map_err(|e| Fail::new(exit::FAILED, format!("cannot create {}: {e}", dir.display())))?;
+        std::fs::create_dir_all(dir).map_err(|e| {
+            Fail::new(
+                exit::FAILED,
+                format!("cannot create {}: {e}", dir.display()),
+            )
+        })?;
     }
-    let out = File::create(log)
-        .map_err(|e| Fail::new(exit::FAILED, format!("cannot create {}: {e}", log.display())))?;
+    let out = File::create(log).map_err(|e| {
+        Fail::new(
+            exit::FAILED,
+            format!("cannot create {}: {e}", log.display()),
+        )
+    })?;
     let err = out
         .try_clone()
         .map_err(|e| Fail::new(exit::FAILED, format!("cannot duplicate log handle: {e}")))?;
@@ -231,7 +239,10 @@ fn read_units(dir: &Path) -> Result<Vec<Unit>, Fail> {
             return Ok(());
         };
         let list = std::fs::read_to_string(dir.join(file)).map_err(|e| {
-            Fail::new(exit::FAILED, format!("cannot read {}: {e}", dir.join(file).display()))
+            Fail::new(
+                exit::FAILED,
+                format!("cannot read {}: {e}", dir.join(file).display()),
+            )
         })?;
         let lines = parse_list(&list)?;
         if lines.is_empty() {
@@ -245,7 +256,11 @@ fn read_units(dir: &Path) -> Result<Vec<Unit>, Fail> {
         });
         Ok(())
     };
-    add("cpu-prerequisites".into(), Role::Cpu, &v["cpu_prerequisites"])?;
+    add(
+        "cpu-prerequisites".into(),
+        Role::Cpu,
+        &v["cpu_prerequisites"],
+    )?;
     add("prelude".into(), Role::Build, &v["prelude"])?;
     if let Some(shards) = v["shards"].as_array() {
         for (i, s) in shards.iter().enumerate() {
@@ -352,7 +367,12 @@ pub fn run(p: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                 return finish(st, Some(f.code));
             }
             Ok(cmd) => {
-                log("INFO", "shard", &target, &format!("planning {} shards", sh.count));
+                log(
+                    "INFO",
+                    "shard",
+                    &target,
+                    &format!("planning {} shards", sh.count),
+                );
                 let ex = match exec(&cmd, &env, &log_dir.join("shard.log")) {
                     Ok(e) => e,
                     Err(f) => {
@@ -371,7 +391,12 @@ pub fn run(p: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                             st.phase("shard", "ok", Some(0), None);
                         }
                         Ok(_) => {
-                            st.phase("shard", "ok", Some(0), Some("plan holds no lines; building the list as one unit".into()));
+                            st.phase(
+                                "shard",
+                                "ok",
+                                Some(0),
+                                Some("plan holds no lines; building the list as one unit".into()),
+                            );
                         }
                         Err(f) => {
                             log("ERROR", "shard", &target, &f.msg);
@@ -381,12 +406,30 @@ pub fn run(p: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                         }
                     }
                 } else if ex.code == sh.planner_exit_unsharded {
-                    log("INFO", "shard", &target, &format!(
-                        "planner declined to shard (exit {}); building unsharded", ex.code));
-                    st.phase("shard", "unsharded", Some(ex.code),
-                        Some("exit 3 contract: planner declined to shard; plan built unsharded".into()));
+                    log(
+                        "INFO",
+                        "shard",
+                        &target,
+                        &format!(
+                            "planner declined to shard (exit {}); building unsharded",
+                            ex.code
+                        ),
+                    );
+                    st.phase(
+                        "shard",
+                        "unsharded",
+                        Some(ex.code),
+                        Some(
+                            "exit 3 contract: planner declined to shard; plan built unsharded"
+                                .into(),
+                        ),
+                    );
                 } else {
-                    let code = if ex.code == 2 { exit::USAGE } else { exit::FAILED };
+                    let code = if ex.code == 2 {
+                        exit::USAGE
+                    } else {
+                        exit::FAILED
+                    };
                     let msg = format!("stack shard exited {} (see {})", ex.code, ex.log.display());
                     log("ERROR", "shard", &target, &msg);
                     st.phase("shard", "failed", Some(ex.code), Some(msg.clone()));
@@ -428,7 +471,12 @@ pub fn run(p: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                 if ex.code != 0 {
                     any_failed = true;
                     fetch_failed.push(s.clone());
-                    log("ERROR", "sources", &target, &format!("{s}: fetch exited {}", ex.code));
+                    log(
+                        "ERROR",
+                        "sources",
+                        &target,
+                        &format!("{s}: fetch exited {}", ex.code),
+                    );
                     st.res.lines.push(LineResult {
                         easyconfig: l.easyconfig.clone(),
                         unit: u.name.clone(),
@@ -443,11 +491,18 @@ pub fn run(p: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                 }
             }
         }
-        st.phase("sources", if any_failed { "failed" } else { "ok" }, None, None);
+        st.phase(
+            "sources",
+            if any_failed { "failed" } else { "ok" },
+            None,
+            None,
+        );
     }
 
     // admission and builds, unit by unit
-    let adm = site.admission_on().filter(|a| a.quota_cmd.is_some() && a.reservations.is_some());
+    let adm = site
+        .admission_on()
+        .filter(|a| a.quota_cmd.is_some() && a.reservations.is_some());
     let keep_failed = site.logs_on().is_some_and(|l| l.keep_failed);
     let mut stopped = false;
     for (u, ss) in units.iter().zip(&unit_stems) {
@@ -496,15 +551,27 @@ pub fn run(p: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                 let last = last_json_line(&ex.log);
                 match ex.code {
                     0 => {
-                        log("INFO", "admission", &target, &format!("{} admitted on attempt {attempt}", u.name));
+                        log(
+                            "INFO",
+                            "admission",
+                            &target,
+                            &format!("{} admitted on attempt {attempt}", u.name),
+                        );
                         break ("admitted", None, last, attempt, 0);
                     }
                     78 => {
                         if attempt >= a.attempts {
                             break ("refused", None, last, attempt, 78);
                         }
-                        log("WARN", "admission", &target, &format!(
-                            "{} refused on attempt {attempt} of {}; waiting {wait}s", u.name, a.attempts));
+                        log(
+                            "WARN",
+                            "admission",
+                            &target,
+                            &format!(
+                                "{} refused on attempt {attempt} of {}; waiting {wait}s",
+                                u.name, a.attempts
+                            ),
+                        );
                         if sleep_interruptible(wait) {
                             if let Some(c) = stop_if_signalled(&mut st, "admission") {
                                 return finish(st, Some(c));
@@ -514,7 +581,13 @@ pub fn run(p: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                     }
                     c => {
                         let code = if c == 2 { exit::USAGE } else { exit::FAILED };
-                        break ("failed", Some(format!("stack admit exited {c}")), last, attempt, code);
+                        break (
+                            "failed",
+                            Some(format!("stack admit exited {c}")),
+                            last,
+                            attempt,
+                            code,
+                        );
                     }
                 }
             };
@@ -592,18 +665,27 @@ pub fn run(p: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                 note: None,
             };
             if ex.code != 0 {
-                let outcome = if staged { map_staged(ex.code) } else { StagedOutcome::Failed };
+                let outcome = if staged {
+                    map_staged(ex.code)
+                } else {
+                    StagedOutcome::Failed
+                };
                 match outcome {
                     StagedOutcome::Refused => {
                         lr.status = "refused".into();
                         lr.translated_from = Some(ex.code);
                         lr.exit_code = Some(exit::REFUSED);
-                        lr.note = Some("eb-staged-rebuild exit 2 is a refusal; translated to refused (78)".into());
+                        lr.note = Some(
+                            "eb-staged-rebuild exit 2 is a refusal; translated to refused (78)"
+                                .into(),
+                        );
                         st.refused = true;
                     }
                     StagedOutcome::Pending => {
                         lr.status = "pending".into();
-                        lr.note = Some("eb-staged-rebuild exit 75: a required ledger event is pending".into());
+                        lr.note = Some(
+                            "eb-staged-rebuild exit 75: a required ledger event is pending".into(),
+                        );
                         st.pending = true;
                     }
                     _ => {
@@ -611,13 +693,23 @@ pub fn run(p: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                         st.failed = true;
                     }
                 }
-                log("ERROR", "build", &target, &format!("{s}: {} (exit {})", lr.status, ex.code));
+                log(
+                    "ERROR",
+                    "build",
+                    &target,
+                    &format!("{s}: {} (exit {})", lr.status, ex.code),
+                );
                 if interrupted().is_none() && keep_failed && lr.status == "failed" {
                     if let Ok(kc) = p.keep_failed_cmd(s, &ex.code.to_string()) {
                         let kx = exec(&kc, &env, &log_dir.join(format!("{s}.keep-logs.log")));
                         match kx {
                             Ok(k) if k.code == 0 => {}
-                            Ok(k) => log("WARN", "logs", &target, &format!("{s}: eb-keep-logs failed exited {}", k.code)),
+                            Ok(k) => log(
+                                "WARN",
+                                "logs",
+                                &target,
+                                &format!("{s}: eb-keep-logs failed exited {}", k.code),
+                            ),
                             Err(f) => log("WARN", "logs", &target, &f.msg),
                         }
                     }
@@ -640,8 +732,21 @@ pub fn run(p: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
     if site.admission_on().is_some() && !st.res.admission.is_empty() && !st.refused {
         st.phase("admission", "ok", Some(0), None);
     }
-    let build_failed = st.res.lines.iter().any(|l| l.status == "failed" && l.phase == "build");
-    st.phase("build", if build_failed || st.refused && st.res.lines.iter().all(|l| l.status != "success") { "failed" } else { "ok" }, None, None);
+    let build_failed = st
+        .res
+        .lines
+        .iter()
+        .any(|l| l.status == "failed" && l.phase == "build");
+    st.phase(
+        "build",
+        if build_failed || st.refused && st.res.lines.iter().all(|l| l.status != "success") {
+            "failed"
+        } else {
+            "ok"
+        },
+        None,
+        None,
+    );
 
     // caches only after a clean build
     if !st.failed && !st.refused && !st.pending {
@@ -675,7 +780,12 @@ pub fn run(p: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
             }
         }
     } else if p.cache_cmd().ok().flatten().is_some() {
-        st.phase("caches", "skipped", None, Some("the build did not finish cleanly".into()));
+        st.phase(
+            "caches",
+            "skipped",
+            None,
+            Some("the build did not finish cleanly".into()),
+        );
     }
 
     // rotation
@@ -708,7 +818,12 @@ fn stop_if_signalled(st: &mut State, phase: &str) -> Option<i32> {
     } else {
         ("SIGTERM", exit::SIGTERM)
     };
-    log("WARN", phase, &st.res.target.clone(), &format!("{name} received; child ended, stopping"));
+    log(
+        "WARN",
+        phase,
+        &st.res.target.clone(),
+        &format!("{name} received; child ended, stopping"),
+    );
     st.res.interrupted_by = Some(name.into());
     st.phase(phase, "interrupted", None, None);
     st.forced_code = Some(code);

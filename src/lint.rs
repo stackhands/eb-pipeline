@@ -51,7 +51,9 @@ fn check_token(key: &str, raw: &str, out: &mut Vec<String>) {
             ));
         }
     } else if looks_like_host(t) && !host_ok(t) {
-        out.push(format!("{key}: host `{t}` is not under example.org or .invalid"));
+        out.push(format!(
+            "{key}: host `{t}` is not under example.org or .invalid"
+        ));
     }
 }
 
@@ -60,7 +62,9 @@ fn check_value(key: &str, v: &str, out: &mut Vec<String>) {
         if let Some((_, rest)) = word.split_once("://") {
             let host = rest.split(['/', ':']).next().unwrap_or("");
             if !host_ok(host) {
-                out.push(format!("{key}: host `{host}` is not under example.org or .invalid"));
+                out.push(format!(
+                    "{key}: host `{host}` is not under example.org or .invalid"
+                ));
             }
             continue;
         }

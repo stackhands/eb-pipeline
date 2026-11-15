@@ -99,7 +99,14 @@ fn defaults_and_overrides_resolve() {
     .unwrap();
     assert_eq!(
         launch,
-        ["srun", "--job-name=t-production-build", "-p", "batch", "-c", "4"]
+        [
+            "srun",
+            "--job-name=t-production-build",
+            "-p",
+            "batch",
+            "-c",
+            "4"
+        ]
     );
     assert!(resolve::explain(&s, Some("nope"), None).is_err());
 }
@@ -126,7 +133,10 @@ fn licence_gate_fails_closed() {
 #[test]
 fn lists_dir_is_checked() {
     let d = tempfile::tempdir().unwrap();
-    let text = MINIMAL.replace("name = \"other\"", "name = \"other\"\nbuild_lists = [\"a.list\"]");
+    let text = MINIMAL.replace(
+        "name = \"other\"",
+        "name = \"other\"\nbuild_lists = [\"a.list\"]",
+    );
     let s = site::parse(&text).unwrap();
     assert_eq!(site::validate(&s, Some(d.path())).len(), 1);
     std::fs::write(d.path().join("a.list"), "x\n").unwrap();
@@ -137,14 +147,25 @@ fn lists_dir_is_checked() {
 fn plan_is_deterministic_and_sorted() {
     let d = tempfile::tempdir().unwrap();
     let list = d.path().join("l.txt");
-    std::fs::write(&list, "Foo-1.0-foss-2025a.eb\nBar-2.0-foss-2025a.eb --rebuild\n").unwrap();
+    std::fs::write(
+        &list,
+        "Foo-1.0-foss-2025a.eb\nBar-2.0-foss-2025a.eb --rebuild\n",
+    )
+    .unwrap();
     let run = || {
         let o = bin()
             .args(["plan", "--site"])
             .arg(example("eessi-site.toml"))
             .arg("--list")
             .arg(&list)
-            .args(["--target", "gpu-a", "--build-type", "production", "--run-id", "r1"])
+            .args([
+                "--target",
+                "gpu-a",
+                "--build-type",
+                "production",
+                "--run-id",
+                "r1",
+            ])
             .output()
             .unwrap();
         assert_eq!(o.status.code(), Some(0));
@@ -163,7 +184,16 @@ fn plan_is_deterministic_and_sorted() {
         .collect();
     assert_eq!(
         names,
-        ["preflight", "licences", "shard", "sources", "admission", "build", "caches", "logs"]
+        [
+            "preflight",
+            "licences",
+            "shard",
+            "sources",
+            "admission",
+            "build",
+            "caches",
+            "logs"
+        ]
     );
     // the GPU target's build phase uses its own allocation
     let build = &v["phases"][5]["commands"][0]["argv"];
@@ -193,7 +223,11 @@ fn check_exit_codes() {
     assert!(o.stdout.is_empty(), "stdout is reserved");
     let d = tempfile::tempdir().unwrap();
     let bad = d.path().join("bad.toml");
-    std::fs::write(&bad, MINIMAL.replace("kind = \"site\"", "kind = \"target\"")).unwrap();
+    std::fs::write(
+        &bad,
+        MINIMAL.replace("kind = \"site\"", "kind = \"target\""),
+    )
+    .unwrap();
     let o = bin().args(["check", "--site"]).arg(&bad).output().unwrap();
     assert_eq!(o.status.code(), Some(2));
     let o = bin().args(["check"]).output().unwrap();
