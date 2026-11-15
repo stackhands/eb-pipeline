@@ -13,6 +13,11 @@ Every new key is optional and its default reproduces 0.1.0 behaviour;
   (`option`, `value`, `separator`, `when_absent`, `strip`). `plan` and `run`
   apply it; deselected lines are listed under `deselected` in the plan and the
   result, apart from failures.
+  The kept lines are written to `<log_dir>/selected-<target>.list` and that file,
+  not the original list, goes to `stack shard --build-list`, so deselected lines
+  do not weigh in shard balancing. `plan` shows the path under `selected_list`
+  and the kept count under `selected`. A target without `[targets.select]`
+  shards the list as given.
 - `[targets.route]` contract: `args` templates with a `--` before the phase
   command, `env`, `runtime_root`, `shares_ro`, `shares_rw`,
   `receipt_digest_env` (refused with 78 when unset or empty) and `phases`
