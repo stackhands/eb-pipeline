@@ -2,6 +2,27 @@
 
 All notable changes to this project are documented here.
 
+## 0.3.0 - Unreleased
+
+### Added
+
+- `init --template NAME [--out FILE]` and `init --list`: write a starter site
+  file from a built-in template (`small-cluster`, `eessi-site`). An existing
+  output file is refused with exit 2.
+- Every command line flag falls back to an `EB_PIPELINE_<FLAG>` variable
+  (`EB_PIPELINE_SITE`, `EB_PIPELINE_LIST`, `EB_PIPELINE_TARGET`,
+  `EB_PIPELINE_BUILD_TYPE`, `EB_PIPELINE_RUN_ID`, `EB_PIPELINE_LOG_STAMP`,
+  `EB_PIPELINE_LISTS_DIR`); the flag wins.
+- `EB_PIPELINE__SECTION__KEY=value` sets one site file value over the file;
+  the result is validated by the same schema. Values inside `[[targets]]` are
+  not overridable.
+- `EB_PIPELINE_LINT_DENY`: extra substrings the template lint refuses.
+
+### Changed
+
+- `examples/` is now `templates/`, and the templates are built into the binary.
+- The template lint no longer names any one site's directory layout.
+
 ## 0.2.0 - Unreleased
 
 Every new key is optional and its default reproduces 0.1.0 behaviour;

@@ -14,8 +14,8 @@ The driver composes existing stackhands tools and never links them in:
 | [eb-keep-logs](https://github.com/stackhands/eb-keep-logs) | `failed` (keep a failed build's logs), `rotate` |
 | [eb-staged-rebuild](https://github.com/stackhands/eb-staged-rebuild) | `run`, for lines that rebuild a live install |
 
-Nothing about a site lives in this repository. The examples carry placeholders
-only, and a test rejects any example value that looks site-specific.
+Nothing about a site lives in this repository. The templates carry placeholders
+only, and a test rejects any template value that looks site-specific.
 
 ## Install
 
@@ -31,15 +31,17 @@ the three tools above the site file enables.
 
 ## Tutorial: plan and dry-run a list on a small cluster
 
-1. Write the site file. This is `examples/small-cluster.toml`: Slurm, one CPU
-   target, no EESSI, no quota, no licences.
+1. Write the site file from a template. `small-cluster` is Slurm, one CPU
+   target, no EESSI, no quota, no licences; `eb-pipeline init --list` names the
+   others.
 
    ```bash
-   cp examples/small-cluster.toml site.toml
+   eb-pipeline init --template small-cluster --out site.toml
    ```
 
    The paths in it are placeholders under `/opt` and `/scratch`; edit them for
-   your cluster.
+   your cluster, or set them from the environment (see
+   [Configuration](#configuration)).
 
 2. Check it. `check` exits 0 for a valid file and 2 otherwise.
 
@@ -78,6 +80,7 @@ the three tools above the site file enables.
 
 | command | purpose |
 |---|---|
+| `init --template NAME [--out FILE]`, `init --list` | write a starter site file from a built-in template; an existing file is refused |
 | `check --site FILE [--lists-dir DIR] [--probe-tools]` | parse and validate; exit 0 or 2 |
 | `schema` | print every key with type, default, required flag and meaning |
 | `explain --site FILE [--target T] [--build-type B] [--format toml\|json]` | resolved per-target configuration |
@@ -87,9 +90,47 @@ the three tools above the site file enables.
 `eb-pipeline schema` is generated from the same declarations the parser uses,
 and a test asserts that every field of every section is documented there.
 
-Streams: stdout carries `plan`, `explain`, `schema` and `--dry-run` output only.
+Streams: stdout carries `plan`, `explain`, `schema`, `init` and `--dry-run` output only.
 Events go to stderr, one per line, as `LEVEL [phase] target: message`. The
 result JSON goes to `--result`.
+
+## Configuration
+
+Configuration lives in two places: the site file, which describes the site,
+and the environment, which describes one deployment of it.
+
+Every command line flag falls back to a variable; a flag given on the command
+line wins.
+
+| flag | variable |
+|---|---|
+| `--site` | `EB_PIPELINE_SITE` |
+| `--list` | `EB_PIPELINE_LIST` |
+| `--target` | `EB_PIPELINE_TARGET` |
+| `--build-type` | `EB_PIPELINE_BUILD_TYPE` |
+| `--run-id` | `EB_PIPELINE_RUN_ID` |
+| `--log-stamp` | `EB_PIPELINE_LOG_STAMP` |
+| `--lists-dir` | `EB_PIPELINE_LISTS_DIR` |
+
+`EB_PIPELINE__SECTION__KEY=value` sets one site file value. The name after the
+prefix is split on `__` and lowercased. `EB_PIPELINE__FILESYSTEMS__SCRATCH`
+sets `filesystems.scratch`; `EB_PIPELINE__SITE__TOOLS__EB_STACK__BIN` sets
+`site.tools.eb_stack.bin`.
+
+The value is read as a TOML value: `true`, `16`, `["/opt/a", "/opt/b"]`. Text
+that does not parse as one is taken as a string. Quote a string that looks like
+a number: `'"1.0"'`.
+
+The file plus the overrides go through the same schema as the file alone. An
+unknown key or a wrong type is a usage error (exit 2). Overrides apply in name
+order, and each one is logged to stderr by key, never by value. Values inside
+`[[targets]]` cannot be overridden; they stay in the file.
+
+```bash
+export EB_PIPELINE_SITE=/opt/eb/site.toml
+export EB_PIPELINE__FILESYSTEMS__SCRATCH=/scratch/$USER/eb
+eb-pipeline explain --target cpu
+```
 
 ## Phases
 
@@ -262,8 +303,9 @@ and `unit`) and in no status count.
 ## A thin CI caller
 
 ```bash
-eb-pipeline run --site site.toml --list "$LIST" --target "$TARGET" \
-    --build-type "$BUILD_TYPE" --run-id "$CI_RUN_ID" --result "result-$TARGET.json"
+export EB_PIPELINE_SITE=site.toml EB_PIPELINE_LIST="$LIST" EB_PIPELINE_TARGET="$TARGET"
+export EB_PIPELINE_BUILD_TYPE="$BUILD_TYPE" EB_PIPELINE_RUN_ID="$CI_RUN_ID"
+eb-pipeline run --result "result-$TARGET.json"
 rc=$?
 ```
 
@@ -277,6 +319,10 @@ cargo fmt --all --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 ```
+
+Set `EB_PIPELINE_LINT_DENY` to a comma-separated list of your own site's names
+or paths before `cargo test --test examples` to refuse them in the templates as
+well; the repository names none.
 
 `run` is tested against stub tool binaries written into a temporary directory.
 The scenarios: success, a failed line, admission refused after N attempts,
