@@ -8,7 +8,7 @@ fn bin() -> Command {
 
 fn example(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("examples")
+        .join("templates")
         .join(name)
 }
 

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn examples() -> Vec<PathBuf> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples");
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates");
     let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
         .unwrap()
         .map(|e| e.unwrap().path())

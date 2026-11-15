@@ -3,17 +3,25 @@ use eb_pipeline::exit::{self, Fail};
 use eb_pipeline::plan::{build_plan, read_units, Planner};
 use eb_pipeline::resolve::{explain, Scope};
 use eb_pipeline::run::{install_handlers, log, run, Options};
-use eb_pipeline::{schema, site, tools, util};
+use eb_pipeline::{schema, site, templates, tools, util};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 const ROOT_HELP: &str = "\
 Examples:
+  eb-pipeline init --template small-cluster --out site.toml
   eb-pipeline check --site site.toml
   eb-pipeline plan --site site.toml --list list.txt --target cpu --build-type production --out plan.json
   eb-pipeline run --site site.toml --list list.txt --target cpu --build-type production --result result.json
 
-Output streams: stdout carries plan, explain and schema output only. Events go to
+Configuration: every flag above falls back to an EB_PIPELINE_<FLAG> variable
+(EB_PIPELINE_SITE, EB_PIPELINE_LIST, EB_PIPELINE_TARGET, EB_PIPELINE_BUILD_TYPE,
+EB_PIPELINE_RUN_ID, EB_PIPELINE_LOG_STAMP, EB_PIPELINE_LISTS_DIR); a flag on the
+command line wins. EB_PIPELINE__SECTION__KEY=value sets one site file value, for
+example EB_PIPELINE__FILESYSTEMS__SCRATCH=/scratch/eb; the result is validated
+like the file.
+
+Output streams: stdout carries plan, explain, schema and init output only. Events go to
 stderr as `LEVEL [phase] target: message`. The result JSON goes to --result.
 
 ";
@@ -36,10 +44,10 @@ enum Cmd {
     /// Parse and validate a site file.
     Check {
         /// Site file.
-        #[arg(long)]
+        #[arg(long, env = "EB_PIPELINE_SITE")]
         site: PathBuf,
         /// Directory that must hold every build list a target names.
-        #[arg(long)]
+        #[arg(long, env = "EB_PIPELINE_LISTS_DIR")]
         lists_dir: Option<PathBuf>,
         /// Run each needed tool's `--version` and enforce min_version.
         #[arg(long)]
@@ -47,16 +55,28 @@ enum Cmd {
     },
     /// Print the site file reference: every key, type, default and meaning.
     Schema,
+    /// Write a starter site file from a built-in template.
+    Init {
+        /// Template name; `--list` prints the names.
+        #[arg(long, required_unless_present = "list")]
+        template: Option<String>,
+        /// Print the template names and summaries.
+        #[arg(long)]
+        list: bool,
+        /// Write here; absent or `-` prints on stdout. An existing file is refused.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// Print the resolved configuration of one or all targets.
     Explain {
         /// Site file.
-        #[arg(long)]
+        #[arg(long, env = "EB_PIPELINE_SITE")]
         site: PathBuf,
         /// Target name; all targets when absent.
-        #[arg(long)]
+        #[arg(long, env = "EB_PIPELINE_TARGET")]
         target: Option<String>,
         /// Apply this build type's overrides.
-        #[arg(long)]
+        #[arg(long, env = "EB_PIPELINE_BUILD_TYPE")]
         build_type: Option<String>,
         /// Output format.
         #[arg(long, value_enum, default_value_t = Format::Toml)]
@@ -90,24 +110,24 @@ enum Cmd {
 #[derive(Args)]
 struct Common {
     /// Site file.
-    #[arg(long)]
+    #[arg(long, env = "EB_PIPELINE_SITE")]
     site: PathBuf,
     /// Build list file: one `Name-version-toolchain.eb [eb options]` per line.
-    #[arg(long)]
+    #[arg(long, env = "EB_PIPELINE_LIST")]
     list: PathBuf,
     /// Target name.
-    #[arg(long)]
+    #[arg(long, env = "EB_PIPELINE_TARGET")]
     target: String,
     /// Build type name (selects per-build-type overrides).
-    #[arg(long)]
+    #[arg(long, env = "EB_PIPELINE_BUILD_TYPE")]
     build_type: String,
     /// Run label recorded in the result and passed to tools. Default: the log
     /// stamp for `run`, `<run-id>` for `plan`.
-    #[arg(long)]
+    #[arg(long, env = "EB_PIPELINE_RUN_ID")]
     run_id: Option<String>,
     /// Timestamp directory under the log root (`YYYYMMDD_HHMMSS`). Default:
     /// the current UTC time, taken once per run; `<log-stamp>` for `plan`.
-    #[arg(long)]
+    #[arg(long, env = "EB_PIPELINE_LOG_STAMP")]
     log_stamp: Option<String>,
 }
 
@@ -183,6 +203,47 @@ fn cmd_explain(
             toml::to_string_pretty(&v)
                 .map_err(|e| Fail::new(exit::FAILED, format!("cannot render TOML: {e}")))?
         ),
+    }
+    Ok(exit::OK)
+}
+
+fn cmd_init(template: Option<&str>, list: bool, out: Option<&Path>) -> Result<i32, Fail> {
+    if list {
+        for t in templates::TEMPLATES {
+            println!("{:<16} {}", t.name, t.summary);
+        }
+        return Ok(exit::OK);
+    }
+    let name = template.unwrap_or_default();
+    let t = templates::get(name).ok_or_else(|| {
+        Fail::usage(format!(
+            "unknown template `{name}`; known: {}",
+            templates::TEMPLATES
+                .iter()
+                .map(|t| t.name)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    })?;
+    match out {
+        None => print!("{}", t.text),
+        Some(p) if p == Path::new("-") => print!("{}", t.text),
+        Some(p) => {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(p)
+                .map_err(|e| Fail::usage(format!("cannot create {}: {e}", p.display())))?;
+            f.write_all(t.text.as_bytes())
+                .map_err(|e| Fail::new(exit::FAILED, format!("cannot write {}: {e}", p.display())))?;
+            log(
+                "INFO",
+                "init",
+                "-",
+                &format!("wrote template {} to {}", t.name, p.display()),
+            );
+        }
     }
     Ok(exit::OK)
 }
@@ -297,6 +358,11 @@ fn main() {
             print!("{}", schema::reference());
             Ok(exit::OK)
         }
+        Cmd::Init {
+            template,
+            list,
+            out,
+        } => cmd_init(template.as_deref(), *list, out.as_deref()),
         Cmd::Explain {
             site,
             target,

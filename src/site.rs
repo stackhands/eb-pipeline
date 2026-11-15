@@ -505,7 +505,7 @@ impl Site {
 mod override_tests {
     use super::*;
 
-    const BASE: &str = include_str!("../examples/small-cluster.toml");
+    const BASE: &str = include_str!("../templates/small-cluster.toml");
 
     fn set(pairs: &[(&str, &str)]) -> Result<Site, Fail> {
         let v: Vec<(String, String)> = pairs
