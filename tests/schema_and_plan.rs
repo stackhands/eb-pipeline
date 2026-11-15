@@ -893,3 +893,35 @@ fn eessi_example_exercises_the_target_keys() {
     assert_eq!(v["lines"], 3);
     assert_eq!(build_names(&v).len(), 3);
 }
+
+fn shard_list_arg(v: &serde_json::Value) -> String {
+    let a = argv_of(&phase(v, "shard")["commands"][0]);
+    let i = a.iter().position(|x| x == "--build-list").unwrap();
+    a[i + 1].clone()
+}
+
+#[test]
+fn plan_shards_the_selected_list_and_counts_it() {
+    let site = format!(
+        "{}\n[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n",
+        with_target(
+            "[targets.select]\noption = \"--only-targets\"\nvalue = \"other\"\nwhen_absent = \"none\"\n"
+        )
+    );
+    let v = plan_of(&site, SELECT_LIST, "other");
+    let list = shard_list_arg(&v);
+    assert!(list.ends_with("/selected-other.list"), "{list}");
+    assert_eq!(v["selected_list"], list);
+    assert_eq!(v["selected"], 2);
+    assert_eq!(v["lines"], 5);
+    assert_eq!(build_names(&v), ["build:B-1.0", "build:C-1.0"]);
+}
+
+#[test]
+fn plan_without_selection_shards_the_list_as_given() {
+    let site = format!("{MINIMAL}\n[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n");
+    let v = plan_of(&site, "Foo-1.0.eb\n", "cpu");
+    assert!(shard_list_arg(&v).ends_with("/l.txt"));
+    assert!(v.get("selected").is_none());
+    assert!(v.get("selected_list").is_none());
+}

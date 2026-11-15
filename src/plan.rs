@@ -8,7 +8,7 @@ use crate::tools::Tool;
 use crate::util::{parse_list, ListLine};
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// One subprocess the driver starts.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -47,6 +47,12 @@ pub struct Plan {
     pub list: String,
     pub log_dir: String,
     pub lines: usize,
+    /// Lines kept by the target's selector; absent without `[targets.select]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected: Option<usize>,
+    /// File the selected lines are written to, which `stack shard` reads.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_list: Option<String>,
     pub phases: Vec<PlanPhase>,
     /// Lines left out by the target's selector.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -154,33 +160,57 @@ impl<'a> Planner<'a> {
         }
     }
 
-    /// Apply the target's selector to the units. Units left without lines
-    /// are dropped only when a selector is configured.
-    pub fn select_units(&self, units: Vec<Unit>) -> (Vec<Unit>, Vec<Deselected>) {
+    /// Apply the target's selector to the list lines, in order. Kept lines
+    /// carry the arguments `strip` leaves; the others are recorded. Without a
+    /// selector every line is kept as read and nothing is recorded.
+    pub fn select_lines(&self, lines: &[ListLine]) -> (Vec<ListLine>, Vec<Deselected>) {
         let Some(sel) = &self.scope.target.select else {
-            return (units, Vec::new());
+            return (lines.to_vec(), Vec::new());
         };
         let mut kept = Vec::new();
         let mut out = Vec::new();
-        for mut u in units {
-            let mut lines = Vec::new();
-            for l in u.lines {
-                let r = crate::select::select_line(sel, &l);
-                if r.planned {
-                    lines.push(ListLine { args: r.args, ..l });
+        for l in lines {
+            let r = crate::select::select_line(sel, l);
+            if r.planned {
+                let raw = if sel.strip {
+                    std::iter::once(&l.easyconfig)
+                        .chain(&r.args)
+                        .map(|a| quote(a))
+                        .collect::<Vec<_>>()
+                        .join(" ")
                 } else {
-                    out.push(Deselected {
-                        easyconfig: l.easyconfig,
-                        unit: u.name.clone(),
-                    });
-                }
-            }
-            if !lines.is_empty() {
-                u.lines = lines;
-                kept.push(u);
+                    l.raw.clone()
+                };
+                kept.push(ListLine {
+                    raw,
+                    args: r.args,
+                    ..l.clone()
+                });
+            } else {
+                out.push(Deselected {
+                    easyconfig: l.easyconfig.clone(),
+                    unit: "all".into(),
+                });
             }
         }
         (kept, out)
+    }
+
+    /// Where the selected build list lives, when the target has a selector.
+    pub fn selected_list_path(&self) -> Option<PathBuf> {
+        self.scope.target.select.as_ref()?;
+        Some(
+            PathBuf::from(self.scope.log_dir())
+                .join(format!("selected-{}.list", self.scope.target.name)),
+        )
+    }
+
+    /// The list `stack shard` reads: the selected list when there is one.
+    fn shard_list(&self) -> String {
+        match self.selected_list_path() {
+            Some(p) => p.display().to_string(),
+            None => self.list_path.clone(),
+        }
     }
 
     fn site(&self) -> &crate::schema::Site {
@@ -236,7 +266,7 @@ impl<'a> Planner<'a> {
             "stack".into(),
             "shard".into(),
             "--build-list".into(),
-            self.list_path.clone(),
+            self.shard_list(),
             "--shards".into(),
             s.count.to_string(),
             "--out-dir".into(),
@@ -638,16 +668,18 @@ pub fn build_plan(
         skip("shard", "not configured")
     });
 
+    // shard units come from the selected list, so only the whole list is filtered
+    let (kept, deselected) = p.select_lines(lines);
     let units: Vec<Unit> = match shard_units {
         Some(u) if !u.is_empty() => u.to_vec(),
+        _ if p.scope.target.select.is_some() && kept.is_empty() => vec![],
         _ => vec![Unit {
             name: "all".into(),
             role: Role::Build,
-            lines: lines.to_vec(),
+            lines: kept.clone(),
             footprint: None,
         }],
     };
-    let (units, deselected) = p.select_units(units);
     let mut seq = StemSeq::default();
     let stems: Vec<Vec<String>> = units
         .iter()
@@ -724,6 +756,8 @@ pub fn build_plan(
         list: p.list_path.clone(),
         log_dir: p.scope.log_dir(),
         lines: lines.len(),
+        selected: p.scope.target.select.as_ref().map(|_| kept.len()),
+        selected_list: p.selected_list_path().map(|x| x.display().to_string()),
         phases,
         deselected,
     })

@@ -23,8 +23,22 @@ case "$sub" in
     echo "{\"admitted\":false,\"attempt\":$n}"; exit 78;;
   shard)
     case "${STUB_SHARD:-ok}" in unsharded) exit 3;; fail) exit 1;; esac
-    out=""; while [ $# -gt 0 ]; do [ "$1" = --out-dir ] && out="$2"; shift; done
+    out=""; bl=""
+    while [ $# -gt 0 ]; do
+      [ "$1" = --out-dir ] && out="$2"
+      [ "$1" = --build-list ] && bl="$2"
+      shift
+    done
     mkdir -p "$out"
+    if [ -n "$bl" ]; then echo "$bl" > "$D/shard.listpath"; cat "$bl" > "$D/shard.listtext" 2>/dev/null; fi
+    if [ "${STUB_SHARD:-ok}" = fromlist ]; then
+      : > "$out/shard-01.list"; : > "$out/shard-02.list"; i=0
+      while IFS= read -r l; do
+        i=$((i+1)); echo "$l" >> "$out/shard-0$(( (i-1) % 2 + 1 )).list"
+      done < "$bl"
+      echo '{"prelude":{"file":null},"shards":[{"name":"shard-01","file":"shard-01.list","inode_footprint":111},{"name":"shard-02","file":"shard-02.list","inode_footprint":222}]}' > "$out/plan.json"
+      exit 0
+    fi
     printf 'Foo-1.0-foss-2025a.eb\n' > "$out/shard-01.list"
     printf 'Bar-2.0-foss-2025a.eb\n' > "$out/shard-02.list"
     if [ "${STUB_SHARD:-ok}" = cpu ]; then
@@ -656,7 +670,71 @@ fn selection_filters_lines_and_records_them_apart_from_failures() {
 }
 
 #[test]
-fn selection_applies_to_shard_units_and_leaves_no_empty_admission() {
+fn selected_list_feeds_the_shard_planner() {
+    let env = setup(&format!(
+        "[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n{ADMISSION}"
+    ));
+    with_cpu_target(
+        &env,
+        "[targets.select]\noption = \"--only-targets\"\nvalue = \"cpu\"\nstrip = true\nwhen_absent = \"none\"\n",
+    );
+    let o = go(
+        &env,
+        "Foo-1.0-foss-2025a.eb --only-targets=cpu,x --rebuild\nBar-2.0-foss-2025a.eb --only-targets=x\nBaz-3.0-foss-2025a.eb --only-targets=cpu\nQux-1.0-foss-2025a.eb\n",
+        &[("STUB_SHARD", "fromlist")],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    // the planner read the selected file, stripped, in original order
+    assert_eq!(
+        file_text(&env, "shard.listtext"),
+        "Foo-1.0-foss-2025a.eb --rebuild\nBaz-3.0-foss-2025a.eb\n"
+    );
+    let path = file_text(&env, "shard.listpath");
+    assert!(path.trim().ends_with("/selected-cpu.list"), "{path}");
+    assert!(path.contains("/logs/"), "{path}");
+    let on_disk = std::fs::read_to_string(path.trim()).unwrap();
+    assert_eq!(on_disk, file_text(&env, "shard.listtext"));
+    let built: Vec<String> = calls(&env, "eb.calls");
+    assert_eq!(built.len(), 2, "{built:?}");
+    let r = o.result.unwrap();
+    assert_eq!(r["sharded"], true);
+    assert_eq!(r["counts"]["success"], 2);
+    let d = r["deselected"].as_array().unwrap();
+    assert_eq!(d.len(), 2);
+    assert_eq!(d[0]["easyconfig"], "Bar-2.0-foss-2025a.eb");
+}
+
+#[test]
+fn selected_list_keeps_the_option_without_strip() {
+    let env = setup("[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n");
+    with_cpu_target(
+        &env,
+        "[targets.select]\noption = \"--only-targets\"\nvalue = \"cpu\"\nwhen_absent = \"all\"\n",
+    );
+    let o = go(
+        &env,
+        "Foo-1.0-foss-2025a.eb --only-targets=cpu\nBar-2.0-foss-2025a.eb --only-targets=x\nBaz-3.0-foss-2025a.eb\n",
+        &[("STUB_SHARD", "fromlist")],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(
+        file_text(&env, "shard.listtext"),
+        "Foo-1.0-foss-2025a.eb --only-targets=cpu\nBaz-3.0-foss-2025a.eb\n"
+    );
+}
+
+#[test]
+fn no_selection_shards_the_list_as_given() {
+    let env = setup("[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n");
+    let o = go(&env, LIST, &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let path = file_text(&env, "shard.listpath");
+    assert!(path.trim().ends_with("/list.txt"), "{path}");
+    assert!(!path.contains("selected-"), "{path}");
+}
+
+#[test]
+fn empty_selection_skips_the_shard_planner() {
     let env = setup(&format!(
         "[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n{ADMISSION}"
     ));
@@ -664,17 +742,14 @@ fn selection_applies_to_shard_units_and_leaves_no_empty_admission() {
         &env,
         "[targets.select]\noption = \"--only-targets\"\nvalue = \"cpu\"\nwhen_absent = \"none\"\n",
     );
-    // the stub shards put Foo in shard-01 and Bar in shard-02; neither line
-    // carries the option, so nothing is planned
     let o = go(&env, LIST, &[]);
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert!(calls(&env, "eb.calls").is_empty());
     assert!(calls(&env, "eb-stack.calls")
         .iter()
-        .all(|l| !l.starts_with("admit")));
+        .all(|l| !l.starts_with("admit") && !l.starts_with("shard")));
     let r = o.result.unwrap();
     assert_eq!(r["deselected"].as_array().unwrap().len(), 2);
-    assert_eq!(r["deselected"][0]["unit"], "shard-01");
 }
 
 const ROUTE_SITE: &str = r#"[targets.route]

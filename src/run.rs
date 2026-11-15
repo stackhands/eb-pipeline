@@ -362,14 +362,52 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
         st.phase("licences", "ok", None, None);
     }
 
+    // selection: lines the target's selector leaves out are recorded, not built;
+    // the kept lines go to a file that the shard planner reads
+    let (kept, deselected) = p.select_lines(lines);
+    let has_select = p.selected_list_path().is_some();
+    if let Some(path) = p.selected_list_path() {
+        let mut text = kept
+            .iter()
+            .map(|l| l.raw.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !kept.is_empty() {
+            text.push('\n');
+        }
+        let written = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&path, text));
+        if let Err(e) = written {
+            let msg = format!("cannot write {}: {e}", path.display());
+            log("ERROR", "preflight", &target, &msg);
+            st.res.message = Some(msg);
+            return finish(st, Some(exit::FAILED));
+        }
+    }
+    if !deselected.is_empty() {
+        log(
+            "INFO",
+            "build",
+            &target,
+            &format!("{} line(s) deselected for this target", deselected.len()),
+        );
+    }
+    st.res.deselected = deselected;
+
     // shard
-    let mut units: Vec<Unit> = vec![Unit {
-        name: "all".into(),
-        role: Role::Build,
-        lines: lines.to_vec(),
-        footprint: None,
-    }];
-    if let Some(sh) = site.shards_on() {
+    let mut units: Vec<Unit> = if has_select && kept.is_empty() {
+        vec![]
+    } else {
+        vec![Unit {
+            name: "all".into(),
+            role: Role::Build,
+            lines: kept,
+            footprint: None,
+        }]
+    };
+    if let Some(sh) = site.shards_on().filter(|_| !units.is_empty()) {
         match p.shard_cmd() {
             Err(f) => {
                 st.res.message = Some(f.msg);
@@ -448,19 +486,6 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
             }
         }
     }
-
-    // selection: lines the target's selector leaves out are recorded, not built
-    let (selected, deselected) = p.select_units(units);
-    units = selected;
-    if !deselected.is_empty() {
-        log(
-            "INFO",
-            "build",
-            &target,
-            &format!("{} line(s) deselected for this target", deselected.len()),
-        );
-    }
-    st.res.deselected = deselected;
 
     // the route's receipt digest is read once a CPU-role unit needs it
     let mut routed = p.clone();
