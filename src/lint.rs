@@ -2,7 +2,9 @@
 //!
 //! Examples must carry neutral values only: absolute paths under `/opt`,
 //! `/srv` or `/scratch`, angle-bracket placeholders, and host names under
-//! `example.org` or `.invalid`.
+//! `example.org` or `.invalid`. An operator who keeps a private site file next
+//! to the templates can name extra substrings to refuse through
+//! `EB_PIPELINE_LINT_DENY` (comma-separated); the repository itself names none.
 
 const ROOTS: [&str; 3] = ["/opt", "/srv", "/scratch"];
 const FILE_EXTS: [&str; 16] = [
@@ -57,11 +59,11 @@ fn check_token(key: &str, raw: &str, out: &mut Vec<String>) {
     }
 }
 
-fn check_value(key: &str, v: &str, out: &mut Vec<String>) {
-    if v.contains("eb/site") {
-        out.push(format!(
-            "{key}: `eb/site` mirrors a real site layout; use /opt/eb/<target>"
-        ));
+fn check_value(key: &str, v: &str, deny: &[String], out: &mut Vec<String>) {
+    for d in deny {
+        if v.contains(d.as_str()) {
+            out.push(format!("{key}: value contains the denied text `{d}`"));
+        }
     }
     for word in v.split_whitespace() {
         if let Some((_, rest)) = word.split_once("://") {
@@ -79,17 +81,17 @@ fn check_value(key: &str, v: &str, out: &mut Vec<String>) {
     }
 }
 
-fn walk(key: &str, v: &toml::Value, out: &mut Vec<String>) {
+fn walk(key: &str, v: &toml::Value, deny: &[String], out: &mut Vec<String>) {
     match v {
-        toml::Value::String(s) => check_value(key, s, out),
-        toml::Value::Array(a) => a.iter().for_each(|x| walk(key, x, out)),
+        toml::Value::String(s) => check_value(key, s, deny, out),
+        toml::Value::Array(a) => a.iter().for_each(|x| walk(key, x, deny, out)),
         toml::Value::Table(t) => t.iter().for_each(|(k, x)| {
             let kk = if key.is_empty() {
                 k.clone()
             } else {
                 format!("{key}.{k}")
             };
-            walk(&kk, x, out)
+            walk(&kk, x, deny, out)
         }),
         _ => {}
     }
@@ -97,12 +99,30 @@ fn walk(key: &str, v: &toml::Value, out: &mut Vec<String>) {
 
 /// Return one message per value that looks site-specific.
 pub fn lint_example(text: &str) -> Vec<String> {
+    lint_example_with(text, &[])
+}
+
+/// As [`lint_example`], and also refuse any string value containing one of
+/// `deny`.
+pub fn lint_example_with(text: &str, deny: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     match toml::from_str::<toml::Value>(text) {
-        Ok(v) => walk("", &v, &mut out),
+        Ok(v) => walk("", &v, deny, &mut out),
         Err(e) => out.push(format!("not valid TOML: {e}")),
     }
     out
+}
+
+/// The extra substrings named by `EB_PIPELINE_LINT_DENY`, comma-separated;
+/// blank entries are dropped.
+pub fn deny_from_env() -> Vec<String> {
+    std::env::var("EB_PIPELINE_LINT_DENY")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 #[cfg(test)]
@@ -130,8 +150,17 @@ a = "/home/builder/eb"
 b = "login.cluster.net"
 c = "https://git.corp.example.com/x"
 d = "-o /projects/lab/x"
-e = "/opt/eb/site/x"
 "#;
-        assert_eq!(lint_example(t).len(), 5, "{:?}", lint_example(t));
+        assert_eq!(lint_example(t).len(), 4, "{:?}", lint_example(t));
+    }
+
+    #[test]
+    fn deny_list_refuses_named_text() {
+        let t = "a = \"/opt/eb/layout-x/cpu\"\nb = [\"/opt/eb/ok\"]\n";
+        assert!(lint_example(t).is_empty());
+        let deny = vec!["layout-x".to_string()];
+        let hits = lint_example_with(t, &deny);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert!(hits[0].starts_with("a:"), "{hits:?}");
     }
 }
