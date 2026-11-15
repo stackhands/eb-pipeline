@@ -295,7 +295,7 @@ fn admission_admitted_on_second_attempt() {
 
 #[test]
 fn admission_required_without_config_refuses() {
-    let env = setup("[admission]\nrequired = true\n");
+    let env = setup("[admission]\nrequired = true\ndefault_footprint = 500\n");
     let o = go(&env, LIST, &[]);
     assert_eq!(o.code, 78, "{}", o.stderr);
     assert!(calls(&env, "eb.calls").is_empty());
