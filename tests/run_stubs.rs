@@ -27,6 +27,11 @@ case "$sub" in
     mkdir -p "$out"
     printf 'Foo-1.0-foss-2025a.eb\n' > "$out/shard-01.list"
     printf 'Bar-2.0-foss-2025a.eb\n' > "$out/shard-02.list"
+    if [ "${STUB_SHARD:-ok}" = cpu ]; then
+      printf 'Pre-1.0-foss-2025a.eb\n' > "$out/cpu.list"
+      echo '{"cpu_prerequisites":{"file":"cpu.list","inode_footprint":5},"prelude":{"file":null},"shards":[{"name":"shard-01","file":"shard-01.list","inode_footprint":111},{"name":"shard-02","file":"shard-02.list","inode_footprint":222}]}' > "$out/plan.json"
+      exit 0
+    fi
     echo '{"prelude":{"file":null},"shards":[{"name":"shard-01","file":"shard-01.list","inode_footprint":111},{"name":"shard-02","file":"shard-02.list","inode_footprint":222}]}' > "$out/plan.json"
     exit 0;;
 esac
@@ -37,6 +42,8 @@ const EB: &str = r#"#!/bin/sh
 D="${STUB_DIR:?}"
 ec="$1"; stem="${ec%.eb}"
 echo "$*" >> "$D/eb.calls"
+case " $* " in *" --fetch "*) kind=fetch;; *) kind=build;; esac
+env | grep '^EB_PIPELINE_\|^EASYBUILD_\|^ROUTE_' | sort > "$D/env.$kind.$stem"
 if [ -n "${STUB_EB_SLEEP:-}" ]; then
   echo started > "$D/started"
   trap 'echo term > "$D/termed"; kill $pid 2>/dev/null; exit 0' TERM
@@ -47,6 +54,14 @@ if [ -n "${STUB_EB_SLEEP:-}" ]; then
 fi
 case ",${STUB_EB_FAIL:-}," in *",$stem,"*) echo "ERROR: $stem failed"; exit 1;; esac
 exit 0
+"#;
+
+const ROUTE: &str = r#"#!/bin/sh
+D="${STUB_DIR:?}"
+echo "$*" >> "$D/route.calls"
+while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
+shift
+exec "$@"
 "#;
 
 const KEEP_LOGS: &str = r#"#!/bin/sh
@@ -83,6 +98,7 @@ fn setup(extra_site: &str) -> Env {
     for (n, t) in [
         ("eb-stack", EB_STACK),
         ("eb", EB),
+        ("route", ROUTE),
         ("eb-keep-logs", KEEP_LOGS),
         ("eb-staged-rebuild", STAGED),
     ] {
@@ -598,4 +614,236 @@ fn logs_go_under_stamp_and_target() {
     assert_eq!(r["run_id"], "r1");
     let log = r["lines"][0]["log"].as_str().unwrap();
     assert!(log.contains("/logs/20260101_000000/cpu/"), "{log}");
+}
+
+/// Put `frag` straight after the `cpu` target's name.
+fn with_cpu_target(env: &Env, frag: &str) {
+    let text = std::fs::read_to_string(&env.site)
+        .unwrap()
+        .replace("name = \"cpu\"", &format!("name = \"cpu\"\n{frag}"));
+    std::fs::write(&env.site, text).unwrap();
+}
+
+fn file_text(env: &Env, name: &str) -> String {
+    std::fs::read_to_string(env.dir.path().join(name)).unwrap_or_default()
+}
+
+#[test]
+fn selection_filters_lines_and_records_them_apart_from_failures() {
+    let env = setup("");
+    with_cpu_target(
+        &env,
+        "[targets.select]\noption = \"--only-targets\"\nvalue = \"cpu\"\nstrip = true\nwhen_absent = \"none\"\n",
+    );
+    let o = go(
+        &env,
+        "Foo-1.0-foss-2025a.eb --only-targets=cpu,x --rebuild\nBar-2.0-foss-2025a.eb --only-targets=x\nBaz-3.0-foss-2025a.eb\n",
+        &[],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let c = calls(&env, "eb.calls");
+    assert_eq!(c.len(), 1, "{c:?}");
+    assert!(c[0].starts_with("Foo-1.0-foss-2025a.eb --rebuild"), "{c:?}");
+    assert!(!c[0].contains("--only-targets"), "{c:?}");
+    let r = o.result.unwrap();
+    assert_eq!(r["counts"]["success"], 1);
+    assert!(r["counts"].get("failed").is_none());
+    let d = r["deselected"].as_array().unwrap();
+    assert_eq!(d.len(), 2);
+    assert_eq!(d[0]["easyconfig"], "Bar-2.0-foss-2025a.eb");
+    assert_eq!(d[1]["easyconfig"], "Baz-3.0-foss-2025a.eb");
+    assert_eq!(r["lines"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn selection_applies_to_shard_units_and_leaves_no_empty_admission() {
+    let env = setup(&format!(
+        "[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n{ADMISSION}"
+    ));
+    with_cpu_target(
+        &env,
+        "[targets.select]\noption = \"--only-targets\"\nvalue = \"cpu\"\nwhen_absent = \"none\"\n",
+    );
+    // the stub shards put Foo in shard-01 and Bar in shard-02; neither line
+    // carries the option, so nothing is planned
+    let o = go(&env, LIST, &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(calls(&env, "eb.calls").is_empty());
+    assert!(calls(&env, "eb-stack.calls")
+        .iter()
+        .all(|l| !l.starts_with("admit")));
+    let r = o.result.unwrap();
+    assert_eq!(r["deselected"].as_array().unwrap().len(), 2);
+    assert_eq!(r["deselected"][0]["unit"], "shard-01");
+}
+
+const ROUTE_SITE: &str = r#"[targets.route]
+kind = "command"
+command = "{R}/route --label x"
+args = ["--runtime", "{runtime_root}", "--rw", "{shares_rw}", "--tag", "{target}-{phase}"]
+runtime_root = "{R}/rt"
+shares_rw = ["{phase_dir}"]
+receipt_digest_env = "STUB_DIGEST"
+{PHASES}
+[targets.route.env]
+ROUTE_MARK = "{phase_dir}"
+"#;
+
+fn route_env(env: &Env, phases: &str) {
+    let r = env.stubs.display().to_string();
+    let frag = ROUTE_SITE.replace("{R}", &r).replace("{PHASES}", phases);
+    with_cpu_target(env, &frag);
+    let text = std::fs::read_to_string(&env.site).unwrap()
+        + "\n[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n[sources]\n";
+    std::fs::write(&env.site, text).unwrap();
+}
+
+#[test]
+fn route_wraps_cpu_units_with_args_env_and_digest() {
+    let env = setup("");
+    route_env(&env, "");
+    let o = go(
+        &env,
+        LIST,
+        &[("STUB_SHARD", "cpu"), ("STUB_DIGEST", "abc123")],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    // default phases: the CPU unit's build goes through the route; fetches do not
+    let rc = calls(&env, "route.calls");
+    assert_eq!(rc.len(), 1, "{rc:?}");
+    let log = format!(
+        "{}/logs/20260101_000000/cpu/build",
+        env.dir.path().display()
+    );
+    assert!(
+        rc[0].contains(&format!(
+            "--label x --runtime {}/rt --rw {log} --tag cpu-build -- eb Pre-1.0-foss-2025a.eb",
+            env.stubs.display()
+        )),
+        "{rc:?}"
+    );
+    let e = file_text(&env, "env.build.Pre-1.0-foss-2025a");
+    assert!(e.contains("EB_PIPELINE_ROUTE_RECEIPT_DIGEST=abc123"), "{e}");
+    assert!(e.contains(&format!("ROUTE_MARK={log}")), "{e}");
+    // the directory named by {phase_dir} exists before the command starts
+    assert!(std::path::Path::new(&log).is_dir());
+    // other units are not routed
+    let e = file_text(&env, "env.build.Foo-1.0-foss-2025a");
+    assert!(!e.contains("ROUTE_MARK"), "{e}");
+}
+
+#[test]
+fn route_phases_add_the_sources_phase() {
+    let env = setup("");
+    route_env(&env, "phases = [\"build\", \"sources\"]");
+    let o = go(
+        &env,
+        LIST,
+        &[("STUB_SHARD", "cpu"), ("STUB_DIGEST", "abc123")],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let rc = calls(&env, "route.calls");
+    assert_eq!(rc.len(), 2, "{rc:?}");
+    assert!(
+        rc[0].contains("--tag cpu-sources -- eb Pre-1.0-foss-2025a.eb --fetch"),
+        "{rc:?}"
+    );
+    assert!(rc[1].contains("--tag cpu-build"), "{rc:?}");
+}
+
+#[test]
+fn missing_receipt_digest_refuses_before_any_build() {
+    for v in [None, Some("")] {
+        let env = setup("");
+        route_env(&env, "");
+        let vars: Vec<(&str, &str)> = [("STUB_SHARD", "cpu")]
+            .into_iter()
+            .chain(v.map(|x| ("STUB_DIGEST", x)))
+            .collect();
+        let o = go(&env, LIST, &vars);
+        assert_eq!(o.code, 78, "{}", o.stderr);
+        assert!(calls(&env, "eb.calls").is_empty());
+    }
+    // a run without a CPU-role unit needs no digest
+    let env = setup("");
+    route_env(&env, "");
+    let o = go(&env, LIST, &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(calls(&env, "route.calls").is_empty());
+}
+
+#[test]
+fn hardware_class_and_fetch_profile_reach_the_commands() {
+    let env = setup("");
+    with_cpu_target(
+        &env,
+        "[targets.hardware]\nvendor_id = \"v\"\nmodel = 2\n[targets.cpu_hardware]\nvendor_id = \"w\"\nmodel = 4\n[targets.fetch_profile]\nmirror = \"m\"\n",
+    );
+    let text = std::fs::read_to_string(&env.site).unwrap()
+        + "\n[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n[sources]\n";
+    std::fs::write(&env.site, text).unwrap();
+    let o = go(&env, LIST, &[("STUB_SHARD", "cpu")]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let pre = file_text(&env, "env.fetch.Pre-1.0-foss-2025a");
+    assert!(pre.contains("EB_PIPELINE_HW_MODEL=4"), "{pre}");
+    assert!(
+        pre.contains("EB_PIPELINE_FETCH_PROFILE={\"mirror\":\"m\"}"),
+        "{pre}"
+    );
+    let foo = file_text(&env, "env.build.Foo-1.0-foss-2025a");
+    assert!(foo.contains("EB_PIPELINE_HW_MODEL=2"), "{foo}");
+    assert!(foo.contains("EB_PIPELINE_HW_VENDOR_ID=v"), "{foo}");
+    assert!(!foo.contains("FETCH_PROFILE"), "{foo}");
+}
+
+#[test]
+fn split_install_vars_reach_the_build() {
+    let env = setup("");
+    let text = std::fs::read_to_string(&env.site).unwrap().replace(
+        "install_root =",
+        "export_install_vars = \"split\"\nread_only_installdir = true\nread_only_installdir_value = \"True\"\ninstall_root =",
+    );
+    std::fs::write(&env.site, text).unwrap();
+    let o = go(&env, LIST, &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let e = file_text(&env, "env.build.Foo-1.0-foss-2025a");
+    let r = env.dir.path().display();
+    assert!(
+        e.contains(&format!(
+            "EASYBUILD_INSTALLPATH_SOFTWARE={r}/install/software"
+        )),
+        "{e}"
+    );
+    assert!(
+        e.contains(&format!(
+            "EASYBUILD_INSTALLPATH_MODULES={r}/install/modules"
+        )),
+        "{e}"
+    );
+    assert!(!e.contains("EASYBUILD_INSTALLPATH="), "{e}");
+    assert!(e.contains("EASYBUILD_READ_ONLY_INSTALLDIR=True"), "{e}");
+}
+
+#[test]
+fn installed_modules_dirs_come_from_the_environment_at_run_time() {
+    let site = "[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\ninstalled_modules_dirs = [\"/opt/m\"]\ninstalled_modules_dirs_from_env = [\"STUB_MODS\", \"STUB_MODS2\"]\n";
+    let env = setup(site);
+    let o = go(
+        &env,
+        LIST,
+        &[("STUB_MODS", "/a/x:/a/y"), ("STUB_MODS2", "")],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let c = calls(&env, "eb-stack.calls");
+    assert!(
+        c[0].contains("--installed-modules-dir /opt/m --installed-modules-dir /a/x --installed-modules-dir /a/y"),
+        "{c:?}"
+    );
+    assert!(!c[0].contains("STUB_MODS"), "{c:?}");
+    // an unset variable refuses before any work
+    let env = setup(site);
+    let o = go(&env, LIST, &[("STUB_MODS", "/a/x")]);
+    assert_eq!(o.code, 78, "{}", o.stderr);
+    assert!(calls(&env, "eb-stack.calls").is_empty());
+    assert!(calls(&env, "eb.calls").is_empty());
 }

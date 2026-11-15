@@ -81,6 +81,42 @@ cpu = "-p <small-partition> -N 1 --ntasks-per-node=1 -c 64 --mem=128G -t 2-00:00
 [targets.route]
 kind = "command"
 command = "/opt/eb-tools/bin/cpu-route"
+args = ["--runtime", "{runtime_root}", "--ro", "{shares_ro}", "--rw", "{shares_rw}", "--tag", "{target}-{phase}"]
+runtime_root = "/opt/eb-tools/route-runtime"
+shares_ro = ["{work_dir}"]
+shares_rw = ["{phase_dir}", "{log_dir}"]
+receipt_digest_env = "ROUTE_RECEIPT_DIGEST"
+phases = ["build", "sources"]
+
+[targets.route.env]
+ROUTE_LABEL = "{target}-{phase}"
+
+# Lines of a build list can name the targets they are for with a per-line
+# option; a line without it is planned for every target.
+[targets.select]
+option = "--only-targets"
+value = "gpu-a"
+separator = ","
+when_absent = "all"
+strip = true
+
+# CPU-role phases run on a different hardware class.
+[targets.hardware]
+vendor_id = "<vendor-id>"
+cpu_family = 25
+model = 1
+
+[targets.cpu_hardware]
+vendor_id = "<vendor-id>"
+cpu_family = 25
+model = 17
+
+[targets.fetch_profile]
+mirror = "https://mirror.example.org/sources"
+retries = 3
+
+[targets.package_env."<Name>"]
+OPTARCH = "<gpu-value>"
 
 [[targets]]
 name = "gpu-b"
@@ -127,6 +163,7 @@ count = 4
 planner_exit_unsharded = 3
 easyconfigs = ["/opt/eb-tools/easyconfigs"]
 installed_modules_dirs = ["/opt/eb/noarch/modules/all"]
+installed_modules_dirs_from_env = ["SITE_INSTALLED_MODULES"]
 
 [sources]
 prefetch = true
@@ -146,6 +183,7 @@ OPTARCH = "<value>"
 enabled = true
 command = "/opt/eb-tools/bin/write-module-cache"
 bindings = "/opt/eb-tools/cache/bindings.json"
+init_module = "<default-site-module>"
 
 [[caches.targets]]
 target = "cpu-a"
@@ -155,7 +193,6 @@ init_module = "<site-module>"
 [[caches.targets]]
 target = "gpu-a"
 config = "/opt/eb-tools/cache/gpu-a.json"
-init_module = "<site-module>"
 
 [logs]
 keep_failed = true
