@@ -304,7 +304,13 @@ fn unsharded_plan_builds_the_list_and_exits_zero() {
     assert_eq!(o.code, 0, "{}", o.stderr);
     let r = o.result.unwrap();
     assert_eq!(r["sharded"], false);
-    assert_eq!(r["phases"][1]["status"], "unsharded");
+    let shard = r["phases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "shard")
+        .unwrap();
+    assert_eq!(shard["status"], "unsharded");
     assert_eq!(calls(&env, "eb.calls").len(), 2);
 }
 
@@ -338,7 +344,7 @@ fn tool_below_min_version_exits_two_before_any_work() {
     let env = setup("");
     let text = std::fs::read_to_string(&env.site)
         .unwrap()
-        .replace("min_version = \"0.7.0\"", "min_version = \"9.0\"");
+        .replace("min_version = \"0.2\"", "min_version = \"9.0\"");
     std::fs::write(&env.site, text).unwrap();
     let o = go(&env, LIST, &[]);
     assert_eq!(o.code, 2, "{}", o.stderr);
