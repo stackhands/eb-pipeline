@@ -4,7 +4,7 @@ use crate::exit::{self, Fail};
 use crate::plan::{build_plan, read_units, shell_line, valid_job_id, Cmd, Planner, StemSeq, Unit};
 use crate::resolve::Role;
 use crate::tools::{map_staged, StagedOutcome};
-use crate::util::{parse_list, ListLine};
+use crate::util::ListLine;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fs::File;

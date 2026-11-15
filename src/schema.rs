@@ -204,13 +204,13 @@ doc_struct! {
             "Accelerator subdirectory, exported through `modules.eessi.accel_override_var`; empty means none."),
         site_prefix: Option<String> => ("string", "none", false,
             "Install prefix of the target; EASYBUILD_INSTALLPATH and EESSI_SITE_SOFTWARE_PREFIX. Falls back to `filesystems.install_root`."),
-        #[serde(default)]
         software_root: Option<String> => ("string", "<install prefix>/software", false,
             "Live software root of the target; passed to eb-staged-rebuild `--software`."),
         modules_root: Option<String> => ("string", "<install prefix>/modules", false,
             "Live modules root of the target; passed to eb-staged-rebuild `--modules` and searched for installed modules at `<modules_root>/all/<Name>/<version>[.lua]`."),
         staged: Option<bool> => ("boolean", "rebuild.staged", false,
             "Overrides `rebuild.staged` for this target."),
+        #[serde(default)]
         default: bool => ("boolean", "false", false, "Marks the default target of the site; informational."),
         phases: Option<PhaseArgs> => ("table", "phase_defaults", false,
             "Overrides of `[phase_defaults]` for this target."),

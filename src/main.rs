@@ -191,13 +191,22 @@ fn timestamp_id() -> String {
     chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string()
 }
 
-fn cmd_plan_or_run(
-    c: &Common,
-    out: Option<&Path>,
-    result: Option<&Path>,
+struct Mode<'a> {
+    out: Option<&'a Path>,
+    result: Option<&'a Path>,
+    shard_plan: Option<&'a Path>,
     dry: bool,
     is_run: bool,
-) -> Result<i32, Fail> {
+}
+
+fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
+    let Mode {
+        out,
+        result,
+        shard_plan,
+        dry,
+        is_run,
+    } = m;
     let (s, errs) = {
         let s = site::load(&c.site)?;
         let e = site::validate(&s, None);
@@ -294,12 +303,34 @@ fn main() {
             build_type,
             format,
         } => cmd_explain(site, target.as_deref(), build_type.as_deref(), *format),
-        Cmd::Plan { common, out } => cmd_plan_or_run(common, out.as_deref(), None, false, false),
+        Cmd::Plan {
+            common,
+            out,
+            shard_plan,
+        } => cmd_plan_or_run(
+            common,
+            Mode {
+                out: out.as_deref(),
+                result: None,
+                shard_plan: shard_plan.as_deref(),
+                dry: false,
+                is_run: false,
+            },
+        ),
         Cmd::Run {
             common,
             result,
             dry_run,
-        } => cmd_plan_or_run(common, None, result.as_deref(), *dry_run, true),
+        } => cmd_plan_or_run(
+            common,
+            Mode {
+                out: None,
+                result: result.as_deref(),
+                shard_plan: None,
+                dry: *dry_run,
+                is_run: true,
+            },
+        ),
     };
     let code = match r {
         Ok(c) => c,
