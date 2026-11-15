@@ -1,0 +1,16 @@
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist' (cargo-dist)
+[dist]
+cargo-dist-version = "0.30.3"
+ci = "github"
+# release.yml is written by hand: it adds a tag/version guard, build
+# provenance attestations and a draft release, so `dist` neither
+# regenerates nor checks the CI file.
+allow-dirty = ["ci"]
+installers = []
+targets = [
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-musl",
+]

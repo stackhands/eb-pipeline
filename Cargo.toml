@@ -30,3 +30,8 @@ toml = "0.9"
 
 [dev-dependencies]
 tempfile = "3"
+
+# cargo-dist builds with --profile=dist
+[profile.dist]
+inherits = "release"
+lto = "thin"
