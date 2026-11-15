@@ -1,0 +1,150 @@
+name: release
+# On a tag vX.Y.Z: refuse a tag that differs from the Cargo.toml version
+# or has no CHANGELOG.md section, build static musl archives with dist
+# on each architecture, attest every archive, and open a DRAFT release
+# with the archives, their checksums and the tag's changelog notes.
+# Publishing the draft stays manual.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DIST_VERSION: 0.30.3
+
+jobs:
+  guard:
+    name: tag, version and notes
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: tag equals the Cargo.toml version
+        run: |
+          crate=$(awk '/^\[package\]/{p=1; next} /^\[/{p=0} p && /^version[[:space:]]*=/{gsub(/^[^"]*"|".*$/, ""); print; exit}' Cargo.toml)
+          if [ -z "${crate}" ]; then echo "no [package] version in Cargo.toml"; exit 1; fi
+          if [ "${GITHUB_REF_NAME}" != "v${crate}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not equal v${crate} from Cargo.toml"; exit 1
+          fi
+      # The notes are the tag's section of CHANGELOG.md, "## X.Y.Z" or
+      # "## [X.Y.Z] - date"; a tag without one is not released.
+      - name: release notes from CHANGELOG.md
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          awk -v v="$v" '/^## /{ if (on) exit; h = $0; sub(/^## \[?/, "", h); sub(/[] ].*$/, "", h); on = (h == v); next } on' CHANGELOG.md > release-notes.md
+          if ! grep -q '[^[:space:]]' release-notes.md; then echo "CHANGELOG.md has no section for ${v}"; exit 1; fi
+          cat release-notes.md
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: release-notes
+          path: release-notes.md
+      - name: install dist
+        shell: bash
+        run: curl --proto '=https' --tlsv1.2 -LsSf "https://github.com/axodotdev/cargo-dist/releases/download/v${DIST_VERSION}/cargo-dist-installer.sh" | sh
+      - name: dist plan accepts the tag
+        run: dist plan --tag="${GITHUB_REF_NAME}" --output-format=json > /dev/null
+
+  build-local:
+    name: build ${{ matrix.target }}
+    needs: guard
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: install dist
+        shell: bash
+        run: curl --proto '=https' --tlsv1.2 -LsSf "https://github.com/axodotdev/cargo-dist/releases/download/v${DIST_VERSION}/cargo-dist-installer.sh" | sh
+      - name: build archive
+        shell: bash
+        run: |
+          dist build --tag="${GITHUB_REF_NAME}" --artifacts=local --target="${{ matrix.target }}" --print=linkage --output-format=json > dist-manifest.json
+          echo "paths<<EOF" >> "$GITHUB_ENV"
+          dist print-upload-files-from-manifest --manifest dist-manifest.json >> "$GITHUB_ENV"
+          echo "EOF" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: artifacts-build-local-${{ matrix.target }}
+          path: ${{ env.paths }}
+
+  build-global:
+    name: unified checksums
+    needs: build-local
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: install dist
+        shell: bash
+        run: curl --proto '=https' --tlsv1.2 -LsSf "https://github.com/axodotdev/cargo-dist/releases/download/v${DIST_VERSION}/cargo-dist-installer.sh" | sh
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: artifacts-build-local-*
+          path: target/distrib/
+          merge-multiple: true
+      - name: build global artifacts
+        shell: bash
+        run: |
+          dist build --tag="${GITHUB_REF_NAME}" --artifacts=global --output-format=json > dist-manifest.json
+          echo "paths<<EOF" >> "$GITHUB_ENV"
+          jq --raw-output '.upload_files[]' dist-manifest.json >> "$GITHUB_ENV"
+          echo "EOF" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: artifacts-build-global
+          path: ${{ env.paths }}
+
+  publish:
+    name: attest and draft release
+    needs: [guard, build-local, build-global]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: artifacts-build-*
+          path: artifacts
+          merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: release-notes
+          path: notes
+      - name: list assets
+        run: |
+          ls -l artifacts
+          for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            test -f "artifacts/eb-pipeline-${t}.tar.xz" || { echo "missing archive for ${t}"; exit 1; }
+          done
+          test -f artifacts/sha256.sum || { echo "missing sha256.sum"; exit 1; }
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: artifacts/*.tar.xz
+      # A draft: release assets cannot change once a release is published,
+      # so every asset is attached before a person publishes it.
+      - name: draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" artifacts/* --repo "${GITHUB_REPOSITORY}" --target "${GITHUB_SHA}" --title "${GITHUB_REF_NAME}" --notes-file notes/release-notes.md --draft
