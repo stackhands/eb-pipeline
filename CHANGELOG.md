@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented here.
 
+## 0.2.0 - Unreleased
+
+Every new key is optional and its default reproduces 0.1.0 behaviour;
+`schema_version` stays 1.
+
+### Added
+
+- `[targets.select]`: per-target line selection by a per-line build list option
+  (`option`, `value`, `separator`, `when_absent`, `strip`). `plan` and `run`
+  apply it; deselected lines are listed under `deselected` in the plan and the
+  result, apart from failures.
+- `[targets.route]` contract: `args` templates with a `--` before the phase
+  command, `env`, `runtime_root`, `shares_ro`, `shares_rw`,
+  `receipt_digest_env` (refused with 78 when unset or empty) and `phases`
+  (`build`, `sources`; default `build`).
+- `[targets.cpu_hardware]`, exported with `[targets.hardware]` as
+  `EB_PIPELINE_HW_*` per command role, and `[targets.fetch_profile]`, passed to
+  source prefetch as `EB_PIPELINE_FETCH_PROFILE` (JSON).
+- `[targets.package_env.<Name>]`, merged over `[modules.package_env.<Name>]` per
+  key for one target.
+- `filesystems.export_install_vars` (`single` or `split`) and
+  `filesystems.read_only_installdir_value`.
+- `[caches] init_module` as a default that `[[caches.targets]]` entries override.
+- `shards.installed_modules_dirs_from_env`: module trees read from environment
+  variables when `run` starts; `plan` shows `${NAME}`.
+- `examples/eessi-site.toml` exercises selection, the route contract, a CPU
+  hardware class, a fetch profile and per-target package environment.
+
 ## 0.1.0 - Unreleased
 
 ### Added

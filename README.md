@@ -127,6 +127,75 @@ the result.
   build, with `EB_PIPELINE_CACHE_*` in the environment.
 - `logs`: `eb-keep-logs rotate` on `filesystems.log_root`.
 
+### Per-target line selection
+
+A build list can mark lines for a subset of targets with a per-line option.
+`[targets.select]` names the option and this target's token:
+
+```toml
+[targets.select]
+option = "--only-targets"   # long option that carries the selection
+value = "target-a"          # this target's token
+separator = ","             # between tokens in the option's value
+when_absent = "all"         # "all" plans lines without the option, "none" skips them
+strip = false               # true removes the option before eb is called
+```
+
+The option is read as `--name=a,b` or `--name a,b`. A line is planned for the
+target when the option is absent and `when_absent = "all"`, or when its value
+list contains `value`. `plan` and `run` both apply it, to the whole list or to
+each shard unit; a unit left without lines is dropped. The shard planner reads
+the list file as given, so it also counts lines that the selector later drops.
+`plan` lists the dropped lines under `deselected`, and the result file does the
+same, apart from `lines` and `counts`, so a deselected line never reads as a
+failure. Without `[targets.select]` every line is planned.
+
+### Route contract
+
+`[targets.route]` wraps the commands of CPU-role units (the CPU prerequisites
+that `stack shard` lifts out) in a command. Beyond `kind` and `command`:
+
+| key | meaning |
+|---|---|
+| `args` | argument templates after `command`; a `--` follows them and the phase command comes after it |
+| `env` | environment of the routed command |
+| `runtime_root` | exported as `EB_PIPELINE_ROUTE_RUNTIME_ROOT` |
+| `shares_ro`, `shares_rw` | shared paths, exported joined with `:` as `EB_PIPELINE_ROUTE_SHARES_RO` and `_RW` |
+| `receipt_digest_env` | name of a variable that holds a digest; `run` refuses with 78 when it is unset or empty and exports the value as `EB_PIPELINE_ROUTE_RECEIPT_DIGEST`; `plan` shows `${NAME}` |
+| `phases` | `build` (default) and `sources`: the phases whose CPU-role commands are routed |
+
+Placeholders in `args` and `env`: `{phase_dir}` (`<log_dir>/<phase>`, created
+before the command starts), `{log_dir}`, `{work_dir}` (`filesystems.build_path`),
+`{target}`, `{phase}`, `{runtime_root}`, `{shares_ro}`, `{shares_rw}`. Share
+entries accept the first three. A route with only `kind` and `command` plans
+exactly the 0.1.0 argv.
+
+### Hardware classes, fetch profile, package environment
+
+- `[targets.cpu_hardware]` has the shape of `[targets.hardware]` and names the
+  hardware class of CPU-role units. When it is set, every command exports its
+  class as `EB_PIPELINE_HW_VENDOR_ID`, `EB_PIPELINE_HW_CPU_FAMILY` and
+  `EB_PIPELINE_HW_MODEL`: `cpu_hardware` for CPU-role commands, `hardware` for
+  the rest. Without it nothing is exported.
+- `[targets.fetch_profile]` is a free-form table passed to source prefetch
+  commands as `EB_PIPELINE_FETCH_PROFILE`, serialised as JSON with sorted keys.
+- `[targets.package_env.<Name>]` adds to `[modules.package_env.<Name>]` for that
+  target; per key the target value wins.
+
+### Install paths, cache module, installed module dirs
+
+- `filesystems.export_install_vars = "split"` exports
+  `EASYBUILD_INSTALLPATH_SOFTWARE` and `EASYBUILD_INSTALLPATH_MODULES` from the
+  target's `software_root` and `modules_root` instead of `EASYBUILD_INSTALLPATH`.
+  `read_only_installdir_value` sets the value of `EASYBUILD_READ_ONLY_INSTALLDIR`
+  (default `"1"`).
+- `[caches] init_module` is the default `EB_PIPELINE_CACHE_INIT_MODULE`; an entry
+  in `[[caches.targets]]` overrides it.
+- `shards.installed_modules_dirs_from_env` names variables whose colon-separated
+  values are appended to `installed_modules_dirs` when `run` starts. An unset
+  variable refuses with 78, an empty one adds nothing, and `plan` shows
+  `${NAME}`.
+
 Every child writes to `<log_root>/<YYYYMMDD_HHMMSS>/<target>/`. The timestamp
 is taken once per run and `--log-stamp` overrides it. `--run-id` is a separate
 label recorded in the result. The result JSON records the log path of each line.
@@ -182,7 +251,9 @@ further child, writes the result file, and exits 143 or 130.
 }
 ```
 
-Line statuses: `success`, `failed`, `refused`, `pending`, `skipped`.
+Line statuses: `success`, `failed`, `refused`, `pending`, `skipped`. Lines that
+a target's `[targets.select]` left out appear under `deselected` (`easyconfig`
+and `unit`) and in no status count.
 
 ## A thin CI caller
 
