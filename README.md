@@ -98,8 +98,9 @@ result JSON goes to `--result`.
 `enabled = false`, is skipped and recorded as "not configured" in the plan and
 the result.
 
-- `shard`: `eb-stack stack shard`. Exit code `shards.planner_exit_unsharded`
-  (default 3) means the plan was built unsharded; the list builds as one unit.
+- `shard`: `eb-stack stack shard`. The exit code `shards.planner_exit_unsharded`
+  (default 3) means the planner built the plan unsharded. The list then builds
+  as one unit.
 - `admission`: `eb-stack stack admit` before each build unit. Exit 78 retries
   with the backoff in `[admission]` (`attempts`, `wait_seconds`, doubling up to
   `max_wait_seconds`). A refusal after the last attempt ends the run with exit
@@ -183,10 +184,10 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 ```
 
-`run` is tested against stub tool binaries written into a temporary directory:
-success, a failed line, admission refused after N attempts, admission admitted
-on the second attempt, staged-rebuild refusal translation, and SIGTERM
-forwarding.
+`run` is tested against stub tool binaries written into a temporary directory.
+The scenarios: success, a failed line, admission refused after N attempts,
+admission admitted on the second attempt, staged-rebuild refusal translation,
+and SIGTERM forwarding.
 
 ## Licence
 
