@@ -1,0 +1,42 @@
+# A small Slurm cluster: one CPU node type, no EESSI, no inode quota, no licences.
+# Every value is a placeholder.
+schema_version = 1
+kind = "site"
+
+[site]
+name = "small-lab"
+build_account = "easybuild"
+default_group = "easybuild"
+stack_generation = "2026a"
+
+[scheduler]
+kind = "slurm"
+launch = "srun"
+job_name_template = "{project}-{build}-{phase}"
+
+[phase_defaults]
+plan = "-p batch -N 1 -c 1 -t 15:00"
+short = "-p batch -N 1 -c 1 -t 15:00"
+build = "-p batch -N 1 -c 16 -t 1-00:00:00"
+
+[[targets]]
+name = "cpu"
+build_lists = ["lab-2026a.list"]
+default = true
+
+[filesystems]
+scratch = "/scratch/easybuild"
+tmp = "/scratch/easybuild/tmp"
+build_path = "/scratch/easybuild/build"
+source_paths = ["/opt/eb/sources"]
+install_root = "/opt/eb/2026a"
+log_root = "/opt/eb/2026a/logs"
+
+[modules]
+init = ["EasyBuild"]
+
+[logs]
+keep_failed = true
+
+[logs.rotate]
+compress_after_days = 60

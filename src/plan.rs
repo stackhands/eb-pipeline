@@ -426,11 +426,14 @@ pub fn build_plan(p: &Planner, lines: &[ListLine]) -> Result<Plan, Fail> {
     // preflight: tool probes
     let probes: Vec<Cmd> = crate::tools::needed(site)
         .into_iter()
-        .map(|t| Cmd {
-            name: format!("probe:{}", t.key()),
-            argv: vec![t.bin(site), "--version".into()],
-            env: BTreeMap::new(),
-            note: t.min_version(site).map(|m| format!("min_version {m}")),
+        .filter_map(|t| {
+            let min = t.min_version(site)?;
+            Some(Cmd {
+                name: format!("probe:{}", t.key()),
+                argv: vec![t.bin(site), "--version".into()],
+                env: BTreeMap::new(),
+                note: Some(format!("min_version {min}")),
+            })
         })
         .collect();
     phases.push(PlanPhase {

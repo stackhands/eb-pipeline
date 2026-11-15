@@ -1,0 +1,186 @@
+# A site that extends EESSI: several CPU and GPU node types, inode admission,
+# per-target module caches. Every value is a placeholder.
+schema_version = 1
+kind = "site"
+
+[site]
+name = "cluster-a"
+build_account = "<build-user>"
+default_group = "<build-user>"
+stack_generation = "<generation>"
+
+[site.tools.eb_stack]
+bin = "/opt/eb-tools/bin/eb-stack"
+min_version = "0.7.4"
+
+[site.tools.eb_keep_logs]
+bin = "/opt/eb-tools/bin/eb-keep-logs"
+
+[site.tools.eb_staged_rebuild]
+bin = "/opt/eb-tools/bin/eb-staged-rebuild"
+
+[scheduler]
+kind = "slurm"
+launch = "srun"
+common_args = ["--mpi=none"]
+job_name_template = "{project}-{build}-{phase}"
+
+[scheduler.env]
+SLURM_OVERLAP = "1"
+
+[phase_defaults]
+plan = "-p <small-partition> -N 1 --ntasks-per-node=1 -c 1 --mem=4G -t 30:00"
+short = "-p <small-partition> -N 1 --ntasks-per-node=1 -c 1 --mem=4G -t 5:00"
+cache = "-p <small-partition> -N 1 --ntasks-per-node=1 -c 1 --mem=4G -t 5:00"
+
+[[targets]]
+name = "cpu-a"
+build_lists = ["cpu-a.list"]
+eb_optarch = "GCC:-march=<march>"
+max_parallel = 128
+cpu_target = "<vendor>/<uarch>"
+site_prefix = "/opt/eb/site/cpu-a"
+default = true
+
+[targets.phases]
+build = "-p <cpu-partition> -N 1 --ntasks-per-node=1 -c 128 -t 2-00:00:00"
+
+[targets.hardware]
+vendor_id = "<vendor-id>"
+cpu_family = 25
+model = 1
+
+[targets.build_types.staging]
+eb_optarch = "GCC:-march=<other-march>"
+
+[[targets]]
+name = "cpu-b"
+build_lists = ["cpu-b.list"]
+eb_optarch = "GCC:-march=<march>"
+max_parallel = 96
+cpu_target = "<vendor>/<uarch>"
+site_prefix = "/opt/eb/site/cpu-b"
+default = true
+
+[targets.phases]
+build = "-p <cpu-partition-b> -N 1 --ntasks-per-node=1 -c 96 -t 2-00:00:00"
+
+[[targets]]
+name = "gpu-a"
+build_lists = ["gpu-a.list"]
+eb_optarch = "GCC:-march=<march>"
+cuda_compute_capabilities = "9.0"
+cpu_target = "<vendor>/<uarch>"
+accel_target = "<accel>/<model>"
+site_prefix = "/opt/eb/site/gpu-a"
+
+[targets.phases]
+build = "-p <gpu-partition> -N 1 --ntasks-per-node=1 -c 72 --gpus-per-node=4 -t 2-00:00:00"
+cpu = "-p <small-partition> -N 1 --ntasks-per-node=1 -c 64 --mem=128G -t 2-00:00:00"
+
+[targets.route]
+kind = "command"
+command = "/opt/eb-tools/bin/cpu-route"
+
+[[targets]]
+name = "gpu-b"
+build_lists = ["gpu-b.list"]
+eb_optarch = "GCC:-march=<march>"
+cuda_compute_capabilities = "8.0"
+cpu_target = "<vendor>/<uarch>"
+accel_target = "<accel>/<model>"
+site_prefix = "/opt/eb/site/gpu-b"
+
+[targets.phases]
+build = "-p <gpu-partition-b> -N 1 --ntasks-per-node=1 -c 32 --gpus-per-node=4 -t 2-00:00:00"
+
+[filesystems]
+scratch = "/scratch/<build-user>"
+tmp = "/scratch/<build-user>/tmp"
+build_path = "/scratch/<build-user>/build"
+source_paths = ["/opt/sw/sources", "/srv/shared/sources"]
+install_root = "/opt/eb/site"
+log_root = "/opt/sw/logs"
+shard_dir = "/scratch/<build-user>/shards"
+read_only_installdir = true
+
+[admission]
+enabled = true
+required = true
+quota_cmd = "/opt/eb-tools/bin/quota-json"
+live_jobs_cmd = "/opt/eb-tools/bin/live-jobs"
+lock = "/scratch/<build-user>/admission.lock"
+lock_kind = "posix"
+reservations = "/scratch/<build-user>/reservations"
+margin = 100000
+unknown_reserve = 150000
+quota_total = 4000000
+line_overhead = 1000
+attempts = 5
+wait_seconds = 60
+max_wait_seconds = 600
+
+[shards]
+count = 4
+planner_exit_unsharded = 3
+easyconfigs = ["/opt/eb-tools/easyconfigs"]
+installed_modules_dirs = ["/opt/eb/site/modules/all"]
+
+[sources]
+prefetch = true
+
+[modules]
+init = ["<eessi-module>/<release>", "EasyBuild", "<eessi-extend-module>"]
+unuse_path = true
+
+[modules.eessi]
+site_install = true
+bootstrap_modulepath = "/opt/eb/site/noarch/modules/all"
+
+[modules.package_env."<Name>"]
+OPTARCH = "<value>"
+
+[caches]
+enabled = true
+command = "/opt/eb-tools/bin/write-module-cache"
+bindings = "/opt/eb-tools/cache/bindings.json"
+
+[[caches.targets]]
+target = "cpu-a"
+config = "/opt/eb-tools/cache/cpu-a.json"
+init_module = "<site-module>"
+
+[[caches.targets]]
+target = "gpu-a"
+config = "/opt/eb-tools/cache/gpu-a.json"
+init_module = "<site-module>"
+
+[logs]
+keep_failed = true
+
+[logs.rotate]
+compress_after_days = 30
+delete_after_days = 365
+
+[rebuild]
+staged = true
+state_root = "/opt/sw/.eb-staged-rebuild"
+backend = "auto"
+grace_hours = 24
+prepare = "/opt/eb-tools/bin/apply-group"
+
+[licences]
+enforce = true
+
+[licences.groups]
+"<Name1>" = "<group1>"
+"<Name2>" = "<group2>"
+
+[licences.below_version]
+"<Name2>" = "2.0"
+
+[licences.required]
+software = ["<Name1>", "<Name2>"]
+
+[licences.env."<Name1>"]
+LICENSE_FILE = "/opt/licences/<Name1>/license.dat"
