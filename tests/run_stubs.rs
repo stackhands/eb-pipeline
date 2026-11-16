@@ -713,6 +713,11 @@ fn lock_timeout_zero_refuses_at_once_at_the_tool_default_state_root() {
 fn a_held_lock_other_than_the_state_roots_is_named_alone() {
     let env = setup("[rebuild]\nstaged = true\n");
     let r = env.dir.path().display().to_string();
+    let text = std::fs::read_to_string(&env.site).unwrap().replace(
+        "staged = true",
+        &format!("staged = true\nstate_root = \"{r}/state\""),
+    );
+    std::fs::write(&env.site, text).unwrap();
     install_module(&env, "Foo/1.0-foss-2025a.lua");
     std::fs::create_dir(env.dir.path().join("ledger")).unwrap();
     let ledger = format!("{r}/ledger/.lock");
@@ -723,12 +728,60 @@ fn a_held_lock_other_than_the_state_roots_is_named_alone() {
         &[("STUB_STAGED_LOCKS", "1"), ("STUB_STAGED_LOCK", &ledger)],
     );
     assert_eq!(o.code, 78, "{}", o.stderr);
-    assert!(calls(&env, "staged.calls")[0].contains(" --lock-timeout 600 "));
+    assert!(calls(&env, "staged.calls")[0]
+        .contains(&format!(" --state-root {r}/state --lock-timeout 600 ")));
     assert_eq!(
         o.result.unwrap()["lines"][0]["note"],
         format!(
             "eb-staged-rebuild exit 2: another eb-staged-rebuild holds the lock at {ledger}; translated to refused (78)"
         )
+    );
+}
+
+/// Without `rebuild.state_root`, a module that the line loads can set
+/// EB_STAGED_REBUILD_STATE_ROOT in the line's shell, where eb-pipeline does
+/// not see it.
+#[test]
+fn a_held_lock_at_a_state_root_a_module_sets_names_lock_timeout() {
+    let env = setup("[rebuild]\nstaged = true\nlock_timeout = 0\n");
+    let r = env.dir.path().display().to_string();
+    install_module(&env, "Foo/1.0-foss-2025a.lua");
+    let root = format!("{r}/module-state");
+    let init = format!(
+        "module() {{\n    echo \"$*\" >> \"$STUB_DIR/module.calls\"\n    \
+         [ \"$*\" != \"load StateRoot/1.0\" ] || export EB_STAGED_REBUILD_STATE_ROOT=\"{root}\"\n}}\n"
+    );
+    with_modules(&env, &init, &["StateRoot/1.0"]);
+    std::fs::create_dir(&root).unwrap();
+    let lock = format!("{root}/.lock");
+    let _held = hold_lock(Path::new(&lock), false);
+    let o = go(
+        &env,
+        "Foo-1.0-foss-2025a.eb --rebuild\n",
+        &[("STUB_STAGED_LOCKS", "1")],
+    );
+    assert_eq!(o.code, 78, "{}", o.stderr);
+    assert!(calls(&env, "module.calls").contains(&"load StateRoot/1.0".to_string()));
+    let c = calls(&env, "staged.calls");
+    assert!(
+        !c[0].contains("--state-root") && c[0].contains(" --lock-timeout 0 "),
+        "{c:?}"
+    );
+    let why = format!(
+        "another eb-staged-rebuild holds the lock at {lock}, and rebuild.lock_timeout (0 s) ran out if that is the state root's lock: rebuild.state_root is unset, and eb-pipeline cannot see a state root that a module sets in EB_STAGED_REBUILD_STATE_ROOT"
+    );
+    let l = &o.result.unwrap()["lines"][0];
+    assert_eq!(l["status"], "refused");
+    assert_eq!(
+        l["note"],
+        format!("eb-staged-rebuild exit 2: {why}; translated to refused (78)")
+    );
+    assert!(
+        o.stderr.contains(&format!(
+            "cpu: Foo-1.0-foss-2025a: refused (exit 2): {why}\n"
+        )),
+        "{}",
+        o.stderr
     );
 }
 

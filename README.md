@@ -202,9 +202,14 @@ allocated task, so give each role a task count; the templates use
   staged line runs again under a new `--run-id`. eb-staged-rebuild holds
   `<state root>/.lock` for the whole of a staged build and publish, and each
   staged line passes `--lock-timeout` from `[rebuild] lock_timeout` (default
-  600 seconds; 0 refuses at once). A line whose wait runs out is `refused`, and
-  its note and the ERROR line name the lock that another eb-staged-rebuild
-  holds. A failed line triggers
+  600 seconds; 0 refuses at once). A line whose wait runs out is `refused`; its
+  note and the ERROR line name the lock that another eb-staged-rebuild holds
+  and, when that is the state root's, say that `lock_timeout` ran out. Without
+  `[rebuild] state_root`, a module that the line loads can set the state root
+  in `EB_STAGED_REBUILD_STATE_ROOT`, where eb-pipeline cannot see it, so for a
+  lock away from the state root eb-pipeline expects, the note says that
+  `lock_timeout` ran out if that is the state root's lock, and why eb-pipeline
+  cannot tell. A failed line triggers
   `eb-keep-logs failed` when `[logs].keep_failed` is set.
   That step runs with `EASYBUILD_OUTPUT_STYLE=basic`, whatever `[scheduler.env]`
   sets, so that `eb --last-log` prints the log path on one line.

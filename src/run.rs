@@ -233,6 +233,9 @@ fn held_lock(path: &Path) -> Option<String> {
 
 /// Why a staged line was refused, when eb-staged-rebuild found a lock held:
 /// the lock, and whether `rebuild.lock_timeout` ran out waiting for it.
+/// Without `rebuild.state_root`, a module the line loads can set the state
+/// root in EB_STAGED_REBUILD_STATE_ROOT, out of eb-pipeline's sight, so a
+/// lock away from the expected state root may still be the state root's.
 fn lock_refusal(
     p: &Planner,
     cmd: &Cmd,
@@ -248,14 +251,19 @@ fn lock_refusal(
         .cloned()
         .or_else(|| std::env::var(ROOT).ok());
     let ours = p.state_root_lock(env_root.as_deref());
-    if !Path::new(&lock).components().eq(ours.components()) {
+    let n = p.scope.site.rebuild_on().map_or(0, |r| r.lock_timeout);
+    if Path::new(&lock).components().eq(ours.components()) {
+        return Some(format!(
+            "another eb-staged-rebuild holds the lock at {lock}, and rebuild.lock_timeout ({n} s) ran out"
+        ));
+    }
+    if p.scope.state_root().is_some() {
         return Some(format!(
             "another eb-staged-rebuild holds the lock at {lock}"
         ));
     }
-    let n = p.scope.site.rebuild_on().map_or(0, |r| r.lock_timeout);
     Some(format!(
-        "another eb-staged-rebuild holds the lock at {lock}, and rebuild.lock_timeout ({n} s) ran out"
+        "another eb-staged-rebuild holds the lock at {lock}, and rebuild.lock_timeout ({n} s) ran out if that is the state root's lock: rebuild.state_root is unset, and eb-pipeline cannot see a state root that a module sets in {ROOT}"
     ))
 }
 
