@@ -42,6 +42,19 @@ fn interrupted() -> Option<i32> {
     }
 }
 
+/// The wait before the next admission attempt. It starts at `wait_seconds`
+/// and is never longer than `max_wait_seconds`, including when that maximum
+/// is the smaller of the two.
+fn capped_wait(wait_seconds: u64, max_wait_seconds: u64) -> u64 {
+    wait_seconds.min(max_wait_seconds)
+}
+
+/// The wait after a refused attempt: double the previous one, still capped
+/// at `max_wait_seconds`.
+fn doubled_wait(wait: u64, max_wait_seconds: u64) -> u64 {
+    wait.saturating_mul(2).min(max_wait_seconds)
+}
+
 /// Sleep in short slices; returns true when a signal arrived.
 fn sleep_interruptible(secs: u64) -> bool {
     let mut left = Duration::from_secs(secs);
@@ -604,7 +617,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                 }
             };
             let mut attempt = 0u32;
-            let mut wait = a.wait_seconds;
+            let mut wait = capped_wait(a.wait_seconds, a.max_wait_seconds);
             let outcome = loop {
                 attempt += 1;
                 let ex = match exec(
@@ -650,7 +663,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                                 return finish(st, Some(c));
                             }
                         }
-                        wait = (wait.saturating_mul(2)).min(a.max_wait_seconds.max(a.wait_seconds));
+                        wait = doubled_wait(wait, a.max_wait_seconds);
                     }
                     c => {
                         let code = if c == 2 { exit::USAGE } else { exit::FAILED };
@@ -932,4 +945,22 @@ fn finish(mut st: State, forced: Option<i32>) -> RunResult {
         st.res.exit_code = exit::OK;
     }
     st.res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{capped_wait, doubled_wait};
+
+    #[test]
+    fn admission_wait_never_exceeds_the_configured_maximum() {
+        assert_eq!(capped_wait(60, 600), 60);
+        assert_eq!(doubled_wait(60, 600), 120);
+        assert_eq!(doubled_wait(480, 600), 600);
+        assert_eq!(doubled_wait(600, 600), 600);
+        // A maximum below the initial wait is still the maximum.
+        assert_eq!(capped_wait(120, 50), 50);
+        assert_eq!(doubled_wait(50, 50), 50);
+        assert_eq!(doubled_wait(120, 50), 50);
+        assert_eq!(capped_wait(5, 0), 0);
+    }
 }
