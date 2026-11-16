@@ -38,7 +38,7 @@ name = "cpu-a"
 build_lists = ["cpu-a.list"]
 eb_optarch = "GCC:-march=<march>"
 max_parallel = 128
-cpu_target = "<vendor>/<uarch>"
+cpu_target = "x86_64/<vendor>/<uarch>"
 site_prefix = "/opt/eb/cpu-a"
 # EESSI-extend installs into <site_prefix>/versions/<release>/software/linux/<cpu_target>.
 software_root = "/opt/eb/cpu-a/versions/<release>/software/linux/<cpu_target>/software"
@@ -61,7 +61,7 @@ name = "cpu-b"
 build_lists = ["cpu-b.list"]
 eb_optarch = "GCC:-march=<march>"
 max_parallel = 96
-cpu_target = "<vendor>/<uarch>"
+cpu_target = "x86_64/<vendor>/<uarch>"
 site_prefix = "/opt/eb/cpu-b"
 software_root = "/opt/eb/cpu-b/versions/<release>/software/linux/<cpu_target>/software"
 modules_root = "/opt/eb/cpu-b/versions/<release>/software/linux/<cpu_target>/modules"
@@ -74,8 +74,8 @@ name = "gpu-a"
 build_lists = ["gpu-a.list"]
 eb_optarch = "GCC:-march=<march>"
 cuda_compute_capabilities = "9.0"
-cpu_target = "<vendor>/<uarch>"
-accel_target = "<accel>/<model>"
+cpu_target = "x86_64/<vendor>/<uarch>"
+accel_target = "accel/nvidia/cc90"
 site_prefix = "/opt/eb/gpu-a"
 # With EESSI_ACCELERATOR_INSTALL set, EESSI-extend appends /<accel_target> for
 # an NVIDIA target, and the roots follow it.
@@ -131,8 +131,8 @@ name = "gpu-b"
 build_lists = ["gpu-b.list"]
 eb_optarch = "GCC:-march=<march>"
 cuda_compute_capabilities = "8.0"
-cpu_target = "<vendor>/<uarch>"
-accel_target = "<accel>/<model>"
+cpu_target = "x86_64/<vendor>/<uarch>"
+accel_target = "accel/nvidia/cc80"
 site_prefix = "/opt/eb/gpu-b"
 software_root = "/opt/eb/gpu-b/versions/<release>/software/linux/<cpu_target>/software"
 modules_root = "/opt/eb/gpu-b/versions/<release>/software/linux/<cpu_target>/modules"
@@ -183,7 +183,6 @@ extra_args = ["--disable-robot"]
 
 [modules]
 init = ["<eessi-module>/<release>", "EasyBuild", "<eessi-extend-module>"]
-unuse_path = true
 
 [modules.eessi]
 site_install = true

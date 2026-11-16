@@ -250,9 +250,9 @@ doc_struct! {
         cuda_compute_capabilities: Option<String> => ("string", "none", false,
             "EASYBUILD_CUDA_COMPUTE_CAPABILITIES."),
         cpu_target: Option<String> => ("string", "none", false,
-            "CPU software subdirectory, exported through `modules.eessi.cpu_override_var`."),
+            "CPU software subdirectory in EESSI form (`x86_64/amd/zen4`, `aarch64/neoverse_v1`), exported through `modules.eessi.cpu_override_var`."),
         accel_target: Option<String> => ("string", "none", false,
-            "Accelerator subdirectory, exported through `modules.eessi.accel_override_var`; empty means none."),
+            "Accelerator subdirectory in EESSI form (`accel/nvidia/cc90`, `accel/amd/gfx90a`), exported through `modules.eessi.accel_override_var`; empty means none."),
         site_prefix: Option<String> => ("string", "none", false,
             "Install prefix of the target; EASYBUILD_INSTALLPATH and EESSI_SITE_SOFTWARE_PREFIX. Falls back to `filesystems.install_root`. With `modules.eessi.site_install`, EESSI-extend replaces EASYBUILD_INSTALLPATH when it loads; `explain` shows its path as `install_note`."),
         software_root: Option<String> => ("string", "<install prefix>/software", false,
@@ -415,7 +415,7 @@ doc_struct! {
         init: Vec<String> => ("array of string", "", true,
             "Modules loaded, in order, after `module purge` in every EasyBuild phase and around `stack shard`. May be empty."),
         #[serde(default)]
-        unuse_path: bool => ("boolean", "false", false, "Clears MODULEPATH before loading."),
+        unuse_path: bool => ("boolean", "false", false, "Clears MODULEPATH after `shell_init` and before loading `init`, so the first `init` module needs an absolute path."),
         #[serde(default = "d_shell")]
         shell: String => ("string", "bash", false, "Shell that runs the module wrapper."),
         shell_init: Option<String> => ("string", "none", false,

@@ -1364,6 +1364,92 @@ fn eessi_example_exercises_the_target_keys() {
     assert_eq!(build_names(&v).len(), 3);
 }
 
+#[test]
+fn eessi_targets_take_eessi_subdirectory_forms() {
+    let text = std::fs::read_to_string(example("eessi-site.toml")).unwrap();
+    let errors = |t: &str| site::validate(&site::parse(t).unwrap(), None);
+    for (from, to) in [
+        ("x86_64/<vendor>/<uarch>", "aarch64/neoverse_v1"),
+        ("x86_64/<vendor>/<uarch>", "riscv64/spacemit/x60"),
+        ("accel/nvidia/cc90", "accel/amd/gfx90a"),
+        ("accel/nvidia/cc90", ""),
+    ] {
+        let e = errors(&text.replacen(from, to, 1));
+        assert!(e.is_empty(), "{to}: {e:?}");
+    }
+    for (from, to, key) in [
+        ("x86_64/<vendor>/<uarch>", "<vendor>/<uarch>", "cpu_target"),
+        ("x86_64/<vendor>/<uarch>", "x86_64", "cpu_target"),
+        ("x86_64/<vendor>/<uarch>", "x86_64//zen4", "cpu_target"),
+        (
+            "x86_64/<vendor>/<uarch>",
+            "x86_64/amd/zen4/extra",
+            "cpu_target",
+        ),
+        ("accel/nvidia/cc90", "nvidia/cc90", "accel_target"),
+        ("accel/nvidia/cc90", "accel/nvidia/9.0", "accel_target"),
+        ("accel/nvidia/cc90", "accel/amd/gfx", "accel_target"),
+    ] {
+        let e = errors(&text.replacen(from, to, 1));
+        assert!(
+            e.iter()
+                .any(|m| m.contains(key) && m.contains(&format!("`{to}`"))),
+            "{to}: {e:?}"
+        );
+    }
+    let plain = text
+        .replacen("x86_64/<vendor>/<uarch>", "<vendor>/<uarch>", 1)
+        .replacen("accel/nvidia/cc90", "<accel>/<model>", 1)
+        .replace("[modules.eessi]\n", "[modules.eessi]\nenabled = false\n");
+    assert_eq!(errors(&plain), Vec::<String>::new());
+}
+
+#[test]
+fn check_warns_when_unuse_path_strands_the_first_init_module() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("site.toml");
+    for (init, warns) in [
+        ("[\"EasyBuild\"]", true),
+        ("[\"/opt/modules/EESSI/2026.06.lua\", \"EasyBuild\"]", false),
+    ] {
+        let site = MINIMAL.replace("init = []", &format!("init = {init}\nunuse_path = true"));
+        std::fs::write(&path, site).unwrap();
+        let o = bin().args(["check", "--site"]).arg(&path).output().unwrap();
+        let err = String::from_utf8(o.stderr).unwrap();
+        assert_eq!(o.status.code(), Some(0), "{err}");
+        assert_eq!(err.contains("modules.unuse_path"), warns, "{init}: {err}");
+    }
+    for f in ["small-cluster.toml", "eessi-site.toml"] {
+        let o = bin()
+            .args(["check", "--site"])
+            .arg(example(f))
+            .output()
+            .unwrap();
+        let err = String::from_utf8(o.stderr).unwrap();
+        assert!(!err.contains("modules.unuse_path"), "{f}: {err}");
+    }
+}
+
+#[test]
+fn template_roles_start_one_task() {
+    for f in ["small-cluster.toml", "eessi-site.toml"] {
+        let v: toml::Value = toml::from_str(&std::fs::read_to_string(example(f)).unwrap()).unwrap();
+        let mut tables = vec![&v["phase_defaults"]];
+        for t in v["targets"].as_array().unwrap() {
+            tables.extend(t.get("phases"));
+        }
+        for (role, args) in tables.iter().flat_map(|t| t.as_table().unwrap()) {
+            let args = args.as_str().unwrap();
+            assert!(args.contains("--ntasks-per-node=1"), "{f} {role}: {args}");
+        }
+    }
+    let v: toml::Value =
+        toml::from_str(&std::fs::read_to_string(example("small-cluster.toml")).unwrap()).unwrap();
+    let mut roles: Vec<&String> = v["phase_defaults"].as_table().unwrap().keys().collect();
+    roles.sort();
+    assert_eq!(roles, ["build", "cache", "cpu", "plan", "short"]);
+}
+
 fn shard_list_arg(v: &serde_json::Value) -> String {
     let a = argv_of(&phase(v, "shard")["commands"][0]);
     let i = a.iter().position(|x| x == "--build-list").unwrap();

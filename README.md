@@ -141,6 +141,15 @@ eb-pipeline explain --target cpu
 `enabled = false`, is skipped and recorded as "not configured" in the plan and
 the result.
 
+With `scheduler.kind = "slurm"`, every command starts as `launch`,
+`common_args`, `--job-name=<job_name_template>`, then the launch arguments of
+its role from `[targets.phases]` or `[phase_defaults]`: `plan` for `stack
+shard`, `short` for admission, prefetch and log handling, `build`, `cpu` for
+CPU-role units, and `cache`. A role with no arguments launches a bare
+`srun --job-name=…`. Inside an allocation srun then starts one task per
+allocated task, so give each role a task count; the templates use
+`-N 1 --ntasks-per-node=1` for the roles they run.
+
 - `shard`: `eb-stack stack shard`. The exit code `shards.planner_exit_unsharded`
   (default 3) means the planner built the plan unsharded. The list then builds
   as one unit. The planner runs inside the module wrapper, so what the

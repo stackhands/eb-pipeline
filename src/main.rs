@@ -174,6 +174,21 @@ fn load_valid(path: &Path, lists_dir: Option<&Path>) -> Result<schema::Site, Fai
 
 fn cmd_check(site_path: &Path, lists_dir: Option<&Path>, probe: bool) -> Result<i32, Fail> {
     let s = load_valid(site_path, lists_dir)?;
+    let m = &s.modules;
+    if let Some(first) = m
+        .init
+        .first()
+        .filter(|f| m.unuse_path && !f.starts_with('/'))
+    {
+        log(
+            "WARN",
+            "check",
+            &s.site.name,
+            &format!(
+                "modules.unuse_path clears MODULEPATH after shell_init, so `{first}` has no path to load from; load it by absolute path or drop unuse_path"
+            ),
+        );
+    }
     if let Some(a) = s.admission_on() {
         if a.required && (a.quota_cmd.is_none() || a.reservations.is_none()) {
             log(
