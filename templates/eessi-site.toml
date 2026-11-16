@@ -166,6 +166,9 @@ installed_modules_dirs_from_env = ["SITE_INSTALLED_MODULES"]
 
 [sources]
 prefetch = true
+# `--fetch` ignores installed modules, so with the robot every dependency's
+# sources are fetched, EESSI's included.
+extra_args = ["--disable-robot"]
 
 [modules]
 init = ["<eessi-module>/<release>", "EasyBuild", "<eessi-extend-module>"]
