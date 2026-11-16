@@ -36,6 +36,7 @@ case "$sub" in
   shard)
     echo "${EASYBUILD_FILTER_DEPS:-}" > "$D/shard.filterdeps"
     case "${STUB_SHARD:-ok}" in unsharded) exit 3;; fail) exit 1;; esac
+    [ -n "${STUB_SHARD_EXIT:-}" ] && exit "$STUB_SHARD_EXIT"
     out=""; bl=""
     while [ $# -gt 0 ]; do
       [ "$1" = --out-dir ] && out="$2"
@@ -677,6 +678,27 @@ fn unsharded_plan_builds_the_list_and_exits_zero() {
         .find(|p| p["name"] == "shard")
         .unwrap();
     assert_eq!(shard["status"], "unsharded");
+    assert_eq!(calls(&env, "eb.calls").len(), 2);
+}
+
+#[test]
+fn unsharded_note_names_the_configured_planner_code() {
+    let env =
+        setup("[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\nplanner_exit_unsharded = 5\n");
+    let o = go(&env, LIST, &[("STUB_SHARD_EXIT", "5")]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = o.result.unwrap();
+    let shard = r["phases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "shard")
+        .unwrap();
+    assert_eq!(shard["status"], "unsharded");
+    assert_eq!(shard["exit_code"], 5);
+    let note = shard["note"].as_str().unwrap();
+    assert!(note.contains("exit 5"), "{note}");
+    assert!(!note.contains("exit 3"), "{note}");
     assert_eq!(calls(&env, "eb.calls").len(), 2);
 }
 

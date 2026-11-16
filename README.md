@@ -329,21 +329,21 @@ the file of each target.
 | 0 | all requested work completed |
 | 1 | work attempted and failed (a build line or a phase); see the result file |
 | 2 | usage error, invalid site file, or a tool below its `min_version` |
-| 3 | the planner declined to shard; the plan was built unsharded (informational; `run` itself finishes with 0 or 1) |
 | 75 | a resource is temporarily unavailable or a step is pending; rerun |
-| 78 | refused by a precondition (admission, configuration); no build step started |
+| 78 | refused by a precondition, by admission or by eb-staged-rebuild; lines built before the refusal stay built, see the result file |
 | 130 | interrupted by SIGINT, after the running child ended |
 | 143 | interrupted by SIGTERM, after the running child ended |
 
 The process exit code is never a sum of failures; the result file holds the
-per-line counts. When several conditions apply the order is 1, 78, 75, 0.
+per-line counts. A signal (130, 143) or a usage error (2) ends the run with
+that code. Otherwise, when several conditions apply, the order is 1, 78, 75, 0.
 
 Sibling tool codes are mapped explicitly:
 
 | tool | code | driver reading |
 |---|---|---|
 | eb-stack `stack admit` | 0 / 78 / 1 / 2 | admitted / refused (retry) / failed / usage, exit 2 |
-| eb-stack `stack shard` | `shards.planner_exit_unsharded` | unsharded, continue |
+| eb-stack `stack shard` | `shards.planner_exit_unsharded` (default 3) | unsharded, continue |
 | eb-staged-rebuild `run` | 2 | refusal there; the line is recorded as `refused` with `translated_from = 2` and the run ends with 78 |
 | eb-staged-rebuild `run` | 75 | pending; the line is recorded as `pending`, exit 75 |
 | eb-staged-rebuild `run` | other non-zero | failed |

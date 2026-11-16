@@ -6,11 +6,10 @@ pub const OK: i32 = 0;
 pub const FAILED: i32 = 1;
 /// Usage error or invalid site file.
 pub const USAGE: i32 = 2;
-/// The planner declined to shard; the plan was built unsharded.
-pub const UNSHARDED: i32 = 3;
 /// A resource is temporarily unavailable; rerun.
 pub const TEMPFAIL: i32 = 75;
-/// Refused by a precondition; no build step started.
+/// Refused by a precondition, by admission or by eb-staged-rebuild. Lines
+/// built before the refusal stay built.
 pub const REFUSED: i32 = 78;
 /// Interrupted by SIGINT.
 pub const SIGINT: i32 = 130;
@@ -23,18 +22,20 @@ Exit codes:
    0  all requested work completed
    1  work attempted and failed (a build line or a phase); see the result file
    2  usage error, invalid site file, or a tool below its minimum version
-   3  the planner declined to shard; the plan was built unsharded (informational)
   75  a resource is temporarily unavailable or a step is pending; rerun
-  78  refused by a precondition (admission, configuration); no build step started
+  78  refused by a precondition, by admission or by eb-staged-rebuild; lines
+      built before the refusal stay built, see the result file
  130  interrupted by SIGINT, after the running child ended
  143  interrupted by SIGTERM, after the running child ended
 
 Sibling tool codes are mapped explicitly:
   eb-stack admit    0 admitted, 78 refused, 1 failed, 2 usage
-  eb-stack shard    the code in shards.planner_exit_unsharded (3) means unsharded
+  eb-stack shard    the code in shards.planner_exit_unsharded (default 3) means
+                    unsharded; the run continues
   eb-staged-rebuild 2 is a refusal there; the driver records it as refused
                     (exit 78), 75 as pending (exit 75), any other non-zero as failed
-Precedence when several apply: 1, then 78, then 75, then 0. Codes are never summed.";
+A signal (130, 143) or a usage error (2) ends the run with that code. Otherwise,
+when several apply: 1, then 78, then 75, then 0. Codes are never summed.";
 
 /// Error carrying the process exit code.
 #[derive(Debug)]
