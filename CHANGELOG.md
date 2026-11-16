@@ -11,6 +11,17 @@ All notable changes to this project are documented here.
   without a default, so with it as `shell_init` every module-wrapped step
   failed before its command started. A `module` call that fails still stops
   the step.
+- With `[modules.eessi]` enabled, `EESSI_SITE_SOFTWARE_PREFIX` is the target
+  install prefix: `site_prefix` when set, otherwise `filesystems.install_root`,
+  the same value as `EASYBUILD_INSTALLPATH`.
+- The schema text for `filesystems.log_root` names
+  `<log_root>/<log-stamp>/<target>/`.
+- Admission waits are capped at `max_wait_seconds` even when that is below
+  `wait_seconds`.
+- `plan.json` entries whose `file` is absolute or leaves the shard directory
+  are refused. `stack shard` writes bare names beside `plan.json`.
+- A signal records the build lines that had not started as `skipped`.
+- `templates/eessi-site.toml` marks only `cpu-a` as the default target.
 
 ## 0.3.0 - 2026-11-16
 

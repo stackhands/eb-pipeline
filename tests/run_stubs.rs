@@ -523,6 +523,11 @@ fn sigterm_is_forwarded_and_exit_is_143() {
             .unwrap();
     assert_eq!(r["exit_code"], 143);
     assert_eq!(r["interrupted_by"], "SIGTERM");
+    let lines = r["lines"].as_array().unwrap();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines[0]["easyconfig"], "Foo-1.0-foss-2025a.eb");
+    assert_eq!(lines[1]["status"], "skipped");
+    assert_eq!(lines[1]["easyconfig"], "Bar-2.0-foss-2025a.eb");
 }
 
 #[test]

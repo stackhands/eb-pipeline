@@ -790,6 +790,31 @@ fn quote(a: &str) -> String {
     }
 }
 
+/// A shard-plan `file` value: one name in `dir`, never an absolute path or
+/// a path that leaves the directory. `stack shard` writes `prelude.list`,
+/// `cpu-prerequisites.list` and `shard-NN.list` beside `plan.json`.
+fn shard_list_path(dir: &Path, file: &str) -> Result<PathBuf, Fail> {
+    let path = Path::new(file);
+    let one_name = !file.is_empty()
+        && !file.contains('\0')
+        && !file.contains('\\')
+        && path.components().count() == 1
+        && matches!(
+            path.components().next(),
+            Some(std::path::Component::Normal(_))
+        );
+    if !one_name {
+        return Err(Fail::new(
+            exit::FAILED,
+            format!(
+                "shard plan file `{file}` is not a file name in {}",
+                dir.display()
+            ),
+        ));
+    }
+    Ok(dir.join(path))
+}
+
 /// Read the units a `stack shard` run wrote into `dir`.
 pub fn read_units(dir: &Path) -> Result<Vec<Unit>, Fail> {
     let plan_path = dir.join("plan.json");
@@ -806,12 +831,9 @@ pub fn read_units(dir: &Path) -> Result<Vec<Unit>, Fail> {
         let Some(file) = entry["file"].as_str() else {
             return Ok(());
         };
-        let list = std::fs::read_to_string(dir.join(file)).map_err(|e| {
-            Fail::new(
-                exit::FAILED,
-                format!("cannot read {}: {e}", dir.join(file).display()),
-            )
-        })?;
+        let path = shard_list_path(dir, file)?;
+        let list = std::fs::read_to_string(&path)
+            .map_err(|e| Fail::new(exit::FAILED, format!("cannot read {}: {e}", path.display())))?;
         let lines = parse_list(&list)?;
         if lines.is_empty() {
             return Ok(());
@@ -840,4 +862,47 @@ pub fn read_units(dir: &Path) -> Result<Vec<Unit>, Fail> {
         }
     }
     Ok(units)
+}
+
+#[cfg(test)]
+mod read_tests {
+    use super::read_units;
+
+    #[test]
+    fn a_shard_plan_cannot_name_a_file_outside_its_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let shard = root.path().join("out");
+        std::fs::create_dir(&shard).unwrap();
+        std::fs::write(root.path().join("secret.list"), "Secret-1.0.eb\n").unwrap();
+        std::fs::write(shard.join("local.list"), "Foo-1.0.eb\n").unwrap();
+
+        std::fs::write(
+            shard.join("plan.json"),
+            r#"{"shards":[{"name":"s","file":"../secret.list"}]}"#,
+        )
+        .unwrap();
+        let err = read_units(&shard).unwrap_err();
+        assert!(err.msg.contains("not a file name"), "{}", err.msg);
+
+        let abs = root.path().join("secret.list");
+        std::fs::write(
+            shard.join("plan.json"),
+            format!(
+                r#"{{"shards":[{{"name":"s","file":"{}"}}]}}"#,
+                abs.display()
+            ),
+        )
+        .unwrap();
+        assert!(read_units(&shard).is_err());
+
+        std::fs::write(
+            shard.join("plan.json"),
+            r#"{"shards":[{"name":"s","file":"local.list","inode_footprint":3}]}"#,
+        )
+        .unwrap();
+        let units = read_units(&shard).unwrap();
+        assert_eq!(units.len(), 1);
+        assert_eq!(units[0].lines[0].easyconfig, "Foo-1.0.eb");
+        assert_eq!(units[0].footprint, Some(3));
+    }
 }

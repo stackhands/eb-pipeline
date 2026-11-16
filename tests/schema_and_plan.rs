@@ -873,6 +873,53 @@ fn installed_modules_dirs_from_env_plans_placeholders() {
 }
 
 #[test]
+fn eessi_site_prefix_follows_the_install_prefix() {
+    let site = MINIMAL.replace(
+        "[modules]\ninit = []",
+        "[modules]\ninit = []\n[modules.eessi]\nsite_install = true\n",
+    );
+    let v = plan_of(&site, "Foo-1.0.eb\n", "cpu");
+    let env = &phase(&v, "build")["env"];
+    assert_eq!(env["EASYBUILD_INSTALLPATH"], "/opt/eb");
+    assert_eq!(env["EESSI_SITE_SOFTWARE_PREFIX"], "/opt/eb");
+    assert_eq!(env["EESSI_SITE_INSTALL"], "1");
+
+    let site = site.replace(
+        "name = \"cpu\"",
+        "name = \"cpu\"\nsite_prefix = \"/srv/site\"",
+    );
+    let v = plan_of(&site, "Foo-1.0.eb\n", "cpu");
+    let env = &phase(&v, "build")["env"];
+    assert_eq!(env["EASYBUILD_INSTALLPATH"], "/srv/site");
+    assert_eq!(env["EESSI_SITE_SOFTWARE_PREFIX"], "/srv/site");
+
+    // Without the EESSI table the variable is not exported.
+    let v = plan_of(MINIMAL, "Foo-1.0.eb\n", "cpu");
+    assert!(phase(&v, "build")["env"]
+        .get("EESSI_SITE_SOFTWARE_PREFIX")
+        .is_none());
+}
+
+#[test]
+fn the_log_root_reference_names_the_stamp_and_the_target() {
+    let text = eb_pipeline::schema::reference();
+    assert!(text.contains("<log_root>/<log-stamp>/<target>/"), "{text}");
+}
+
+#[test]
+fn the_eessi_template_has_one_default_target() {
+    let text = std::fs::read_to_string(example("eessi-site.toml")).unwrap();
+    let site = site::parse(&text).unwrap();
+    let defaults: Vec<_> = site
+        .targets
+        .iter()
+        .filter(|t| t.default)
+        .map(|t| t.name.as_str())
+        .collect();
+    assert_eq!(defaults, ["cpu-a"]);
+}
+
+#[test]
 fn eessi_example_exercises_the_target_keys() {
     let list = "<Name>-1.0.eb\nB-1.0.eb --only-targets=gpu-b\nC-1.0.eb --only-targets=gpu-a,gpu-b --rebuild\n";
     let text = std::fs::read_to_string(example("eessi-site.toml")).unwrap();

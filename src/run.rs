@@ -42,6 +42,19 @@ fn interrupted() -> Option<i32> {
     }
 }
 
+/// The wait before the next admission attempt. It starts at `wait_seconds`
+/// and is never longer than `max_wait_seconds`, including when that maximum
+/// is the smaller of the two.
+fn capped_wait(wait_seconds: u64, max_wait_seconds: u64) -> u64 {
+    wait_seconds.min(max_wait_seconds)
+}
+
+/// The wait after a refused attempt: double the previous one, still capped
+/// at `max_wait_seconds`.
+fn doubled_wait(wait: u64, max_wait_seconds: u64) -> u64 {
+    wait.saturating_mul(2).min(max_wait_seconds)
+}
+
 /// Sleep in short slices; returns true when a signal arrived.
 fn sleep_interruptible(secs: u64) -> bool {
     let mut left = Duration::from_secs(secs);
@@ -578,7 +591,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
         .filter(|a| a.quota_cmd.is_some() && a.reservations.is_some());
     let keep_failed = site.logs_on().is_some_and(|l| l.keep_failed);
     let mut stopped = false;
-    for (u, ss) in units.iter().zip(&unit_stems) {
+    for (ui, (u, ss)) in units.iter().zip(&unit_stems).enumerate() {
         if stopped {
             for (l, s) in u.lines.iter().zip(ss) {
                 st.res.lines.push(LineResult {
@@ -604,7 +617,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                 }
             };
             let mut attempt = 0u32;
-            let mut wait = a.wait_seconds;
+            let mut wait = capped_wait(a.wait_seconds, a.max_wait_seconds);
             let outcome = loop {
                 attempt += 1;
                 let ex = match exec(
@@ -650,7 +663,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                                 return finish(st, Some(c));
                             }
                         }
-                        wait = (wait.saturating_mul(2)).min(a.max_wait_seconds.max(a.wait_seconds));
+                        wait = doubled_wait(wait, a.max_wait_seconds);
                     }
                     c => {
                         let code = if c == 2 { exit::USAGE } else { exit::FAILED };
@@ -704,11 +717,12 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
             }
         }
 
-        for (l, s) in u.lines.iter().zip(ss) {
+        for (li, (l, s)) in u.lines.iter().zip(ss).enumerate() {
             if fetch_failed.contains(s) {
                 continue;
             }
             if interrupted().is_some() {
+                note_skipped(&mut st, &units, &unit_stems, &fetch_failed, ui, li, p);
                 break;
             }
             make_route_dirs(p, u.role, "build");
@@ -793,6 +807,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
             }
             st.res.lines.push(lr);
             if interrupted().is_some() {
+                note_skipped(&mut st, &units, &unit_stems, &fetch_failed, ui, li + 1, p);
                 break;
             }
         }
@@ -885,6 +900,37 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
     finish(st, None)
 }
 
+/// Lines from `(from_unit, from_line)` onward that have not started, recorded
+/// as skipped. A fetch that already failed stays the fetch result.
+fn note_skipped(
+    st: &mut State,
+    units: &[Unit],
+    stems: &[Vec<String>],
+    fetch_failed: &[String],
+    from_unit: usize,
+    from_line: usize,
+    p: &Planner,
+) {
+    for (ui, (u, ss)) in units.iter().zip(stems).enumerate().skip(from_unit) {
+        let start = if ui == from_unit { from_line } else { 0 };
+        for (l, s) in u.lines.iter().zip(ss).skip(start) {
+            if fetch_failed.iter().any(|f| f == s) {
+                continue;
+            }
+            st.res.lines.push(LineResult {
+                easyconfig: l.easyconfig.clone(),
+                unit: u.name.clone(),
+                phase: "build".into(),
+                status: "skipped".into(),
+                exit_code: None,
+                translated_from: None,
+                log: p.log_stdout(s),
+                note: Some("interrupted before this line started".into()),
+            });
+        }
+    }
+}
+
 /// Create the directories a routed command expects; a failure surfaces when
 /// the command itself fails.
 fn make_route_dirs(p: &Planner, role: Role, phase: &str) {
@@ -932,4 +978,22 @@ fn finish(mut st: State, forced: Option<i32>) -> RunResult {
         st.res.exit_code = exit::OK;
     }
     st.res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{capped_wait, doubled_wait};
+
+    #[test]
+    fn admission_wait_never_exceeds_the_configured_maximum() {
+        assert_eq!(capped_wait(60, 600), 60);
+        assert_eq!(doubled_wait(60, 600), 120);
+        assert_eq!(doubled_wait(480, 600), 600);
+        assert_eq!(doubled_wait(600, 600), 600);
+        // A maximum below the initial wait is still the maximum.
+        assert_eq!(capped_wait(120, 50), 50);
+        assert_eq!(doubled_wait(50, 50), 50);
+        assert_eq!(doubled_wait(120, 50), 50);
+        assert_eq!(capped_wait(5, 0), 0);
+    }
 }
