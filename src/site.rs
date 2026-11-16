@@ -3,7 +3,7 @@
 use crate::exit::Fail;
 use crate::schema::*;
 use crate::util::parse_version;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 /// Parse a site file from text. Unknown keys and type errors are usage errors.
@@ -409,6 +409,25 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
         }
         if s.enabled && s.count >= 2 && s.easyconfigs.is_empty() {
             e.push("shards.easyconfigs: at least one tree is required when count >= 2".into());
+        }
+    }
+    // eb-staged-rebuild copies the one `target` of a ledger configuration into
+    // every record it writes.
+    if let Some(r) = site.rebuild_on() {
+        let mut first: BTreeMap<&str, &str> = BTreeMap::new();
+        for t in site.targets.iter().filter(|t| t.staged.unwrap_or(r.staged)) {
+            let Some(c) = t.ledger_config.as_deref().or(r.ledger_config.as_deref()) else {
+                continue;
+            };
+            match first.get(c) {
+                Some(other) => e.push(format!(
+                    "targets.{}: records staged rebuilds through {c} as targets.{other} does, under the one target that file names; set ledger_config in each target",
+                    t.name
+                )),
+                None => {
+                    first.insert(c, &t.name);
+                }
+            }
         }
     }
     if let Some(r) = &site.rebuild {

@@ -261,6 +261,8 @@ doc_struct! {
             "Live modules root of the target; passed to eb-staged-rebuild `--modules` and searched for installed modules at `<modules_root>/all/<Name>/<version>[.lua]`. Required for staged rebuilds with `modules.eessi.site_install`: the `modules` directory under the EESSI-extend install path."),
         staged: Option<bool> => ("boolean", "rebuild.staged", false,
             "Overrides `rebuild.staged` for this target."),
+        ledger_config: Option<String> => ("string", "rebuild.ledger_config", false,
+            "Overrides `rebuild.ledger_config` for this target. A ledger configuration names one `target`, so two targets that take staged rebuilds cannot share one."),
         #[serde(default)]
         default: bool => ("boolean", "false", false, "Marks the default target of the site; informational."),
         phases: Option<PhaseArgs> => ("table", "phase_defaults", false,
@@ -484,7 +486,8 @@ doc_struct! {
         backend: String => ("string", "auto", false, "`auto`, `bwrap`, `userns` or `installpath`."),
         grace_hours: Option<u32> => ("integer", "tool default", false, "`--grace-hours`."),
         prepare: Option<String> => ("string", "none", false, "Executable passed as `--prepare`."),
-        ledger_config: Option<String> => ("string", "none", false, "JSON file passed as `--ledger-config`."),
+        ledger_config: Option<String> => ("string", "none", false,
+            "JSON file passed as `--ledger-config`. A target can override this with `ledger_config`."),
     }
 }
 

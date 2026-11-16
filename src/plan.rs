@@ -557,9 +557,9 @@ impl<'a> Planner<'a> {
                 inner.push("--prepare".into());
                 inner.push(p.clone());
             }
-            if let Some(c) = &r.ledger_config {
+            if let Some(c) = self.scope.ledger_config() {
                 inner.push("--ledger-config".into());
-                inner.push(c.clone());
+                inner.push(c);
             }
             inner.push("--".into());
             note = Some("staged rebuild: exit 2 is a refusal, 75 is pending".to_string());

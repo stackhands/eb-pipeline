@@ -83,6 +83,16 @@ impl<'a> Scope<'a> {
             .unwrap_or_else(|| format!("{}/modules", self.install_prefix()))
     }
 
+    /// eb-staged-rebuild `--ledger-config` of the target.
+    pub fn ledger_config(&self) -> Option<String> {
+        self.target.ledger_config.clone().or_else(|| {
+            self.site
+                .rebuild
+                .as_ref()
+                .and_then(|r| r.ledger_config.clone())
+        })
+    }
+
     pub fn install_prefix(&self) -> String {
         self.target
             .site_prefix
@@ -521,6 +531,7 @@ pub fn explain(site: &Site, target: Option<&str>, build_type: Option<&str>) -> R
             "modules_root": scope.modules_root(),
             "install_note": scope.eessi_install_note(),
             "staged": t.staged,
+            "ledger_config": scope.ledger_config(),
             "route": t.route,
             "select": t.select,
             "hardware": t.hardware,
