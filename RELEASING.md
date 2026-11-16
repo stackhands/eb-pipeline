@@ -7,7 +7,8 @@ on the tag and:
    and `CHANGELOG.md` has a section for that version;
 2. builds static `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`
    `tar.xz` archives with dist, each on its own architecture;
-3. writes the dist checksum files (`<archive>.sha256` and `sha256.sum`);
+3. checks each `<archive>.sha256` from dist and writes `sha256.sum` over
+   both archives and `source.tar.gz`;
 4. attaches a build provenance attestation to every archive;
 5. opens a draft release with the archives, the checksums and the
    changelog section as notes.
