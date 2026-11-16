@@ -280,6 +280,12 @@ recorded in the result. The result JSON records the log path of each line.
 `plan --shard-plan DIR` reads the `plan.json` that `stack shard` wrote in `DIR`
 and expands the per-shard admission and build commands.
 
+`run` builds the units one at a time, each after its own admission: the CPU
+prerequisites, then the prelude, then each shard in turn. It has no option to
+build one shard alone. The prelude holds the modules that two or more shards
+need. A shard list holds lines of the input list only, so a line whose other
+dependencies are not installed needs `--robot` to build them.
+
 Limitation: the licence gate checks configuration only. It confirms that every
 required package has a group, a threshold or an exemption; it does not verify
 file permissions or group membership on the host.
@@ -327,6 +333,12 @@ further child, writes the result file, and exits 143 or 130.
   "phases": []
 }
 ```
+
+`run` writes the result file unless `--dry-run` is set or an input error stops
+it first, such as an invalid site file, an unknown target, an unreadable, empty
+or malformed list, or a tool below its `min_version`. Input errors exit 2, or 78
+when the licence gate alone fails, and leave an existing file at the `--result`
+path as it was, so read the exit code before the file.
 
 Line statuses: `success`, `failed`, `refused`, `pending`, `skipped`. Lines that
 a target's `[targets.select]` left out appear under `deselected` (`easyconfig`
