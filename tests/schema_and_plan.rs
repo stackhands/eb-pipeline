@@ -1365,6 +1365,46 @@ fn eessi_example_exercises_the_target_keys() {
 }
 
 #[test]
+fn eessi_targets_take_eessi_subdirectory_forms() {
+    let text = std::fs::read_to_string(example("eessi-site.toml")).unwrap();
+    let errors = |t: &str| site::validate(&site::parse(t).unwrap(), None);
+    for (from, to) in [
+        ("x86_64/<vendor>/<uarch>", "aarch64/neoverse_v1"),
+        ("x86_64/<vendor>/<uarch>", "riscv64/spacemit/x60"),
+        ("accel/nvidia/cc90", "accel/amd/gfx90a"),
+        ("accel/nvidia/cc90", ""),
+    ] {
+        let e = errors(&text.replacen(from, to, 1));
+        assert!(e.is_empty(), "{to}: {e:?}");
+    }
+    for (from, to, key) in [
+        ("x86_64/<vendor>/<uarch>", "<vendor>/<uarch>", "cpu_target"),
+        ("x86_64/<vendor>/<uarch>", "x86_64", "cpu_target"),
+        ("x86_64/<vendor>/<uarch>", "x86_64//zen4", "cpu_target"),
+        (
+            "x86_64/<vendor>/<uarch>",
+            "x86_64/amd/zen4/extra",
+            "cpu_target",
+        ),
+        ("accel/nvidia/cc90", "nvidia/cc90", "accel_target"),
+        ("accel/nvidia/cc90", "accel/nvidia/9.0", "accel_target"),
+        ("accel/nvidia/cc90", "accel/amd/gfx", "accel_target"),
+    ] {
+        let e = errors(&text.replacen(from, to, 1));
+        assert!(
+            e.iter()
+                .any(|m| m.contains(key) && m.contains(&format!("`{to}`"))),
+            "{to}: {e:?}"
+        );
+    }
+    let plain = text
+        .replacen("x86_64/<vendor>/<uarch>", "<vendor>/<uarch>", 1)
+        .replacen("accel/nvidia/cc90", "<accel>/<model>", 1)
+        .replace("[modules.eessi]\n", "[modules.eessi]\nenabled = false\n");
+    assert_eq!(errors(&plain), Vec::<String>::new());
+}
+
+#[test]
 fn template_roles_start_one_task() {
     for f in ["small-cluster.toml", "eessi-site.toml"] {
         let v: toml::Value = toml::from_str(&std::fs::read_to_string(example(f)).unwrap()).unwrap();

@@ -260,6 +260,41 @@ fn validate_select(t: &str, s: &Select, e: &mut Vec<String>) {
     }
 }
 
+/// The forms EESSI accepts: `cpu_target` as `<arch>/<uarch>` or
+/// `<arch>/<vendor>/<uarch>`, `accel_target` as EESSI-extend matches it.
+fn validate_eessi_target(t: &Target, e: &mut Vec<String>) {
+    if let Some(c) = &t.cpu_target {
+        let parts: Vec<&str> = c.split('/').collect();
+        let ok = matches!(parts[0], "x86_64" | "aarch64" | "riscv64" | "ppc64le")
+            && (2..=3).contains(&parts.len())
+            && parts
+                .iter()
+                .all(|p| !p.is_empty() && !p.contains(char::is_whitespace));
+        if !ok {
+            e.push(format!(
+                "targets.{}.cpu_target: expected an EESSI CPU subdirectory such as `x86_64/amd/zen4` or `aarch64/neoverse_v1`, found `{c}`",
+                t.name
+            ));
+        }
+    }
+    if let Some(a) = t.accel_target.as_deref().filter(|a| !a.is_empty()) {
+        let nvidia = a
+            .strip_prefix("accel/nvidia/cc")
+            .is_some_and(|cc| !cc.is_empty() && cc.bytes().all(|b| b.is_ascii_digit()));
+        let amd = a.strip_prefix("accel/amd/gfx").is_some_and(|g| {
+            !g.is_empty()
+                && g.bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        });
+        if !(nvidia || amd) {
+            e.push(format!(
+                "targets.{}.accel_target: expected `accel/nvidia/cc<digits>` or `accel/amd/gfx<hex>`, found `{a}`",
+                t.name
+            ));
+        }
+    }
+}
+
 /// Semantic validation. Returns every problem found.
 pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
     let mut e = Vec::new();
@@ -337,6 +372,9 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
         }
         if let Some(s) = &t.select {
             validate_select(&t.name, s, &mut e);
+        }
+        if site.eessi_on().is_some() {
+            validate_eessi_target(t, &mut e);
         }
         if let Some(dir) = lists_dir {
             for l in &t.build_lists {

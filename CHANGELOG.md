@@ -103,6 +103,12 @@ All notable changes to this project are documented here.
 - The schema says that `[targets.select] option` includes the leading dashes,
   and `check` suggests the dashed form when they are missing. The schema called
   it an option name, which reads as `for`, a value `check` rejects.
+- With `[modules.eessi]` on, `cpu_target` must be an EESSI CPU subdirectory
+  (`x86_64/amd/zen4`, `aarch64/neoverse_v1`) and `accel_target` an EESSI
+  accelerator subdirectory (`accel/nvidia/cc90`, `accel/amd/gfx90a`). A short
+  `cpu_target` such as `amd/zen4` passed `check`, then the EESSI module failed
+  its architecture check at load time. The `eessi-site` template uses the full
+  forms.
 - The `small-cluster` template gives all five roles `-N 1 --ntasks-per-node=1`.
   Inside an allocation srun otherwise starts one task per allocated task.
 
