@@ -529,10 +529,13 @@ impl<'a> Planner<'a> {
             self.scope.log_dir(),
             self.tmp_logdir(stem),
         ];
+        // `failed` reads the log path `eb --last-log` prints; without a
+        // terminal, EasyBuild's default style wraps it at 80 columns.
+        let env = BTreeMap::from([("EASYBUILD_OUTPUT_STYLE".to_string(), "basic".to_string())]);
         Ok(Cmd {
             name: format!("keep-failed:{stem}"),
             argv: self.wrapped(Role::Short, "logs", a, true)?,
-            env: BTreeMap::new(),
+            env,
             note: Some("runs after a failed line".into()),
         })
     }
