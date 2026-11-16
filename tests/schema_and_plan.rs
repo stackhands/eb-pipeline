@@ -1364,6 +1364,26 @@ fn eessi_example_exercises_the_target_keys() {
     assert_eq!(build_names(&v).len(), 3);
 }
 
+#[test]
+fn template_roles_start_one_task() {
+    for f in ["small-cluster.toml", "eessi-site.toml"] {
+        let v: toml::Value = toml::from_str(&std::fs::read_to_string(example(f)).unwrap()).unwrap();
+        let mut tables = vec![&v["phase_defaults"]];
+        for t in v["targets"].as_array().unwrap() {
+            tables.extend(t.get("phases"));
+        }
+        for (role, args) in tables.iter().flat_map(|t| t.as_table().unwrap()) {
+            let args = args.as_str().unwrap();
+            assert!(args.contains("--ntasks-per-node=1"), "{f} {role}: {args}");
+        }
+    }
+    let v: toml::Value =
+        toml::from_str(&std::fs::read_to_string(example("small-cluster.toml")).unwrap()).unwrap();
+    let mut roles: Vec<&String> = v["phase_defaults"].as_table().unwrap().keys().collect();
+    roles.sort();
+    assert_eq!(roles, ["build", "cache", "cpu", "plan", "short"]);
+}
+
 fn shard_list_arg(v: &serde_json::Value) -> String {
     let a = argv_of(&phase(v, "shard")["commands"][0]);
     let i = a.iter().position(|x| x == "--build-list").unwrap();

@@ -103,6 +103,8 @@ All notable changes to this project are documented here.
 - The schema says that `[targets.select] option` includes the leading dashes,
   and `check` suggests the dashed form when they are missing. The schema called
   it an option name, which reads as `for`, a value `check` rejects.
+- The `small-cluster` template gives all five roles `-N 1 --ntasks-per-node=1`.
+  Inside an allocation srun otherwise starts one task per allocated task.
 
 ## 0.3.0 - 2026-11-16
 

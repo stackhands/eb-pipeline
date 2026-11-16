@@ -14,10 +14,14 @@ kind = "slurm"
 launch = "srun"
 job_name_template = "{project}-{build}-{phase}"
 
+# Inside an allocation, srun without a task count starts one task per
+# allocated task; every role asks for one.
 [phase_defaults]
-plan = "-p batch -N 1 -c 1 -t 15:00"
-short = "-p batch -N 1 -c 1 -t 15:00"
-build = "-p batch -N 1 -c 16 -t 1-00:00:00"
+plan = "-p batch -N 1 --ntasks-per-node=1 -c 1 -t 15:00"
+short = "-p batch -N 1 --ntasks-per-node=1 -c 1 -t 15:00"
+build = "-p batch -N 1 --ntasks-per-node=1 -c 16 -t 1-00:00:00"
+cpu = "-p batch -N 1 --ntasks-per-node=1 -c 16 -t 1-00:00:00"
+cache = "-p batch -N 1 --ntasks-per-node=1 -c 1 -t 15:00"
 
 [[targets]]
 name = "cpu"
