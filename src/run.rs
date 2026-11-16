@@ -565,10 +565,10 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                         "shard",
                         "unsharded",
                         Some(ex.code),
-                        Some(
-                            "exit 3 contract: planner declined to shard; plan built unsharded"
-                                .into(),
-                        ),
+                        Some(format!(
+                            "exit {} is shards.planner_exit_unsharded: planner declined to shard; plan built unsharded",
+                            ex.code
+                        )),
                     );
                 } else {
                     let code = if ex.code == 2 {

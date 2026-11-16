@@ -120,6 +120,9 @@ All notable changes to this project are documented here.
   eb-staged-rebuild refusal after earlier lines built. A signal (130, 143) or
   a usage error (2) ends the run with that code ahead of the 1, 78, 75, 0
   order.
+- The `shard` phase note of an unsharded plan names the exit code the planner
+  returned, the configured `shards.planner_exit_unsharded`. It said 3 whatever
+  the setting.
 
 ### Removed
 
