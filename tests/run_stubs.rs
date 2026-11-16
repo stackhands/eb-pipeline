@@ -491,6 +491,32 @@ fn tool_below_min_version_exits_two_before_any_work() {
 }
 
 #[test]
+fn keep_failed_runs_with_the_basic_output_style() {
+    let env = setup("");
+    write_exec(
+        &env.stubs.join("eb-keep-logs"),
+        r#"#!/bin/sh
+case "$1" in --version) echo "eb-keep-logs 0.2.0"; exit 0;; esac
+echo "$1 ${EASYBUILD_OUTPUT_STYLE:-unset}" >> "$STUB_DIR/keeplogs.style"
+"#,
+    );
+    let o = go(
+        &env,
+        "Foo-1.0-foss-2025a.eb\n",
+        &[
+            ("STUB_EB_FAIL", "Foo-1.0-foss-2025a"),
+            ("EASYBUILD_OUTPUT_STYLE", "rich"),
+        ],
+    );
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    assert_eq!(calls(&env, "keeplogs.style"), ["failed basic"]);
+    assert!(
+        file_text(&env, "env.build.Foo-1.0-foss-2025a").contains("EASYBUILD_OUTPUT_STYLE=rich"),
+        "the build keeps the style it was given"
+    );
+}
+
+#[test]
 fn sigterm_is_forwarded_and_exit_is_143() {
     let env = setup("");
     let mut child = driver(&env, LIST, &[("STUB_EB_SLEEP", "1")], &[]);
