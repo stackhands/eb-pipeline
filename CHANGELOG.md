@@ -115,6 +115,16 @@ All notable changes to this project are documented here.
   forms.
 - The `small-cluster` template gives all five roles `-N 1 --ntasks-per-node=1`.
   Inside an allocation srun otherwise starts one task per allocated task.
+- The exit code table in `--help` and the README no longer lists 3, which
+  `run` never returns, and says that 78 also follows an admission or
+  eb-staged-rebuild refusal after earlier lines built. A signal (130, 143) or
+  a usage error (2) ends the run with that code ahead of the 1, 78, 75, 0
+  order.
+
+### Removed
+
+- `exit::UNSHARDED` and the remap of 3 to 0 at the end of `run`; no path
+  produced it.
 
 ## 0.3.0 - 2026-11-16
 

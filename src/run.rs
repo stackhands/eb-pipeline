@@ -1089,9 +1089,6 @@ fn finish(mut st: State, forced: Option<i32>) -> RunResult {
         None if st.pending => exit::TEMPFAIL,
         None => exit::OK,
     };
-    if st.res.exit_code == exit::UNSHARDED {
-        st.res.exit_code = exit::OK;
-    }
     st.res
 }
 

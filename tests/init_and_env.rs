@@ -146,3 +146,29 @@ fn site_values_come_from_the_environment() {
         .unwrap();
     assert_eq!(o.status.code(), Some(2), "{}", text(&o));
 }
+
+#[test]
+fn help_and_readme_list_the_codes_run_returns() {
+    let o = bin().arg("--help").output().unwrap();
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    let help = String::from_utf8_lossy(&o.stdout).into_owned();
+    let help_codes: Vec<u32> = help
+        .lines()
+        .skip_while(|l| *l != "Exit codes:")
+        .skip(1)
+        .take_while(|l| !l.is_empty())
+        .filter_map(|l| l.split_whitespace().next()?.parse().ok())
+        .collect();
+    let readme =
+        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("README.md"))
+            .unwrap();
+    let readme_codes: Vec<u32> = readme
+        .lines()
+        .skip_while(|l| *l != "## Exit codes")
+        .skip_while(|l| !l.starts_with('|'))
+        .take_while(|l| l.starts_with('|'))
+        .filter_map(|l| l.trim_matches('|').split('|').next()?.trim().parse().ok())
+        .collect();
+    assert_eq!(help_codes, [0, 1, 2, 75, 78, 130, 143], "{help}");
+    assert_eq!(readme_codes, help_codes);
+}
