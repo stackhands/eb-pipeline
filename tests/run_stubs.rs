@@ -22,6 +22,7 @@ case "$sub" in
     if [ "$ok" -gt 0 ] && [ "$n" -ge "$ok" ]; then echo "{\"admitted\":true,\"attempt\":$n}"; exit 0; fi
     echo "{\"admitted\":false,\"attempt\":$n}"; exit 78;;
   shard)
+    echo "${EASYBUILD_FILTER_DEPS:-}" > "$D/shard.filterdeps"
     case "${STUB_SHARD:-ok}" in unsharded) exit 3;; fail) exit 1;; esac
     out=""; bl=""
     while [ $# -gt 0 ]; do
@@ -469,6 +470,39 @@ fn sharded_plan_admits_each_unit_with_its_footprint() {
     assert_eq!(admits.len(), 2);
     assert!(admits[0].contains("--footprint 111"));
     assert!(admits[1].contains("--footprint 222"));
+}
+
+/// A `module` function: EESSI-extend sets EASYBUILD_FILTER_DEPS when it loads.
+const MODULE_INIT: &str = r#"module() {
+  case "$1" in
+    purge) unset EASYBUILD_FILTER_DEPS ;;
+    load)
+      echo "$2" >> "$STUB_DIR/module.loads"
+      if [ "$2" = EESSI-extend ]; then EASYBUILD_FILTER_DEPS=M4,Bison; export EASYBUILD_FILTER_DEPS; fi ;;
+  esac
+}
+"#;
+
+#[test]
+fn shard_planner_runs_inside_the_module_wrapper() {
+    let env = setup("[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n");
+    let init = env.dir.path().join("module-init.sh");
+    std::fs::write(&init, MODULE_INIT).unwrap();
+    let text = std::fs::read_to_string(&env.site).unwrap().replace(
+        "init = []",
+        &format!(
+            "init = [\"EESSI/2026.06\", \"EESSI-extend\"]\nshell_init = \"{}\"",
+            init.display()
+        ),
+    );
+    std::fs::write(&env.site, text).unwrap();
+    let o = go(&env, LIST, &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(file_text(&env, "shard.filterdeps").trim(), "M4,Bison");
+    assert_eq!(
+        calls(&env, "module.loads")[..2],
+        ["EESSI/2026.06", "EESSI-extend"]
+    );
 }
 
 #[test]

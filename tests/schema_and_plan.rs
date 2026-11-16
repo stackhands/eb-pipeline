@@ -973,6 +973,23 @@ fn cache_init_module_default_and_override() {
 }
 
 #[test]
+fn shard_command_runs_inside_the_module_wrapper() {
+    let site = format!("{MINIMAL}\n[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n")
+        .replace("init = []", "init = [\"EESSI/2026.06\"]");
+    let v = plan_of(&site, "Foo-1.0.eb\n", "other");
+    let a = argv_of(&phase(&v, "shard")["commands"][0]);
+    let i = a
+        .iter()
+        .position(|x| x == resolve::MODULE_SCRIPT)
+        .unwrap_or_else(|| panic!("no module wrapper in {a:?}"));
+    assert_eq!(a[i - 2..i], ["bash", "-c"]);
+    assert_eq!(
+        a[i + 1..i + 5],
+        ["eb-pipeline", "eb-stack", "stack", "shard"]
+    );
+}
+
+#[test]
 fn installed_modules_dirs_from_env_plans_placeholders() {
     let site = format!(
         "{MINIMAL}\n[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\ninstalled_modules_dirs = [\"/opt/m\"]\ninstalled_modules_dirs_from_env = [\"MODS_A\", \"MODS_B\"]\n"
