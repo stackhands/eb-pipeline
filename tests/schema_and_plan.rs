@@ -902,6 +902,12 @@ fn eessi_site_prefix_follows_the_install_prefix() {
 }
 
 #[test]
+fn the_log_root_reference_names_the_stamp_and_the_target() {
+    let text = eb_pipeline::schema::reference();
+    assert!(text.contains("<log_root>/<log-stamp>/<target>/"), "{text}");
+}
+
+#[test]
 fn eessi_example_exercises_the_target_keys() {
     let list = "<Name>-1.0.eb\nB-1.0.eb --only-targets=gpu-b\nC-1.0.eb --only-targets=gpu-a,gpu-b --rebuild\n";
     let text = std::fs::read_to_string(example("eessi-site.toml")).unwrap();

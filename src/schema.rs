@@ -296,7 +296,7 @@ doc_struct! {
         export_install_vars: String => ("string", "single", false,
             "`single` exports EASYBUILD_INSTALLPATH; `split` exports EASYBUILD_INSTALLPATH_SOFTWARE and EASYBUILD_INSTALLPATH_MODULES from the target's software and modules roots instead."),
         log_root: String => ("string", "", true,
-            "Root of per-run log directories, `<log_root>/<run-id>/`."),
+            "Root of per-run log directories, `<log_root>/<log-stamp>/<target>/`."),
         shard_dir: Option<String> => ("string", "<scratch>/shards", false,
             "Output directory of `stack shard`; one subdirectory per run id."),
         #[serde(default)]
