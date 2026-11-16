@@ -60,7 +60,6 @@ eb_optarch = "GCC:-march=<march>"
 max_parallel = 96
 cpu_target = "<vendor>/<uarch>"
 site_prefix = "/opt/eb/cpu-b"
-default = true
 
 [targets.phases]
 build = "-p <cpu-partition-b> -N 1 --ntasks-per-node=1 -c 96 -t 2-00:00:00"

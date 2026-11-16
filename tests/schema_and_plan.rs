@@ -908,6 +908,19 @@ fn the_log_root_reference_names_the_stamp_and_the_target() {
 }
 
 #[test]
+fn the_eessi_template_has_one_default_target() {
+    let text = std::fs::read_to_string(example("eessi-site.toml")).unwrap();
+    let site = site::parse(&text).unwrap();
+    let defaults: Vec<_> = site
+        .targets
+        .iter()
+        .filter(|t| t.default)
+        .map(|t| t.name.as_str())
+        .collect();
+    assert_eq!(defaults, ["cpu-a"]);
+}
+
+#[test]
 fn eessi_example_exercises_the_target_keys() {
     let list = "<Name>-1.0.eb\nB-1.0.eb --only-targets=gpu-b\nC-1.0.eb --only-targets=gpu-a,gpu-b --rebuild\n";
     let text = std::fs::read_to_string(example("eessi-site.toml")).unwrap();
