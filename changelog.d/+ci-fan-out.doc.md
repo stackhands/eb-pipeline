@@ -1,0 +1,1 @@
+`examples/ci/github-actions.yml` is a GitHub Actions workflow that builds one list on every target, one job per target, from the array `eb-pipeline targets --format json` prints. The README shows the same fan-out as a shell loop, and why each target needs a run id of its own.

@@ -1,0 +1,1 @@
+`eb-pipeline targets --site FILE` prints the site file's target names in file order, one per line, or with `--format json` as a JSON array on one line, so a CI system can run one job per target. An invalid site file exits 2 with nothing on stdout.

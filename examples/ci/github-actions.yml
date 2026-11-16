@@ -1,0 +1,69 @@
+name: build
+# Build one list on every target of the site file, one job per target.
+# Copy this file into .github/workflows/ of the repository that holds
+# site.toml and the build lists. `eb-build` is the label of a self-hosted
+# runner on the build account, with eb-pipeline on its PATH.
+on:
+  workflow_dispatch:
+    inputs:
+      list:
+        description: Build list, relative to the repository root
+        required: true
+      build_type:
+        description: Build type, as the site file names it
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  EB_PIPELINE_SITE: site.toml
+
+jobs:
+  targets:
+    runs-on: [self-hosted, eb-build]
+    outputs:
+      names: ${{ steps.targets.outputs.names }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # A JSON array on one line, as GITHUB_OUTPUT takes it. An invalid
+      # site file exits 2 here, and no build job starts.
+      - id: targets
+        run: |
+          names=$(eb-pipeline targets --format json)
+          echo "names=$names" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: targets
+    runs-on: [self-hosted, eb-build]
+    strategy:
+      # One target at a time. Every target gets the same EASYBUILD_BUILDPATH,
+      # and EasyBuild removes the build directory of an easyconfig when a
+      # build of it starts, so two targets building one easyconfig at once
+      # break each other's build. "One job per target" in the eb-pipeline
+      # README has the details.
+      max-parallel: 1
+      # A failed target leaves the others running.
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.targets.outputs.names) }}
+    env:
+      EB_PIPELINE_LIST: ${{ inputs.list }}
+      EB_PIPELINE_BUILD_TYPE: ${{ inputs.build_type }}
+      EB_PIPELINE_TARGET: ${{ matrix.target }}
+      # stack shard writes into <shard_dir>/<run-id>, and eb-staged-rebuild
+      # refuses a run id it already holds, so each target and each attempt
+      # has its own.
+      EB_PIPELINE_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: eb-pipeline run --result "result-$EB_PIPELINE_TARGET.json"
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: result-${{ matrix.target }}
+          path: result-${{ matrix.target }}.json

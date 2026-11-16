@@ -92,7 +92,14 @@ fn help_lists_dry_run_output_among_what_stdout_carries() {
         .and_then(|(_, rest)| rest.split_once(" output only."))
         .map(|(carried, _)| carried)
         .unwrap_or_default();
-    for name in ["plan", "explain", "schema", "init", "run --dry-run"] {
+    for name in [
+        "plan",
+        "explain",
+        "schema",
+        "init",
+        "targets",
+        "run --dry-run",
+    ] {
         assert!(carried.contains(name), "{name} missing from {carried:?}");
     }
 }

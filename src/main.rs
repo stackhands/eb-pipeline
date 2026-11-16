@@ -11,6 +11,7 @@ const ROOT_HELP: &str = "\
 Examples:
   eb-pipeline init --template small-cluster --out site.toml
   eb-pipeline check --site site.toml
+  eb-pipeline targets --site site.toml --format json
   eb-pipeline plan --site site.toml --list list.txt --target cpu --build-type production --out plan.json
   eb-pipeline run --site site.toml --list list.txt --target cpu --build-type production --result result.json
 
@@ -21,9 +22,9 @@ command line wins. EB_PIPELINE__SECTION__KEY=value sets one site file value, for
 example EB_PIPELINE__FILESYSTEMS__SCRATCH=/scratch/eb; the result is validated
 like the file.
 
-Output streams: stdout carries plan, explain, schema, init and run --dry-run output
-only. Events go to stderr as `LEVEL [phase] target: message`. The result JSON goes
-to --result.
+Output streams: stdout carries plan, explain, schema, init, targets and run --dry-run
+output only. Events go to stderr as `LEVEL [phase] target: message`. The result JSON
+goes to --result.
 
 ";
 
@@ -83,6 +84,15 @@ enum Cmd {
         #[arg(long, value_enum, default_value_t = Format::Toml)]
         format: Format,
     },
+    /// Print the target names in file order, for a CI matrix or a shell loop.
+    Targets {
+        /// Site file.
+        #[arg(long, env = "EB_PIPELINE_SITE")]
+        site: PathBuf,
+        /// `text`: one name per line; `json`: a JSON array on one line.
+        #[arg(long, value_enum, default_value_t = TargetsFormat::Text)]
+        format: TargetsFormat,
+    },
     /// Compute phases, launch lines, environments and tool calls without executing.
     Plan {
         #[command(flatten)]
@@ -137,6 +147,12 @@ struct Common {
 #[derive(Clone, Copy, ValueEnum)]
 enum Format {
     Toml,
+    Json,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum TargetsFormat {
+    Text,
     Json,
 }
 
@@ -229,6 +245,23 @@ fn cmd_explain(
             toml::to_string_pretty(&v)
                 .map_err(|e| Fail::new(exit::FAILED, format!("cannot render TOML: {e}")))?
         ),
+    }
+    Ok(exit::OK)
+}
+
+fn cmd_targets(site_path: &Path, format: TargetsFormat) -> Result<i32, Fail> {
+    let s = load_valid(site_path, None)?;
+    let names: Vec<&str> = s.targets.iter().map(|t| t.name.as_str()).collect();
+    match format {
+        TargetsFormat::Text => {
+            for n in &names {
+                println!("{n}");
+            }
+        }
+        // Compact, unlike write_json: GITHUB_OUTPUT and the like take one `name=value` line.
+        TargetsFormat::Json => {
+            println!("{}", serde_json::to_string(&names).expect("serializable"))
+        }
     }
     Ok(exit::OK)
 }
@@ -401,6 +434,7 @@ fn main() {
             build_type,
             format,
         } => cmd_explain(site, target.as_deref(), build_type.as_deref(), *format),
+        Cmd::Targets { site, format } => cmd_targets(site, *format),
         Cmd::Plan {
             common,
             out,
