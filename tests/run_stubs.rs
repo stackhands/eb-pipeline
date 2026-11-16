@@ -285,6 +285,27 @@ fn success_exits_zero_and_records_lines() {
 }
 
 #[test]
+fn result_phases_follow_the_pipeline_order() {
+    let env = setup("");
+    let o = go(&env, LIST, &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = o.result.unwrap();
+    let names: Vec<&str> = r["phases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["name"].as_str().unwrap())
+        .collect();
+    let in_order: Vec<&str> = eb_pipeline::plan::PHASES
+        .into_iter()
+        .filter(|n| names.contains(n))
+        .collect();
+    assert_eq!(names, in_order);
+    assert_eq!(names.first(), Some(&"preflight"), "{names:?}");
+    assert!(!r["not_configured"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn one_failed_line_exits_one_never_a_sum() {
     let env = setup("");
     let o = go(

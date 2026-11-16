@@ -3,6 +3,7 @@
 use crate::exit::{self, Fail};
 use crate::plan::{
     build_plan, read_units, shell_line, valid_job_id, Cmd, Deselected, Planner, StemSeq, Unit,
+    PHASES,
 };
 use crate::resolve::Role;
 use crate::tools::{map_staged, StagedOutcome};
@@ -1075,6 +1076,12 @@ fn finish(mut st: State, forced: Option<i32>) -> RunResult {
         *counts.entry(l.status.clone()).or_default() += 1;
     }
     st.res.counts = counts;
+    st.res.phases.sort_by_key(|ph| {
+        PHASES
+            .iter()
+            .position(|n| *n == ph.name)
+            .unwrap_or(PHASES.len())
+    });
     st.res.exit_code = match forced.or(st.forced_code) {
         Some(c) => c,
         None if st.failed => exit::FAILED,

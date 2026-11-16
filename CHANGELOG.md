@@ -96,6 +96,8 @@ All notable changes to this project are documented here.
   one ledger configuration. That file names one `target`, so on a site with a
   sapphirerapids and an icelake target the icelake rebuilds were recorded as
   `x86_64/intel/sapphirerapids`.
+- The result file lists `phases` in pipeline order. Phases that were not
+  configured came first, ahead of `preflight`.
 
 ## 0.3.0 - 2026-11-16
 
