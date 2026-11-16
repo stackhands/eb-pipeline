@@ -362,9 +362,10 @@ impl<'a> Scope<'a> {
             if let Some(a) = &self.target.accel_target {
                 put(&es.accel_override_var, a.clone());
             }
-            if let Some(p) = &self.target.site_prefix {
-                put("EESSI_SITE_SOFTWARE_PREFIX", p.clone());
-            }
+            // The same prefix EasyBuild installs into. An explicit
+            // `site_prefix` wins; otherwise this is `filesystems.install_root`,
+            // so a site layer and EasyBuild do not install to two places.
+            put("EESSI_SITE_SOFTWARE_PREFIX", self.install_prefix());
         }
         e
     }
