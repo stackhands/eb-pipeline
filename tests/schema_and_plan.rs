@@ -972,6 +972,99 @@ fn cache_init_module_default_and_override() {
         .is_none());
 }
 
+fn fetch_argvs(v: &serde_json::Value) -> Vec<Vec<String>> {
+    phase(v, "sources")["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            let a = argv_of(c);
+            let i = a.iter().position(|x| x == "eb").unwrap();
+            a[i..].to_vec()
+        })
+        .collect()
+}
+
+const ROBOT_LIST: &str = "A-1.eb --robot --rebuild\nB-1.eb --robot=/opt/ec\nC-1.eb --robot=/opt/ec --robot-paths=/opt/x:\nD-1.eb -r\n";
+
+#[test]
+fn prefetch_keeps_the_robot_by_default() {
+    let site = format!("{MINIMAL}\n[sources]\nextra_args = [\"--x\"]\n");
+    let v = plan_of(&site, ROBOT_LIST, "other");
+    assert_eq!(
+        fetch_argvs(&v),
+        [
+            vec!["eb", "A-1.eb", "--fetch", "--robot", "--robot", "--x"],
+            vec![
+                "eb",
+                "B-1.eb",
+                "--fetch",
+                "--robot",
+                "--robot=/opt/ec",
+                "--x"
+            ],
+            vec![
+                "eb",
+                "C-1.eb",
+                "--fetch",
+                "--robot",
+                "--robot=/opt/ec",
+                "--robot-paths=/opt/x:",
+                "--x"
+            ],
+            vec!["eb", "D-1.eb", "--fetch", "--robot", "-r", "--x"],
+        ]
+    );
+}
+
+#[test]
+fn disable_robot_in_extra_args_fetches_own_sources_only() {
+    let site = format!("{MINIMAL}\n[sources]\nextra_args = [\"--disable-robot\"]\n");
+    let v = plan_of(&site, ROBOT_LIST, "other");
+    assert_eq!(
+        fetch_argvs(&v),
+        [
+            vec!["eb", "A-1.eb", "--fetch", "--disable-robot"],
+            vec![
+                "eb",
+                "B-1.eb",
+                "--fetch",
+                "--robot-paths=/opt/ec:",
+                "--disable-robot"
+            ],
+            vec![
+                "eb",
+                "C-1.eb",
+                "--fetch",
+                "--robot-paths=/opt/ec:/opt/x:",
+                "--disable-robot"
+            ],
+            vec!["eb", "D-1.eb", "--fetch", "-r", "--disable-robot"],
+        ]
+    );
+    // the build keeps the line's own options
+    let b = argv_of(&phase(&v, "build")["commands"][1]);
+    assert!(b.contains(&"--robot=/opt/ec".to_string()), "{b:?}");
+}
+
+#[test]
+fn without_robot_keeps_the_last_robot_path() {
+    use eb_pipeline::plan::without_robot;
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        without_robot(s(&["--robot=/a", "--robot=/b", "-x"]).iter()),
+        ["-x", "--robot-paths=/b:"]
+    );
+    assert_eq!(
+        without_robot(s(&["--robot=/a", "--robot"]).iter()),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        without_robot(s(&["--robot-paths=:/x", "--robot=/a:/b"]).iter()),
+        ["--robot-paths=/a:/b::/x"]
+    );
+}
+
 #[test]
 fn shard_command_runs_inside_the_module_wrapper() {
     let site = format!("{MINIMAL}\n[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n")

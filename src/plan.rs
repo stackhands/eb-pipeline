@@ -117,6 +117,33 @@ pub fn wants_rebuild(line: &ListLine) -> bool {
         .any(|a| a == "--rebuild" || a == "-f" || a == "--force")
 }
 
+/// Line options for a fetch with the robot disabled: a bare `--robot` goes,
+/// and the last `--robot=P` stays at the front of the search path so the
+/// line's easyconfig is still found. EasyBuild searches `P` then
+/// `--robot-paths`, which `--robot-paths=P:X` keeps; `P:` is `P` followed by
+/// the default paths.
+pub fn without_robot<'a>(args: impl Iterator<Item = &'a String>) -> Vec<String> {
+    let mut robot: Option<&str> = None;
+    let mut out: Vec<String> = Vec::new();
+    for a in args {
+        if a == "--robot" {
+            robot = Some("");
+        } else if let Some(p) = a.strip_prefix("--robot=") {
+            robot = Some(p);
+        } else {
+            out.push(a.clone());
+        }
+    }
+    let Some(lead) = robot.filter(|p| !p.is_empty()) else {
+        return out;
+    };
+    match out.iter().rposition(|a| a.starts_with("--robot-paths=")) {
+        Some(i) => out[i] = format!("--robot-paths={lead}:{}", &out[i]["--robot-paths=".len()..]),
+        None => out.push(format!("--robot-paths={lead}:")),
+    }
+    out
+}
+
 /// A scheduler job id: digits only, positive, no leading zero.
 pub fn valid_job_id(s: &str) -> bool {
     !s.is_empty() && !s.starts_with('0') && s.chars().all(|c| c.is_ascii_digit())
@@ -375,18 +402,14 @@ impl<'a> Planner<'a> {
             .sources_on()
             .map(|s| s.extra_args.clone())
             .unwrap_or_default();
-        let mut a = vec![
-            "eb".to_string(),
-            line.easyconfig.clone(),
-            "--fetch".into(),
-            "--robot".into(),
-        ];
-        a.extend(
-            line.args
-                .iter()
-                .filter(|x| !x.starts_with("--rebuild"))
-                .cloned(),
-        );
+        let args = line.args.iter().filter(|x| !x.starts_with("--rebuild"));
+        let mut a = vec!["eb".to_string(), line.easyconfig.clone(), "--fetch".into()];
+        if extra.iter().any(|x| x == "--disable-robot") {
+            a.extend(without_robot(args));
+        } else {
+            a.push("--robot".into());
+            a.extend(args.cloned());
+        }
         a.extend(extra);
         let mut env = self.scope.line_env(&line.easyconfig);
         env.extend(self.scope.fetch_env());

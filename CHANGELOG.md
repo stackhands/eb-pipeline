@@ -43,6 +43,12 @@ All notable changes to this project are documented here.
 - `run` leaves out an `installed_modules_dirs` tree that does not exist yet and
   logs a WARN. On a new site prefix, `stack shard` refused the missing
   `modules/all` and the run exited 2 before any build.
+- `--disable-robot` in `[sources] extra_args` turns the robot off for source
+  prefetch. The fetch then leaves out `--robot`, drops a line's `--robot`, and
+  keeps the paths of a line's `--robot=PATH` at the front of `--robot-paths`.
+  `--fetch` ignores installed modules, so with the robot an EESSI site fetched
+  the sources of the whole toolchain and created empty `software/<Name>`
+  directories for it. `templates/eessi-site.toml` sets `--disable-robot`.
 
 ## 0.3.0 - 2026-11-16
 

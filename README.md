@@ -146,6 +146,14 @@ the result.
   example, reaches it. `run` leaves out an `installed_modules_dirs` tree that
   does not exist yet, such as the site tree before its first install, and logs
   a WARN.
+- `sources`: `eb <easyconfig> --fetch --robot` for every list line, with the
+  line's options other than `--rebuild*`, then `[sources].extra_args`. A line
+  whose fetch fails is recorded as failed and is not built. `--fetch` ignores
+  installed modules, so `--robot` fetches the sources of every dependency,
+  those EESSI provides included. `--disable-robot` in `extra_args` fetches each
+  line's own sources only: the driver leaves out its `--robot`, drops a line's
+  `--robot`, and keeps the paths of a line's `--robot=PATH` at the front of
+  `--robot-paths` so the easyconfig is still found.
 - `admission`: `eb-stack stack admit` before each build unit. Exit 78 retries
   with the backoff in `[admission]` (`attempts`, `wait_seconds`, doubling up to
   `max_wait_seconds`). The job id comes from the variable named by

@@ -384,7 +384,8 @@ doc_struct! {
         prefetch: bool => ("boolean", "true", false,
             "Run `eb --fetch --robot` for every list line before building."),
         #[serde(default)]
-        extra_args: Vec<String> => ("array of string", "[]", false, "Extra arguments for the prefetch command."),
+        extra_args: Vec<String> => ("array of string", "[]", false,
+            "Extra arguments for the prefetch command, after the line's own. `--disable-robot` drops `--robot`, so a line fetches its own sources only; a line's `--robot=PATH` moves to the front of `--robot-paths`."),
     }
 }
 
