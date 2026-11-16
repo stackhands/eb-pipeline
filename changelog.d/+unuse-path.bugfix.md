@@ -1,0 +1,1 @@
+The `eessi-site` template no longer sets `modules.unuse_path`, which emptied MODULEPATH after the shell init so the EESSI module could not load. `check` warns when `unuse_path` is set and the first `modules.init` entry is not an absolute path.
