@@ -86,13 +86,14 @@ the three tools above the site file enables.
 | `check --site FILE [--lists-dir DIR] [--probe-tools]` | parse and validate; exit 0 or 2 |
 | `schema` | print every key with type, default, required flag and meaning |
 | `explain --site FILE [--target T] [--build-type B] [--format toml\|json]` | resolved per-target configuration |
+| `targets --site FILE [--format text\|json]` | target names in file order, one per line or as a JSON array on one line |
 | `plan --site FILE --list LIST --target T --build-type B [--run-id ID] [--log-stamp S] [--shard-plan DIR] [--out FILE.json]` | phases, launch lines, environment, tool calls |
 | `run` (arguments of `plan`, plus `--result FILE.json`, `--dry-run`) | execute the plan |
 
 `eb-pipeline schema` is generated from the same declarations the parser uses,
 and a test asserts that every field of every section is documented there.
 
-Streams: stdout carries `plan`, `explain`, `schema`, `init` and `--dry-run` output only.
+Streams: stdout carries `plan`, `explain`, `schema`, `init`, `targets` and `--dry-run` output only.
 Events go to stderr, one per line, as `LEVEL [phase] target: message`. The
 result JSON goes to `--result`.
 
