@@ -112,6 +112,35 @@ fn defaults_and_overrides_resolve() {
 }
 
 #[test]
+fn staged_targets_record_through_their_own_ledger_config() {
+    // A ledger configuration records one `target`.
+    let shared =
+        format!("{MINIMAL}\n[rebuild]\nstaged = true\nledger_config = \"/etc/eb/ledger.json\"\n");
+    let errs = site::validate(&site::parse(&shared).unwrap(), None);
+    assert!(
+        errs.iter().any(|e| e.starts_with("targets.other:")
+            && e.contains("targets.cpu")
+            && e.contains("/etc/eb/ledger.json")),
+        "{errs:?}"
+    );
+    let own = shared.replace(
+        "name = \"other\"",
+        "name = \"other\"\nledger_config = \"/etc/eb/ledger-other.json\"",
+    );
+    let s = site::parse(&own).unwrap();
+    assert!(site::validate(&s, None).is_empty());
+    let v = resolve::explain(&s, None, None).unwrap();
+    assert_eq!(v["targets"][0]["ledger_config"], "/etc/eb/ledger.json");
+    assert_eq!(
+        v["targets"][1]["ledger_config"],
+        "/etc/eb/ledger-other.json"
+    );
+    // a target without staged rebuilds records nothing
+    let unstaged = shared.replace("name = \"other\"", "name = \"other\"\nstaged = false");
+    assert!(site::validate(&site::parse(&unstaged).unwrap(), None).is_empty());
+}
+
+#[test]
 fn target_names_must_be_unique() {
     let text = MINIMAL.replace("name = \"other\"", "name = \"cpu\"");
     let s = site::parse(&text).unwrap();
