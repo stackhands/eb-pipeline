@@ -96,7 +96,8 @@ pub struct Planner<'a> {
     /// Value of the route's receipt digest variable read at run time.
     pub route_digest: Option<String>,
     /// Values of the `installed_modules_dirs_from_env` variables read at run
-    /// time; `None` plans the `${NAME}` placeholders.
+    /// time; `None` plans the `${NAME}` placeholders and keeps every
+    /// installed-modules directory.
     pub runtime_env: Option<BTreeMap<String, String>>,
 }
 
@@ -259,6 +260,42 @@ impl<'a> Planner<'a> {
         format!("{}/{}", base.trim_end_matches('/'), self.scope.run_id)
     }
 
+    /// Module trees of `stack shard --installed-modules-dir`: the configured
+    /// ones, then those of `installed_modules_dirs_from_env`.
+    fn installed_modules_dirs(&self) -> Vec<String> {
+        let s = self.site().shards_on().expect("shards active");
+        let mut v = s.installed_modules_dirs.clone();
+        for n in &s.installed_modules_dirs_from_env {
+            match &self.runtime_env {
+                None => v.push(format!("${{{n}}}")),
+                Some(vars) => v.extend(
+                    vars.get(n)
+                        .map(String::as_str)
+                        .unwrap_or("")
+                        .split(':')
+                        .filter(|d| !d.is_empty())
+                        .map(str::to_string),
+                ),
+            }
+        }
+        v
+    }
+
+    /// Module trees `run` leaves out of the shard phase because they do not
+    /// exist. A site's tree appears with its first install, and eb-stack
+    /// refuses a directory that is missing.
+    pub fn missing_installed_modules_dirs(&self) -> Vec<String> {
+        if self.runtime_env.is_none() {
+            return Vec::new();
+        }
+        self.installed_modules_dirs()
+            .into_iter()
+            .filter(|d| {
+                std::fs::metadata(d).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+            })
+            .collect()
+    }
+
     pub fn shard_cmd(&self) -> Result<Cmd, Fail> {
         let s = self.site().shards_on().expect("shards active");
         let mut a = vec![
@@ -276,28 +313,11 @@ impl<'a> Planner<'a> {
             a.push("--easyconfigs".into());
             a.push(e.clone());
         }
-        for d in &s.installed_modules_dirs {
-            a.push("--installed-modules-dir".into());
-            a.push(d.clone());
-        }
-        for n in &s.installed_modules_dirs_from_env {
-            match &self.runtime_env {
-                None => {
-                    a.push("--installed-modules-dir".into());
-                    a.push(format!("${{{n}}}"));
-                }
-                Some(vars) => {
-                    for d in vars
-                        .get(n)
-                        .map(String::as_str)
-                        .unwrap_or("")
-                        .split(':')
-                        .filter(|d| !d.is_empty())
-                    {
-                        a.push("--installed-modules-dir".into());
-                        a.push(d.to_string());
-                    }
-                }
+        let missing = self.missing_installed_modules_dirs();
+        for d in self.installed_modules_dirs() {
+            if !missing.contains(&d) {
+                a.push("--installed-modules-dir".into());
+                a.push(d);
             }
         }
         if let Some(w) = &s.weights {

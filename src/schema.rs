@@ -368,7 +368,7 @@ doc_struct! {
         weights: Option<String> => ("string", "none", false, "Build time table for `stack shard --weights`."),
         #[serde(default)]
         installed_modules_dirs: Vec<String> => ("array of string", "[]", false,
-            "Module trees counted as installed, `--installed-modules-dir`."),
+            "Module trees counted as installed, `--installed-modules-dir`. `run` leaves out a tree that does not exist yet, with a WARN."),
         #[serde(default)]
         installed_modules_dirs_from_env: Vec<String> => ("array of string", "[]", false,
             "Environment variables whose colon-separated values are appended to `installed_modules_dirs` at run time; `run` refuses with exit 78 when one is unset, an empty value adds nothing, and `plan` shows `${NAME}`."),

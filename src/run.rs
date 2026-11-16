@@ -343,10 +343,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
             }
         }
     }
-    if let Some(sh) = site
-        .shards_on()
-        .filter(|s| !s.installed_modules_dirs_from_env.is_empty())
-    {
+    if let Some(sh) = site.shards_on() {
         let mut vars = BTreeMap::new();
         for n in &sh.installed_modules_dirs_from_env {
             match std::env::var(n) {
@@ -427,6 +424,14 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                 return finish(st, Some(f.code));
             }
             Ok(cmd) => {
+                for d in p.missing_installed_modules_dirs() {
+                    log(
+                        "WARN",
+                        "shard",
+                        &target,
+                        &format!("{d} does not exist; no module counts as installed there"),
+                    );
+                }
                 log(
                     "INFO",
                     "shard",
