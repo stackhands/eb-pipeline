@@ -545,9 +545,9 @@ impl<'a> Planner<'a> {
                 "--run-id".into(),
                 self.staged_run_id(stem),
             ];
-            if let Some(s) = &r.state_root {
+            if let Some(s) = self.scope.state_root() {
                 inner.push("--state-root".into());
-                inner.push(s.clone());
+                inner.push(s);
             }
             if let Some(g) = r.grace_hours {
                 inner.push("--grace-hours".into());

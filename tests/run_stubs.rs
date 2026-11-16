@@ -1095,6 +1095,48 @@ fn staged_rebuild_gets_the_target_roots() {
 }
 
 #[test]
+fn target_paths_reach_eb_and_eb_staged_rebuild() {
+    let env = setup("[rebuild]\nstaged = true\n");
+    let r = env.dir.path().display().to_string();
+    let text = std::fs::read_to_string(&env.site)
+        .unwrap()
+        .replace(
+            &format!("build_path = \"{r}/build\""),
+            &format!(
+                "build_path = \"{r}/build/{{target}}\"\nsource_paths = [\"{r}/sources/{{target}}\", \"{r}/sources\"]"
+            ),
+        )
+        .replace(
+            "staged = true",
+            &format!("staged = true\nstate_root = \"{r}/state/{{target}}\""),
+        );
+    std::fs::write(&env.site, text).unwrap();
+    install_module(&env, "Foo/1.0-foss-2025a.lua");
+    let o = go(
+        &env,
+        "Foo-1.0-foss-2025a.eb --rebuild\nBar-2.0-foss-2025a.eb\n",
+        &[],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let eb_env = file_text(&env, "env.build.Bar-2.0-foss-2025a");
+    assert!(
+        eb_env.contains(&format!("EASYBUILD_BUILDPATH={r}/build/cpu\n")),
+        "{eb_env}"
+    );
+    assert!(
+        eb_env.contains(&format!(
+            "EASYBUILD_SOURCEPATH={r}/sources/cpu:{r}/sources\n"
+        )),
+        "{eb_env}"
+    );
+    let c = calls(&env, "staged.calls");
+    assert!(
+        c[0].contains(&format!(" --state-root {r}/state/cpu ")),
+        "{c:?}"
+    );
+}
+
+#[test]
 fn job_id_must_be_a_positive_integer_without_leading_zero() {
     for bad in ["", "0123", "abc", "0", "12x"] {
         let env = setup(ADMISSION);

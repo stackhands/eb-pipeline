@@ -1,6 +1,7 @@
 //! Loading and validating site files.
 
 use crate::exit::Fail;
+use crate::resolve::Scope;
 use crate::schema::*;
 use crate::util::parse_version;
 use std::collections::{BTreeMap, BTreeSet};
@@ -122,31 +123,13 @@ fn apply_override(table: &mut toml::Table, name: &str, raw: &str) -> Result<(), 
 
 const PLACEHOLDERS: &[&str] = &["project", "build", "phase", "target"];
 
+/// Placeholders of a site path that takes one value per target.
+const PER_TARGET: &[&str] = &["target"];
+
 fn name_ok(s: &str) -> bool {
     !s.is_empty()
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-}
-
-fn check_template(t: &str, errs: &mut Vec<String>) {
-    let mut rest = t;
-    while let Some(i) = rest.find('{') {
-        match rest[i..].find('}') {
-            Some(j) => {
-                let key = &rest[i + 1..i + j];
-                if !PLACEHOLDERS.contains(&key) {
-                    errs.push(format!(
-                        "scheduler.job_name_template: unknown placeholder {{{key}}}"
-                    ));
-                }
-                rest = &rest[i + j + 1..];
-            }
-            None => {
-                errs.push("scheduler.job_name_template: unbalanced `{`".into());
-                break;
-            }
-        }
-    }
 }
 
 fn env_name_ok(s: &str) -> bool {
@@ -163,7 +146,11 @@ fn check_placeholders(key: &str, text: &str, allowed: &[&str], errs: &mut Vec<St
             Some(j) => {
                 let name = &rest[i + 1..i + j];
                 if !allowed.contains(&name) {
-                    errs.push(format!("{key}: unknown placeholder {{{name}}}"));
+                    let known: Vec<String> = allowed.iter().map(|a| format!("{{{a}}}")).collect();
+                    errs.push(format!(
+                        "{key}: unknown placeholder {{{name}}}; known: {}",
+                        known.join(", ")
+                    ));
                 }
                 rest = &rest[i + j + 1..];
             }
@@ -339,7 +326,12 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
     if site.scheduler.launch.trim().is_empty() {
         e.push("scheduler.launch: must not be empty".into());
     }
-    check_template(&site.scheduler.job_name_template, &mut e);
+    check_placeholders(
+        "scheduler.job_name_template",
+        &site.scheduler.job_name_template,
+        PLACEHOLDERS,
+        &mut e,
+    );
 
     if site.targets.is_empty() {
         e.push("targets: at least one target is required".into());
@@ -348,6 +340,11 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
     for t in &site.targets {
         if !name_ok(&t.name) {
             e.push(format!("targets: invalid name `{}`", t.name));
+        } else if matches!(t.name.as_str(), "." | "..") {
+            e.push(format!(
+                "targets: invalid name `{}`; a target name is a directory name, of its log directory and wherever {{target}} expands",
+                t.name
+            ));
         }
         if !seen.insert(t.name.clone()) {
             e.push(format!("targets: duplicate name `{}`", t.name));
@@ -421,6 +418,25 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
             e.push(format!("filesystems.{k}: must not be empty"));
         }
     }
+    check_placeholders("filesystems.build_path", &fs.build_path, PER_TARGET, &mut e);
+    for p in &fs.source_paths {
+        check_placeholders("filesystems.source_paths", p, PER_TARGET, &mut e);
+    }
+    let shared = [
+        ("scratch", Some(&fs.scratch)),
+        ("tmp", Some(&fs.tmp)),
+        ("install_root", Some(&fs.install_root)),
+        ("log_root", Some(&fs.log_root)),
+        ("shard_dir", fs.shard_dir.as_ref()),
+        ("configs_repo", fs.configs_repo.as_ref()),
+    ];
+    for (k, v) in shared {
+        if v.is_some_and(|v| v.contains("{target}")) {
+            e.push(format!(
+                "filesystems.{k}: {{target}} expands in filesystems.build_path, filesystems.source_paths and rebuild.state_root only"
+            ));
+        }
+    }
 
     if let Some(a) = &site.admission {
         if !matches!(a.lock_kind.as_str(), "flock" | "posix") {
@@ -474,7 +490,38 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
             }
         }
     }
+    // eb-staged-rebuild locks a live tree through its state root, so one tree
+    // takes one state root.
+    if let Some(r) = site.rebuild_on().filter(|r| {
+        r.state_root
+            .as_deref()
+            .is_some_and(|s| s.contains("{target}"))
+    }) {
+        let mut trees: BTreeMap<String, &str> = BTreeMap::new();
+        for t in site.targets.iter().filter(|t| t.staged.unwrap_or(r.staged)) {
+            let scope = Scope {
+                site,
+                target: t,
+                build_type: None,
+                run_id: String::new(),
+                log_stamp: String::new(),
+            };
+            let tree = scope.software_root().trim_end_matches('/').to_string();
+            match trees.get(&tree) {
+                Some(other) => e.push(format!(
+                    "targets.{}: takes staged rebuilds of the live tree {tree} as targets.{other} does, and rebuild.state_root has {{target}}, which gives that tree two state roots and two locks; drop {{target}} from state_root or give each target its own software_root",
+                    t.name
+                )),
+                None => {
+                    trees.insert(tree, &t.name);
+                }
+            }
+        }
+    }
     if let Some(r) = &site.rebuild {
+        if let Some(s) = &r.state_root {
+            check_placeholders("rebuild.state_root", s, PER_TARGET, &mut e);
+        }
         if !matches!(
             r.backend.as_str(),
             "auto" | "bwrap" | "userns" | "installpath"

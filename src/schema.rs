@@ -182,7 +182,7 @@ doc_struct! {
             "Wrapper command placed before the launch line of CPU-role phases; required for kind `command`."),
         #[serde(default)]
         args: Vec<String> => ("array of string", "[]", false,
-            "Argument templates placed after `command`. When present, a `--` follows them and the phase command comes after it. Placeholders: {phase_dir}, {log_dir}, {work_dir}, {target}, {phase}, {runtime_root}, {shares_ro}, {shares_rw}. {phase_dir} is `<log_dir>/<phase>` and is created before the command starts; {work_dir} is `filesystems.build_path`; the share placeholders join the rendered lists with `:`."),
+            "Argument templates placed after `command`. When present, a `--` follows them and the phase command comes after it. Placeholders: {phase_dir}, {log_dir}, {work_dir}, {target}, {phase}, {runtime_root}, {shares_ro}, {shares_rw}. {phase_dir} is `<log_dir>/<phase>` and is created before the command starts; {work_dir} is the target's `filesystems.build_path`; the share placeholders join the rendered lists with `:`."),
         #[serde(default)]
         env: BTreeMap<String, String> => ("table of string", "{}", false,
             "Environment exported to the routed command; values accept the same placeholders as `args`."),
@@ -289,10 +289,11 @@ doc_struct! {
     Filesystems {
         scratch: String => ("string", "", true, "Scratch root."),
         tmp: String => ("string", "", true, "EASYBUILD_TMPDIR."),
-        build_path: String => ("string", "", true, "EASYBUILD_BUILDPATH."),
+        build_path: String => ("string", "", true,
+            "EASYBUILD_BUILDPATH. `{target}` expands to the target name, which gives each target a build directory of its own; no other placeholder is allowed."),
         #[serde(default)]
         source_paths: Vec<String> => ("array of string", "[]", false,
-            "EASYBUILD_SOURCEPATH entries, joined with `:`."),
+            "EASYBUILD_SOURCEPATH entries, joined with `:`. EasyBuild looks for a source in every entry and downloads a missing one into the first; `{target}` expands to the target name, so `{target}` in the first entry gives each target a download directory of its own. No other placeholder is allowed."),
         install_root: String => ("string", "", true, "EASYBUILD_INSTALLPATH unless a target sets `site_prefix`."),
         #[serde(default = "d_single")]
         export_install_vars: String => ("string", "single", false,
@@ -481,7 +482,8 @@ doc_struct! {
         #[serde(default = "yes")]
         staged: bool => ("boolean", "true", false,
             "Route a line through `eb-staged-rebuild run` when it carries `--rebuild`, `-f` or `--force` as a whole option and its module is already installed. A target can override this with `staged`."),
-        state_root: Option<String> => ("string", "tool default", false, "`--state-root`."),
+        state_root: Option<String> => ("string", "tool default", false,
+            "`--state-root`. `{target}` expands to the target name, which gives each target a state root and a lock of its own; `check` refuses it when two staged targets share a software root, and any other placeholder."),
         #[serde(default = "d_backend")]
         backend: String => ("string", "auto", false, "`auto`, `bwrap`, `userns` or `installpath`."),
         grace_hours: Option<u32> => ("integer", "tool default", false, "`--grace-hours`."),
