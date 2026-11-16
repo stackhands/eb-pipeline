@@ -217,7 +217,18 @@ allocated task, so give each role a task count; the templates use
   build, with `EB_PIPELINE_CACHE_*` in the environment.
 - `logs`: `eb-keep-logs rotate` on `filesystems.log_root`. `[logs.rotate]` needs
   `compress_after_days`, passed as `--compress-after`; `delete_after_days`,
-  passed as `--delete-after`, must be greater.
+  passed as `--delete-after`, must be greater. eb-keep-logs takes no lock
+  and passes over at most the run that it writes into itself: two
+  rotations at once lose each other's updates to a run's `.licensed-logs`,
+  and a rotation compresses the logs of a run that is still writing them once
+  that run's log stamp is a day old in UTC, as it is for a target that
+  started before midnight. So a run holds `<log_root>/.eb-pipeline-rotate.lock`
+  shared from its start and rotates only when it can take that lock alone.
+  While another run under the log root is live or rotating, `logs` is
+  `skipped` and the rotation is left to a run that ends alone; a run that
+  starts while another rotates waits for it. The lock is a `flock`, so it
+  holds between nodes only where the log root's filesystem carries `flock`
+  between them.
 
 ### Per-target line selection
 
@@ -467,7 +478,10 @@ staged build waits up to `[rebuild] lock_timeout` for it, 600 seconds unless
 set, and is `refused` when the first still holds it then, so the run ends with
 78 instead of waiting with no deadline. eb-staged-rebuild has not measured that
 lock between two build nodes. `EASYBUILD_TMPDIR` is safe to share: each `eb`
-makes its own `eb-*` directory under it.
+makes its own `eb-*` directory under it. So is `log_root`: each run writes
+under its own `<log-stamp>/<target>`, and with `[logs.rotate]` a run rotates
+only when no other run under the log root is live (`logs` under
+[Phases](#phases)).
 
 `targets --format json` prints the names as a JSON array on one line, the form
 a CI matrix reads. [examples/ci/github-actions.yml](examples/ci/github-actions.yml)
