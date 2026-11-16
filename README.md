@@ -173,7 +173,8 @@ the result.
   is installed, meaning `<modules_root>/all/<Name>/<version>.lua` or a file of
   that name without `.lua` exists. Otherwise it is a normal `eb` call.
   `software_root` and `modules_root` are per-target keys, defaulting to
-  `<install_root>/software` and `<install_root>/modules`; they go to
+  `software` and `modules` under the target's `site_prefix`, or under
+  `filesystems.install_root` when the target sets none; they go to
   `eb-staged-rebuild --software` and `--modules` and to the installed check.
   Each staged line passes its own `--run-id`: `<run-id>-` followed by the
   easyconfig file name without `.eb`, with `.2`, `.3` appended when a list

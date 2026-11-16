@@ -52,6 +52,9 @@ All notable changes to this project are documented here.
 - Each line rebuilt through eb-staged-rebuild passes its own `--run-id`,
   `<run-id>-<easyconfig stem>`. eb-staged-rebuild refuses a run id it already
   holds, so every staged line after the first in a run was refused.
+- The README gives the `software_root` and `modules_root` defaults under the
+  target's `site_prefix`, as `explain` resolves them. It said
+  `<install_root>/software` and `<install_root>/modules`.
 
 ## 0.3.0 - 2026-11-16
 
