@@ -40,6 +40,9 @@ All notable changes to this project are documented here.
 - `stack shard` runs inside the module wrapper and sees what the `[modules]`
   init list sets. Without EESSI-extend's `EASYBUILD_FILTER_DEPS`, the planner
   put filtered tools such as M4, Bison and zlib into the prelude list.
+- `run` leaves out an `installed_modules_dirs` tree that does not exist yet and
+  logs a WARN. On a new site prefix, `stack shard` refused the missing
+  `modules/all` and the run exited 2 before any build.
 
 ## 0.3.0 - 2026-11-16
 

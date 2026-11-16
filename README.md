@@ -143,7 +143,9 @@ the result.
   (default 3) means the planner built the plan unsharded. The list then builds
   as one unit. The planner runs inside the module wrapper, so what the
   `[modules]` init list sets, EESSI-extend's `EASYBUILD_FILTER_DEPS` for
-  example, reaches it.
+  example, reaches it. `run` leaves out an `installed_modules_dirs` tree that
+  does not exist yet, such as the site tree before its first install, and logs
+  a WARN.
 - `admission`: `eb-stack stack admit` before each build unit. Exit 78 retries
   with the backoff in `[admission]` (`attempts`, `wait_seconds`, doubling up to
   `max_wait_seconds`). The job id comes from the variable named by
