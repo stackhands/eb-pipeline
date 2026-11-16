@@ -172,3 +172,45 @@ fn the_ci_example_builds_one_target_at_a_time() {
         );
     }
 }
+
+/// `max-parallel` holds within one run of the workflow; two dispatches are
+/// two runs. The block has no `queue` key: actionlint 1.7.12 refuses it.
+#[test]
+fn the_ci_example_builds_a_target_for_one_dispatch_at_a_time() {
+    let path = root().join("examples/ci/github-actions.yml");
+    let wf = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        !wf.lines().any(|l| l.starts_with("concurrency:")),
+        "{}: a workflow-wide group runs one dispatch at a time",
+        path.display()
+    );
+    let group: Vec<&str> = wf
+        .lines()
+        .skip_while(|l| *l != "  build:")
+        .skip(1)
+        .take_while(|l| l.is_empty() || l.starts_with("    "))
+        .skip_while(|l| *l != "    concurrency:")
+        .skip(1)
+        .take_while(|l| l.starts_with("      "))
+        .map(str::trim)
+        .collect();
+    assert_eq!(
+        group,
+        [
+            "group: eb-pipeline-${{ matrix.target }}",
+            "cancel-in-progress: false",
+        ],
+        "{}: the build job's concurrency",
+        path.display()
+    );
+    let readme = std::fs::read_to_string(root().join("README.md")).unwrap();
+    let text = readme.split_whitespace().collect::<Vec<_>>().join(" ");
+    for needed in [
+        "The build job's `concurrency` group, `eb-pipeline-<target>`,",
+        "`cancel-in-progress: false` leaves the running build alone",
+        "GitHub keeps only one pending job per group, so a third dispatch replaces the waiting one",
+        "It keeps two dispatches off one target, not off one path",
+    ] {
+        assert!(text.contains(needed), "README.md lacks `{needed}`");
+    }
+}

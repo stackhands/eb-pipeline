@@ -485,8 +485,23 @@ staged rebuilds, a state root:
 
 [Per-target paths](#per-target-paths) has examples of all three.
 `eessi-site.toml` has `{target}` in `build_path` and `state_root`; give its
-targets a first source path each before raising `max-parallel`. Dependabot
-updates the action pins in `examples/ci/` along with those in
+targets a first source path each before raising `max-parallel`.
+
+`max-parallel` holds within one run of the workflow, and each dispatch is a
+run of its own. The build job's `concurrency` group, `eb-pipeline-<target>`,
+lets one dispatch at a time build a target: another dispatch's job for that
+target waits until the running one has finished, and
+`cancel-in-progress: false` leaves the running build alone. GitHub keeps only
+one pending job per group, so a third dispatch replaces the waiting one, which
+is cancelled. The group belongs to the repository and has no workflow name in
+it, so another workflow in the repository that uses the same group waits as
+well. It keeps two dispatches off one target, not off one path: one dispatch
+can build a target while another builds a different one. Targets that share a
+build directory, a download directory or a state root therefore need one group
+for the whole build job, `eb-pipeline` with no target in it, so that one build
+job in the repository runs at a time.
+
+Dependabot updates the action pins in `examples/ci/` along with those in
 `.github/workflows/`.
 
 ## Development

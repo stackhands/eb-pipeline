@@ -38,6 +38,16 @@ jobs:
   build:
     needs: targets
     runs-on: [self-hosted, eb-build]
+    # One dispatch at a time builds a target: while one builds it, another
+    # dispatch's job for that target waits, and a running build is never
+    # cancelled. GitHub keeps only one pending job per group, so a third
+    # dispatch replaces the waiting one, which is cancelled. The group
+    # holds across dispatches and workflows of this repository, not across
+    # targets: two dispatches can still build two targets at once. "One
+    # job per target" in the eb-pipeline README has the details.
+    concurrency:
+      group: eb-pipeline-${{ matrix.target }}
+      cancel-in-progress: false
     strategy:
       # One target at a time. Without {target} in [filesystems] build_path
       # every target gets the same EASYBUILD_BUILDPATH, and EasyBuild removes
