@@ -230,8 +230,14 @@ fn validate_route(t: &str, r: &Route, e: &mut Vec<String>) {
 
 fn validate_select(t: &str, s: &Select, e: &mut Vec<String>) {
     if !s.option.starts_with("--") || s.option.len() < 3 || s.option.contains(['=', ' ']) {
+        let bare = s.option.trim_start_matches('-');
+        let hint = if bare.is_empty() || bare.contains(['=', ' ']) {
+            String::new()
+        } else {
+            format!("; write `--{bare}`")
+        };
         e.push(format!(
-            "targets.{t}.select.option: expected a long option such as `--name`, found `{}`",
+            "targets.{t}.select.option: expected a long option with its leading dashes, such as `--name`, found `{}`{hint}",
             s.option
         ));
     }

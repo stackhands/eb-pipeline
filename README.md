@@ -213,18 +213,19 @@ when_absent = "all"         # "all" plans lines without the option, "none" skips
 strip = false               # true removes the option before eb is called
 ```
 
-The option is read as `--name=a,b` or `--name a,b`. A line is planned for the
-target when the option is absent and `when_absent = "all"`, or when its value
-list contains `value`. `plan` and `run` both apply it, to the whole list or to
-each shard unit; a unit left without lines is dropped. With a selector, `run`
-writes the kept lines, in list order and with `strip` applied, to
-`<log_dir>/selected-<target>.list` and passes that file to `stack shard
---build-list`, so deselected lines do not weigh in shard balancing. `plan` shows
-the same path in the shard command, under `selected_list`, and records the kept
-count under `selected`. A shard plan given to `plan --shard-plan` must come from
-that file. `plan` lists the dropped lines under `deselected`, and the result file
-does the same, apart from `lines` and `counts`, so a deselected line never reads
-as a failure. Without `[targets.select]` every line is planned.
+`option` includes the leading dashes, and a line carries it as `--name=a,b` or
+`--name a,b`. A line is planned for the target when the option is absent and
+`when_absent = "all"`, or when its value list contains `value`. `plan` and `run`
+both apply it, to the whole list or to each shard unit; a unit left without
+lines is dropped. With a selector, `run` writes the kept lines, in list order
+and with `strip` applied, to `<log_dir>/selected-<target>.list` and passes that
+file to `stack shard --build-list`, so deselected lines do not weigh in shard
+balancing. `plan` shows the same path in the shard command, under
+`selected_list`, and records the kept count under `selected`. A shard plan given
+to `plan --shard-plan` must come from that file. `plan` lists the dropped lines
+under `deselected`, and the result file does the same, apart from `lines` and
+`counts`, so a deselected line never reads as a failure. Without
+`[targets.select]` every line is planned.
 
 ### Route contract
 
