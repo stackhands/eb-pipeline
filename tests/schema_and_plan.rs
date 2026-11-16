@@ -872,7 +872,6 @@ fn installed_modules_dirs_from_env_plans_placeholders() {
         .any(|e| e.contains("installed_modules_dirs_from_env")));
 }
 
-
 #[test]
 fn eessi_site_prefix_follows_the_install_prefix() {
     let site = MINIMAL.replace(
