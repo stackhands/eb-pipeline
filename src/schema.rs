@@ -415,7 +415,7 @@ doc_struct! {
         init: Vec<String> => ("array of string", "", true,
             "Modules loaded, in order, after `module purge` in every EasyBuild phase and around `stack shard`. May be empty."),
         #[serde(default)]
-        unuse_path: bool => ("boolean", "false", false, "Clears MODULEPATH before loading."),
+        unuse_path: bool => ("boolean", "false", false, "Clears MODULEPATH after `shell_init` and before loading `init`, so the first `init` module needs an absolute path."),
         #[serde(default = "d_shell")]
         shell: String => ("string", "bash", false, "Shell that runs the module wrapper."),
         shell_init: Option<String> => ("string", "none", false,

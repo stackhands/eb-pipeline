@@ -103,6 +103,10 @@ All notable changes to this project are documented here.
 - The schema says that `[targets.select] option` includes the leading dashes,
   and `check` suggests the dashed form when they are missing. The schema called
   it an option name, which reads as `for`, a value `check` rejects.
+- The `eessi-site` template no longer sets `modules.unuse_path`, which emptied
+  MODULEPATH after the shell init so the EESSI module could not load. `check`
+  warns when `unuse_path` is set and the first `modules.init` entry is not an
+  absolute path.
 - With `[modules.eessi]` on, `cpu_target` must be an EESSI CPU subdirectory
   (`x86_64/amd/zen4`, `aarch64/neoverse_v1`) and `accel_target` an EESSI
   accelerator subdirectory (`accel/nvidia/cc90`, `accel/amd/gfx90a`). A short

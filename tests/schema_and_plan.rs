@@ -1405,6 +1405,32 @@ fn eessi_targets_take_eessi_subdirectory_forms() {
 }
 
 #[test]
+fn check_warns_when_unuse_path_strands_the_first_init_module() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("site.toml");
+    for (init, warns) in [
+        ("[\"EasyBuild\"]", true),
+        ("[\"/opt/modules/EESSI/2026.06.lua\", \"EasyBuild\"]", false),
+    ] {
+        let site = MINIMAL.replace("init = []", &format!("init = {init}\nunuse_path = true"));
+        std::fs::write(&path, site).unwrap();
+        let o = bin().args(["check", "--site"]).arg(&path).output().unwrap();
+        let err = String::from_utf8(o.stderr).unwrap();
+        assert_eq!(o.status.code(), Some(0), "{err}");
+        assert_eq!(err.contains("modules.unuse_path"), warns, "{init}: {err}");
+    }
+    for f in ["small-cluster.toml", "eessi-site.toml"] {
+        let o = bin()
+            .args(["check", "--site"])
+            .arg(example(f))
+            .output()
+            .unwrap();
+        let err = String::from_utf8(o.stderr).unwrap();
+        assert!(!err.contains("modules.unuse_path"), "{f}: {err}");
+    }
+}
+
+#[test]
 fn template_roles_start_one_task() {
     for f in ["small-cluster.toml", "eessi-site.toml"] {
         let v: toml::Value = toml::from_str(&std::fs::read_to_string(example(f)).unwrap()).unwrap();

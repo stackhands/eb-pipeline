@@ -183,7 +183,6 @@ extra_args = ["--disable-robot"]
 
 [modules]
 init = ["<eessi-module>/<release>", "EasyBuild", "<eessi-extend-module>"]
-unuse_path = true
 
 [modules.eessi]
 site_install = true
