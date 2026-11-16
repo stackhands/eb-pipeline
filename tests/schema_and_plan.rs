@@ -570,6 +570,57 @@ fn selection_is_validated() {
     }
 }
 
+#[test]
+fn plan_refuses_a_log_stamp_that_is_not_a_run_directory() {
+    let d = tempfile::tempdir().unwrap();
+    let s = d.path().join("site.toml");
+    let l = d.path().join("l.txt");
+    std::fs::write(&s, MINIMAL).unwrap();
+    std::fs::write(&l, "Foo-1.0-foss-2025a.eb\n").unwrap();
+    let plan = |stamp: &str, from_env: bool| {
+        let mut c = bin();
+        c.args(["plan", "--site"])
+            .arg(&s)
+            .arg("--list")
+            .arg(&l)
+            .args(["--target", "other", "--build-type", "production"]);
+        if from_env {
+            c.env("EB_PIPELINE_LOG_STAMP", stamp);
+        } else {
+            c.args(["--log-stamp", stamp]);
+        }
+        c.output().unwrap()
+    };
+    for from_env in [false, true] {
+        for bad in [
+            "2026-11-16",
+            "20261116_0000",
+            "../20261116_000000",
+            "20261116_000000/x",
+        ] {
+            let o = plan(bad, from_env);
+            assert_eq!(o.status.code(), Some(2), "{bad:?}");
+            let err = String::from_utf8_lossy(&o.stderr);
+            assert!(err.contains("--log-stamp"), "{bad:?}: {err}");
+        }
+        let o = plan("20261116_235959", from_env);
+        assert_eq!(o.status.code(), Some(0));
+        let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+        assert_eq!(v["log_dir"], "/opt/eb/logs/20261116_235959/other");
+    }
+}
+
+#[test]
+fn plan_rotates_with_utc_ages() {
+    // Run directories are named in UTC; eb-keep-logs counts a run's age from
+    // the local midnight of the date in its name.
+    let site = format!("{MINIMAL}[logs]\n[logs.rotate]\ncompress_after_days = 30\n");
+    let v = plan_of(&site, "Foo-1.0-foss-2025a.eb\n", "other");
+    let rotate = &phase(&v, "logs")["commands"][0];
+    assert_eq!(rotate["name"], "rotate");
+    assert_eq!(rotate["env"]["TZ"], "UTC");
+}
+
 const ROUTE: &str = r#"[targets.route]
 kind = "command"
 command = "/opt/r/route --quiet"
