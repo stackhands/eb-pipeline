@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here.
 
+## Unreleased
+
+### Fixed
+
+- The module wrapper sources `modules.shell_init` without `set -e` or
+  `set -u`. EESSI 2026.06's Lmod init reads `EESSI_NO_MODULE_PURGE_ON_INIT`
+  without a default, so with it as `shell_init` every module-wrapped step
+  failed before its command started. A `module` call that fails still stops
+  the step.
+
 ## 0.3.0 - 2026-11-16
 
 The first tagged release. It also carries the changes of 0.2.0 and 0.1.0,

@@ -406,9 +406,12 @@ impl<'a> Scope<'a> {
 }
 
 /// Fixed script of the module wrapper; module names arrive through the
-/// environment, never through interpolation.
-pub const MODULE_SCRIPT: &str = "set -eu
-if [ -n \"${EB_PIPELINE_SHELL_INIT:-}\" ]; then . \"$EB_PIPELINE_SHELL_INIT\"; fi
+/// environment, never through interpolation. The site's init is sourced
+/// without `-e` or `-u`, as a login shell sources it: EESSI's Lmod init
+/// reads variables it never sets. `module` and the command run under `-e`.
+pub const MODULE_SCRIPT: &str =
+    "if [ -n \"${EB_PIPELINE_SHELL_INIT:-}\" ]; then . \"$EB_PIPELINE_SHELL_INIT\"; fi
+set -e
 if [ -n \"${EB_PIPELINE_UNUSE_PATH:-}\" ]; then MODULEPATH=; export MODULEPATH; fi
 module purge
 for m in ${EB_PIPELINE_MODULES:-}; do module load \"$m\"; done

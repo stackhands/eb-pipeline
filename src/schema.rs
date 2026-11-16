@@ -416,7 +416,7 @@ doc_struct! {
         #[serde(default = "d_shell")]
         shell: String => ("string", "bash", false, "Shell that runs the module wrapper."),
         shell_init: Option<String> => ("string", "none", false,
-            "File sourced before `module` is called, for shells that do not define it."),
+            "File sourced before `module` is called, for shells that do not define it. It is sourced without `set -e` or `set -u`; a `module` call that fails still stops the step."),
         eessi: Option<Eessi> => ("table", "none", false, "EESSI site layer."),
         #[serde(default)]
         package_env: BTreeMap<String, BTreeMap<String, String>> => ("table of tables", "{}", false,
