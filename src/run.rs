@@ -591,7 +591,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
         .filter(|a| a.quota_cmd.is_some() && a.reservations.is_some());
     let keep_failed = site.logs_on().is_some_and(|l| l.keep_failed);
     let mut stopped = false;
-    for (u, ss) in units.iter().zip(&unit_stems) {
+    for (ui, (u, ss)) in units.iter().zip(&unit_stems).enumerate() {
         if stopped {
             for (l, s) in u.lines.iter().zip(ss) {
                 st.res.lines.push(LineResult {
@@ -717,11 +717,12 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
             }
         }
 
-        for (l, s) in u.lines.iter().zip(ss) {
+        for (li, (l, s)) in u.lines.iter().zip(ss).enumerate() {
             if fetch_failed.contains(s) {
                 continue;
             }
             if interrupted().is_some() {
+                note_skipped(&mut st, &units, &unit_stems, &fetch_failed, ui, li, p);
                 break;
             }
             make_route_dirs(p, u.role, "build");
@@ -806,6 +807,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
             }
             st.res.lines.push(lr);
             if interrupted().is_some() {
+                note_skipped(&mut st, &units, &unit_stems, &fetch_failed, ui, li + 1, p);
                 break;
             }
         }
@@ -896,6 +898,37 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
     }
 
     finish(st, None)
+}
+
+/// Lines from `(from_unit, from_line)` onward that have not started, recorded
+/// as skipped. A fetch that already failed stays the fetch result.
+fn note_skipped(
+    st: &mut State,
+    units: &[Unit],
+    stems: &[Vec<String>],
+    fetch_failed: &[String],
+    from_unit: usize,
+    from_line: usize,
+    p: &Planner,
+) {
+    for (ui, (u, ss)) in units.iter().zip(stems).enumerate().skip(from_unit) {
+        let start = if ui == from_unit { from_line } else { 0 };
+        for (l, s) in u.lines.iter().zip(ss).skip(start) {
+            if fetch_failed.iter().any(|f| f == s) {
+                continue;
+            }
+            st.res.lines.push(LineResult {
+                easyconfig: l.easyconfig.clone(),
+                unit: u.name.clone(),
+                phase: "build".into(),
+                status: "skipped".into(),
+                exit_code: None,
+                translated_from: None,
+                log: p.log_stdout(s),
+                note: Some("interrupted before this line started".into()),
+            });
+        }
+    }
 }
 
 /// Create the directories a routed command expects; a failure surfaces when
