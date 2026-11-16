@@ -147,7 +147,7 @@ jobs:
           sha256sum --binary eb-pipeline-*.tar.xz source.tar.gz > sha256.sum
           cat sha256.sum
           test "$(wc -l < sha256.sum)" -eq 3
-      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: artifacts/*.tar.xz
       # A draft: release assets cannot change once a release is published,
