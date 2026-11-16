@@ -446,6 +446,8 @@ for every target, so that needs a build path on storage that no two targets'
 build nodes share. Give each target its own state root as well, by leaving
 `[rebuild] state_root` unset: eb-staged-rebuild then keeps its state in
 `<parent of software>/.eb-staged-rebuild`, next to each target's software tree.
+Dependabot updates the action pins in `examples/ci/` along with those in
+`.github/workflows/`.
 
 ## Development
 
