@@ -501,6 +501,12 @@ impl<'a> Planner<'a> {
         self.staged_enabled() && wants_rebuild(line) && self.installed(line)
     }
 
+    /// eb-staged-rebuild run id of one line. That tool refuses a run id it
+    /// has seen before, so each line gets its own: `<run-id>-<stem>`.
+    pub fn staged_run_id(&self, stem: &str) -> String {
+        format!("{}-{stem}", self.scope.run_id)
+    }
+
     pub fn log_stdout(&self, stem: &str) -> String {
         format!("{}/{}.stdout.log", self.scope.log_dir(), stem)
     }
@@ -524,7 +530,7 @@ impl<'a> Planner<'a> {
                 "--backend".into(),
                 r.backend.clone(),
                 "--run-id".into(),
-                self.scope.run_id.clone(),
+                self.staged_run_id(stem),
             ];
             if let Some(s) = &r.state_root {
                 inner.push("--state-root".into());

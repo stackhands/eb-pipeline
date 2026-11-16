@@ -1083,6 +1083,29 @@ fn shard_command_runs_inside_the_module_wrapper() {
 }
 
 #[test]
+fn plan_gives_each_staged_line_its_own_run_id() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("all/Foo")).unwrap();
+    std::fs::write(d.path().join("all/Foo/1.0.lua"), "").unwrap();
+    let site = format!(
+        "{}\n[rebuild]\nstaged = true\n",
+        with_target(&format!("modules_root = \"{}\"", d.path().display()))
+    );
+    let v = plan_of(&site, "Foo-1.0.eb --rebuild\nFoo-1.0.eb -f\n", "other");
+    let ids: Vec<String> = phase(&v, "build")["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            let a = argv_of(c);
+            let i = a.iter().position(|x| x == "--run-id").unwrap();
+            a[i + 1].clone()
+        })
+        .collect();
+    assert_eq!(ids, ["<run-id>-Foo-1.0", "<run-id>-Foo-1.0.2"]);
+}
+
+#[test]
 fn installed_modules_dirs_from_env_plans_placeholders() {
     let site = format!(
         "{MINIMAL}\n[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\ninstalled_modules_dirs = [\"/opt/m\"]\ninstalled_modules_dirs_from_env = [\"MODS_A\", \"MODS_B\"]\n"

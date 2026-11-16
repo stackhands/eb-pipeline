@@ -49,6 +49,9 @@ All notable changes to this project are documented here.
   `--fetch` ignores installed modules, so with the robot an EESSI site fetched
   the sources of the whole toolchain and created empty `software/<Name>`
   directories for it. `templates/eessi-site.toml` sets `--disable-robot`.
+- Each line rebuilt through eb-staged-rebuild passes its own `--run-id`,
+  `<run-id>-<easyconfig stem>`. eb-staged-rebuild refuses a run id it already
+  holds, so every staged line after the first in a run was refused.
 
 ## 0.3.0 - 2026-11-16
 
