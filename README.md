@@ -414,6 +414,12 @@ The scenarios: success, a failed line, admission refused after N attempts,
 admission admitted on the second attempt, staged-rebuild refusal translation,
 and SIGTERM forwarding.
 
+A change adds a news fragment, `changelog.d/+<name>.<type>.md`, with type
+`feature`, `bugfix`, `doc`, `removal` or `misc`.
+`towncrier build --draft --version X.Y.Z` prints the release notes the
+fragments make. A release writes them into `CHANGELOG.md`, as
+[RELEASING.md](RELEASING.md) describes.
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE).

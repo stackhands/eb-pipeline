@@ -1,0 +1,1 @@
+A target's `ledger_config` overrides `[rebuild] ledger_config`, `explain` shows it, and `check` refuses two targets that take staged rebuilds through one ledger configuration. That file names one `target`, so on a site with a sapphirerapids and an icelake target the icelake rebuilds were recorded as `x86_64/intel/sapphirerapids`.

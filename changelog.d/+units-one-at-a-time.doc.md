@@ -1,0 +1,1 @@
+The README says that `run` builds its units one at a time, with no option to build one shard alone, and that a shard list holds input lines only, so a line needs `--robot` to build missing dependencies.

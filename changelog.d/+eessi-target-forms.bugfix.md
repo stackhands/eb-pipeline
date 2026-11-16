@@ -1,0 +1,1 @@
+With `[modules.eessi]` on, `cpu_target` must be an EESSI CPU subdirectory (`x86_64/amd/zen4`, `aarch64/neoverse_v1`) and `accel_target` an EESSI accelerator subdirectory (`accel/nvidia/cc90`, `accel/amd/gfx90a`). A short `cpu_target` such as `amd/zen4` passed `check`, then the EESSI module failed its architecture check at load time. The `eessi-site` template uses the full forms.

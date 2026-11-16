@@ -1,0 +1,1 @@
+Each line rebuilt through eb-staged-rebuild passes its own `--run-id`, `<run-id>-<easyconfig stem>`. eb-staged-rebuild refuses a run id it already holds, so every staged line after the first in a run was refused.

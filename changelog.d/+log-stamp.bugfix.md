@@ -1,0 +1,1 @@
+`--log-stamp` and `EB_PIPELINE_LOG_STAMP` must be a UTC time as `YYYYMMDD_HHMMSS`; anything else is refused with exit 2. `eb-keep-logs rotate` never aged a run directory of another name, and a stamp with `..` or `/` put the logs outside `log_root`.
