@@ -359,6 +359,58 @@ fn admission_needs_a_default_footprint() {
         .any(|e| e.contains("default_footprint")));
 }
 
+#[test]
+fn rotate_needs_compress_after_days_and_a_later_delete() {
+    // `eb-keep-logs rotate` refuses a call without --compress-after, and a
+    // --delete-after that is not later.
+    let site = |rotate: &str| format!("{MINIMAL}[logs]\n[logs.rotate]\n{rotate}");
+    for missing in ["", "delete_after_days = 365\n"] {
+        let err = site::parse(&site(missing)).unwrap_err();
+        assert_eq!(err.code, 2);
+        assert!(err.msg.contains("compress_after_days"), "{}", err.msg);
+    }
+    for delete in [30, 7] {
+        let text = site(&format!(
+            "compress_after_days = 30\ndelete_after_days = {delete}\n"
+        ));
+        let errs = site::validate(&site::parse(&text).unwrap(), None);
+        assert!(
+            errs.iter()
+                .any(|e| e.starts_with("logs.rotate.delete_after_days:")),
+            "{errs:?}"
+        );
+    }
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("site.toml");
+    for bad in [
+        "delete_after_days = 365\n",
+        "compress_after_days = 30\ndelete_after_days = 30\n",
+    ] {
+        std::fs::write(&path, site(bad)).unwrap();
+        let o = bin().args(["check", "--site"]).arg(&path).output().unwrap();
+        assert_eq!(o.status.code(), Some(2), "{bad}");
+    }
+
+    let ok = site("compress_after_days = 30\ndelete_after_days = 365\n");
+    assert!(site::validate(&site::parse(&ok).unwrap(), None).is_empty());
+    let v = plan_of(&ok, "Foo-1.0-foss-2025a.eb\n", "other");
+    let a = argv_of(&phase(&v, "logs")["commands"][0]);
+    let i = a.iter().position(|x| x == "eb-keep-logs").unwrap();
+    assert_eq!(
+        a[i + 1..],
+        [
+            "rotate",
+            "/opt/eb/logs",
+            "--compress-after",
+            "30",
+            "--delete-after",
+            "365"
+        ]
+    );
+    let only_compress = site("compress_after_days = 30\n");
+    assert!(site::validate(&site::parse(&only_compress).unwrap(), None).is_empty());
+}
+
 /// Plan `list` for `target` of a site file given as text.
 fn plan_of(site_text: &str, list: &str, target: &str) -> serde_json::Value {
     let d = tempfile::tempdir().unwrap();

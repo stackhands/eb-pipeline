@@ -409,6 +409,14 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
             ));
         }
     }
+    if let Some(r) = site.logs.as_ref().and_then(|l| l.rotate.as_ref()) {
+        if let Some(d) = r.delete_after_days.filter(|d| *d <= r.compress_after_days) {
+            e.push(format!(
+                "logs.rotate.delete_after_days: must be greater than compress_after_days ({}), found {d}",
+                r.compress_after_days
+            ));
+        }
+    }
     if let Some(c) = &site.caches {
         let mut seen = BTreeSet::new();
         for ct in &c.targets {

@@ -451,8 +451,9 @@ doc_struct! {
 doc_struct! {
     /// Rotation limits.
     Rotate {
-        compress_after_days: Option<u32> => ("integer", "none", false, "`eb-keep-logs rotate --compress-after`."),
-        delete_after_days: Option<u32> => ("integer", "none", false, "`eb-keep-logs rotate --delete-after`."),
+        compress_after_days: u32 => ("integer", "", true, "`eb-keep-logs rotate --compress-after`."),
+        delete_after_days: Option<u32> => ("integer", "none", false,
+            "`eb-keep-logs rotate --delete-after`; greater than compress_after_days."),
     }
 }
 

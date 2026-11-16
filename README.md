@@ -168,7 +168,9 @@ the result.
   sets, so that `eb --last-log` prints the log path on one line.
 - `caches`: runs `[caches].command` once for the selected target, after a clean
   build, with `EB_PIPELINE_CACHE_*` in the environment.
-- `logs`: `eb-keep-logs rotate` on `filesystems.log_root`.
+- `logs`: `eb-keep-logs rotate` on `filesystems.log_root`. `[logs.rotate]` needs
+  `compress_after_days`, passed as `--compress-after`; `delete_after_days`,
+  passed as `--delete-after`, must be greater.
 
 ### Per-target line selection
 

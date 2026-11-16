@@ -551,11 +551,9 @@ impl<'a> Planner<'a> {
             Tool::EbKeepLogs.bin(self.site()),
             "rotate".into(),
             self.site().filesystems.log_root.clone(),
+            "--compress-after".into(),
+            r.compress_after_days.to_string(),
         ];
-        if let Some(d) = r.compress_after_days {
-            a.push("--compress-after".into());
-            a.push(d.to_string());
-        }
         if let Some(d) = r.delete_after_days {
             a.push("--delete-after".into());
             a.push(d.to_string());
