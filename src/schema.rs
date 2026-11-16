@@ -71,6 +71,9 @@ fn d_shell() -> String {
 fn d_backend() -> String {
     "auto".into()
 }
+fn d_lock_timeout() -> u64 {
+    600
+}
 fn d_route_kind() -> String {
     "none".into()
 }
@@ -484,6 +487,9 @@ doc_struct! {
             "Route a line through `eb-staged-rebuild run` when it carries `--rebuild`, `-f` or `--force` as a whole option and its module is already installed. A target can override this with `staged`."),
         state_root: Option<String> => ("string", "tool default", false,
             "`--state-root`. `{target}` expands to the target name, which gives each target a state root and a lock of its own; `check` refuses it when two staged targets share a software root, and any other placeholder."),
+        #[serde(default = "d_lock_timeout")]
+        lock_timeout: u64 => ("integer", "600", false,
+            "`--lock-timeout`: seconds a staged line waits for the state root's lock, which another eb-staged-rebuild holds for the whole of its build and publish; 0 refuses at once. A line whose wait runs out is `refused`."),
         #[serde(default = "d_backend")]
         backend: String => ("string", "auto", false, "`auto`, `bwrap`, `userns` or `installpath`."),
         grace_hours: Option<u32> => ("integer", "tool default", false, "`--grace-hours`."),

@@ -199,7 +199,12 @@ allocated task, so give each role a task count; the templates use
   Each staged line passes its own `--run-id`: `<run-id>-` followed by the
   easyconfig file name without `.eb`, with `.2`, `.3` appended when a list
   repeats a line. eb-staged-rebuild refuses a run id it already holds, so a
-  staged line runs again under a new `--run-id`. A failed line triggers
+  staged line runs again under a new `--run-id`. eb-staged-rebuild holds
+  `<state root>/.lock` for the whole of a staged build and publish, and each
+  staged line passes `--lock-timeout` from `[rebuild] lock_timeout` (default
+  600 seconds; 0 refuses at once). A line whose wait runs out is `refused`, and
+  its note and the ERROR line name the lock that another eb-staged-rebuild
+  holds. A failed line triggers
   `eb-keep-logs failed` when `[logs].keep_failed` is set.
   That step runs with `EASYBUILD_OUTPUT_STYLE=basic`, whatever `[scheduler.env]`
   sets, so that `eb --last-log` prints the log path on one line.
@@ -364,7 +369,7 @@ Sibling tool codes are mapped explicitly:
 |---|---|---|
 | eb-stack `stack admit` | 0 / 78 / 1 / 2 | admitted / refused (retry) / failed / usage, exit 2 |
 | eb-stack `stack shard` | `shards.planner_exit_unsharded` (default 3) | unsharded, continue |
-| eb-staged-rebuild `run` | 2 | refusal there; the line is recorded as `refused` with `translated_from = 2` and the run ends with 78 |
+| eb-staged-rebuild `run` | 2 | refusal there, such as a lock still held when `--lock-timeout` runs out; the line is recorded as `refused` with `translated_from = 2` and the run ends with 78 |
 | eb-staged-rebuild `run` | 75 | pending; the line is recorded as `pending`, exit 75 |
 | eb-staged-rebuild `run` | other non-zero | failed |
 
@@ -449,11 +454,13 @@ with no target in the path. A build removes that directory when it starts and
 again after it installs, so two targets that build one easyconfig at once
 remove each other's build directory, and the build that loses it fails. Staged
 lines of targets that share `[rebuild] state_root`, as the targets of
-`eessi-site.toml` do, take one lock. `run` passes eb-staged-rebuild no
-`--lock-timeout`, so a second staged build waits for the first with no
-deadline, and eb-staged-rebuild has not measured that lock between two build
-nodes. `EASYBUILD_TMPDIR` is safe to share: each `eb` makes its own `eb-*`
-directory under it.
+`eessi-site.toml` do, take one lock, and eb-staged-rebuild holds it for the
+whole of a staged build. A second staged build waits up to
+`[rebuild] lock_timeout` for it, 600 seconds unless set, and is `refused` when
+the first still holds it then, so the run ends with 78 instead of waiting with
+no deadline. eb-staged-rebuild has not measured that
+lock between two build nodes. `EASYBUILD_TMPDIR` is safe to share: each `eb`
+makes its own `eb-*` directory under it.
 
 `targets --format json` prints the names as a JSON array on one line, the form
 a CI matrix reads. [examples/ci/github-actions.yml](examples/ci/github-actions.yml)

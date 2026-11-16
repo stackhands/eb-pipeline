@@ -106,8 +106,28 @@ const STAGED: &str = r#"#!/bin/sh
 D="${STUB_DIR:?}"
 case "$1" in --version) echo "eb-staged-rebuild 1.4.0"; exit 0;; esac
 echo "$*" >> "$D/staged.calls"
-id=""; prev=""
-for a in "$@"; do [ "$prev" = --run-id ] && id="$a"; prev="$a"; done
+id=""; root=""; sw=""; wait=""; prev=""
+for a in "$@"; do
+  case "$prev" in
+    --run-id) id="$a";; --state-root) root="$a";; --software) sw="$a";; --lock-timeout) wait="$a";;
+  esac
+  prev="$a"
+done
+# With STUB_STAGED_LOCKS set, take the state root's lock as the tool does,
+# waiting --lock-timeout. STUB_STAGED_LOCK names another lock instead, such
+# as a ledger's, which the tool takes without waiting.
+if [ -n "${STUB_STAGED_LOCKS:-}" ]; then
+  root="${root:-${EB_STAGED_REBUILD_STATE_ROOT:-$(dirname "$sw")/.eb-staged-rebuild}}"
+  lock="${STUB_STAGED_LOCK:-$root/.lock}"
+  [ -n "${STUB_STAGED_LOCK:-}" ] && wait=0
+  mkdir -p "$(dirname "$lock")"
+  exec 9>>"$lock"
+  case "$wait" in
+    "") flock -w 30 9 || { echo "stub: no --lock-timeout, gave up after 30 s" >&2; exit 99; } ;;
+    0) flock -n 9 ;;
+    *) flock -w "$wait" 9 ;;
+  esac || { echo "eb-staged-rebuild: another eb-staged-rebuild holds the lock at $lock" >&2; exit 2; }
+fi
 if grep -qxF -- "$id" "$D/staged.runs" 2>/dev/null; then
   echo "run $id already exists; resume it or choose another --run-id" >&2; exit 2
 fi
@@ -604,6 +624,112 @@ fn staged_rebuild_refusal_is_translated() {
     assert!(l["note"].as_str().unwrap().contains("refusal"));
     assert_eq!(calls(&env, "staged.calls").len(), 1);
     assert!(calls(&env, "eb.calls").is_empty());
+}
+
+#[test]
+fn a_held_state_root_lock_refuses_the_line_when_lock_timeout_runs_out() {
+    let env = setup("[rebuild]\nstaged = true\nlock_timeout = 1\n");
+    let r = env.dir.path().display().to_string();
+    let text = std::fs::read_to_string(&env.site).unwrap().replace(
+        "staged = true",
+        &format!("staged = true\nstate_root = \"{r}/state\""),
+    );
+    std::fs::write(&env.site, text).unwrap();
+    install_module(&env, "Foo/1.0-foss-2025a.lua");
+    std::fs::create_dir(env.dir.path().join("state")).unwrap();
+    let _held = hold_lock(&env.dir.path().join("state/.lock"), false);
+    let t0 = Instant::now();
+    let o = go(
+        &env,
+        "Foo-1.0-foss-2025a.eb --rebuild\n",
+        &[("STUB_STAGED_LOCKS", "1")],
+    );
+    let took = t0.elapsed();
+    assert_eq!(o.code, 78, "{}", o.stderr);
+    assert!(
+        took >= Duration::from_secs(1) && took < Duration::from_secs(20),
+        "{took:?}"
+    );
+    let c = calls(&env, "staged.calls");
+    assert!(
+        c[0].contains(&format!(" --state-root {r}/state --lock-timeout 1 ")),
+        "{c:?}"
+    );
+    let why = format!(
+        "another eb-staged-rebuild holds the lock at {r}/state/.lock, and rebuild.lock_timeout (1 s) ran out"
+    );
+    let l = &o.result.unwrap()["lines"][0];
+    assert_eq!(l["status"], "refused");
+    assert_eq!(l["exit_code"], 78);
+    assert_eq!(l["translated_from"], 2);
+    assert_eq!(
+        l["note"],
+        format!("eb-staged-rebuild exit 2: {why}; translated to refused (78)")
+    );
+    assert!(
+        o.stderr.contains(&format!(
+            "cpu: Foo-1.0-foss-2025a: refused (exit 2): {why}\n"
+        )),
+        "{}",
+        o.stderr
+    );
+}
+
+#[test]
+fn lock_timeout_zero_refuses_at_once_at_the_tool_default_state_root() {
+    let env = setup("[rebuild]\nstaged = true\nlock_timeout = 0\n");
+    let r = env.dir.path().display().to_string();
+    install_module(&env, "Foo/1.0-foss-2025a.lua");
+    // eb-staged-rebuild's default: EB_STAGED_REBUILD_STATE_ROOT, else
+    // `.eb-staged-rebuild` next to the software tree.
+    let from_env = format!("{r}/env-state");
+    for (root, vars) in [
+        (format!("{r}/install/.eb-staged-rebuild"), vec![]),
+        (
+            from_env.clone(),
+            vec![("EB_STAGED_REBUILD_STATE_ROOT", from_env.as_str())],
+        ),
+    ] {
+        std::fs::create_dir_all(&root).unwrap();
+        let _held = hold_lock(&Path::new(&root).join(".lock"), false);
+        let _ = std::fs::remove_file(env.dir.path().join("staged.calls"));
+        let mut vars = vars;
+        vars.push(("STUB_STAGED_LOCKS", "1"));
+        let t0 = Instant::now();
+        let o = go(&env, "Foo-1.0-foss-2025a.eb --rebuild\n", &vars);
+        assert!(t0.elapsed() < Duration::from_secs(20), "{root}");
+        assert_eq!(o.code, 78, "{root}: {}", o.stderr);
+        assert!(calls(&env, "staged.calls")[0].contains(" --lock-timeout 0 "));
+        assert_eq!(
+            o.result.unwrap()["lines"][0]["note"],
+            format!(
+                "eb-staged-rebuild exit 2: another eb-staged-rebuild holds the lock at {root}/.lock, and rebuild.lock_timeout (0 s) ran out; translated to refused (78)"
+            )
+        );
+    }
+}
+
+#[test]
+fn a_held_lock_other_than_the_state_roots_is_named_alone() {
+    let env = setup("[rebuild]\nstaged = true\n");
+    let r = env.dir.path().display().to_string();
+    install_module(&env, "Foo/1.0-foss-2025a.lua");
+    std::fs::create_dir(env.dir.path().join("ledger")).unwrap();
+    let ledger = format!("{r}/ledger/.lock");
+    let _held = hold_lock(Path::new(&ledger), false);
+    let o = go(
+        &env,
+        "Foo-1.0-foss-2025a.eb --rebuild\n",
+        &[("STUB_STAGED_LOCKS", "1"), ("STUB_STAGED_LOCK", &ledger)],
+    );
+    assert_eq!(o.code, 78, "{}", o.stderr);
+    assert!(calls(&env, "staged.calls")[0].contains(" --lock-timeout 600 "));
+    assert_eq!(
+        o.result.unwrap()["lines"][0]["note"],
+        format!(
+            "eb-staged-rebuild exit 2: another eb-staged-rebuild holds the lock at {ledger}; translated to refused (78)"
+        )
+    );
 }
 
 #[test]

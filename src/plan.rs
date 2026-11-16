@@ -507,6 +507,25 @@ impl<'a> Planner<'a> {
         format!("{}-{stem}", self.scope.run_id)
     }
 
+    /// `<state root>/.lock`, the lock a staged line waits
+    /// `rebuild.lock_timeout` for. Without `rebuild.state_root` the state
+    /// root is eb-staged-rebuild's default: `env_root`, the
+    /// EB_STAGED_REBUILD_STATE_ROOT it sees, else `.eb-staged-rebuild` next to
+    /// the software tree.
+    pub fn state_root_lock(&self, env_root: Option<&str>) -> PathBuf {
+        let root = self
+            .scope
+            .state_root()
+            .or_else(|| env_root.filter(|r| !r.is_empty()).map(str::to_string))
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                let software = PathBuf::from(self.scope.software_root());
+                let parent = software.parent().unwrap_or(Path::new("/"));
+                parent.join(".eb-staged-rebuild")
+            });
+        root.join(".lock")
+    }
+
     /// Why a rebuild line on a staged target builds with plain `eb`: no
     /// module file under the modules root.
     pub fn in_place_reason(&self, line: &ListLine) -> Option<String> {
@@ -549,6 +568,8 @@ impl<'a> Planner<'a> {
                 inner.push("--state-root".into());
                 inner.push(s);
             }
+            inner.push("--lock-timeout".into());
+            inner.push(r.lock_timeout.to_string());
             if let Some(g) = r.grace_hours {
                 inner.push("--grace-hours".into());
                 inner.push(g.to_string());

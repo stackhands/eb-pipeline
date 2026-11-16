@@ -1258,6 +1258,28 @@ fn a_target_state_root_gives_each_target_its_own_state_root() {
 }
 
 #[test]
+fn a_staged_line_waits_a_bounded_time_for_the_state_root_lock() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("all/Foo")).unwrap();
+    std::fs::write(d.path().join("all/Foo/1.0.lua"), "").unwrap();
+    let target = with_target(&format!("modules_root = \"{}\"", d.path().display()));
+    for (key, wait) in [
+        ("", "600"),
+        ("lock_timeout = 45\n", "45"),
+        ("lock_timeout = 0\n", "0"),
+    ] {
+        let site = format!("{target}\n[rebuild]\nstaged = true\n{key}");
+        let v = plan_of(&site, "Foo-1.0.eb --rebuild\n", "other");
+        let a = argv_of(&phase(&v, "build")["commands"][0]);
+        let i = a.iter().position(|x| x == "--lock-timeout").unwrap();
+        assert_eq!(a[i + 1], wait, "{key:?}");
+        assert_eq!(a[i - 2], "--run-id", "{a:?}");
+    }
+    let negative = format!("{target}\n[rebuild]\nlock_timeout = -1\n");
+    assert!(site::parse(&negative).is_err());
+}
+
+#[test]
 fn per_target_paths_take_the_target_placeholder_only() {
     let errs = |text: String| site::validate(&site::parse(&text).unwrap(), None);
     let build_path = |p: &str| MINIMAL.replace("/scratch/x/build", p);
