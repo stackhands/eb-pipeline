@@ -824,6 +824,22 @@ fn dry_run_starts_nothing() {
     assert!(calls(&env, "eb.calls").is_empty());
 }
 
+#[test]
+fn dry_runs_and_input_errors_leave_the_result_file_alone() {
+    let env = setup("");
+    let old = serde_json::json!({"kind": "an earlier run"});
+    std::fs::write(env.dir.path().join("result.json"), old.to_string()).unwrap();
+    let o = finish(&env, driver(&env, LIST, &[], &["--dry-run"]));
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(o.result.as_ref(), Some(&old));
+    let o = go(&env, "\n", &[]);
+    assert_eq!(o.code, 2, "{}", o.stderr);
+    assert_eq!(o.result.as_ref(), Some(&old));
+    let o = go(&env, LIST, &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(o.result.unwrap()["kind"], "result");
+}
+
 fn staged_or_plain(env: &Env, line: &str) -> (usize, usize) {
     let o = go(env, line, &[]);
     assert_eq!(o.code, 0, "{}", o.stderr);
