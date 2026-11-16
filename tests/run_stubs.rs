@@ -93,6 +93,12 @@ const STAGED: &str = r#"#!/bin/sh
 D="${STUB_DIR:?}"
 case "$1" in --version) echo "eb-staged-rebuild 1.4.0"; exit 0;; esac
 echo "$*" >> "$D/staged.calls"
+id=""; prev=""
+for a in "$@"; do [ "$prev" = --run-id ] && id="$a"; prev="$a"; done
+if grep -qxF -- "$id" "$D/staged.runs" 2>/dev/null; then
+  echo "run $id already exists; resume it or choose another --run-id" >&2; exit 2
+fi
+echo "$id" >> "$D/staged.runs"
 exit "${STUB_STAGED_CODE:-0}"
 "#;
 
@@ -427,6 +433,32 @@ fn staged_rebuild_refusal_is_translated() {
     assert!(l["note"].as_str().unwrap().contains("refusal"));
     assert_eq!(calls(&env, "staged.calls").len(), 1);
     assert!(calls(&env, "eb.calls").is_empty());
+}
+
+#[test]
+fn each_staged_line_passes_its_own_run_id() {
+    let env = setup("[rebuild]\nstaged = true\n");
+    install_module(&env, "Foo/1.0-foss-2025a.lua");
+    install_module(&env, "Bar/2.0-foss-2025a.lua");
+    let list = "Foo-1.0-foss-2025a.eb --rebuild\nBar-2.0-foss-2025a.eb -f\nFoo-1.0-foss-2025a.eb --force\n";
+    let o = go(&env, list, &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(o.result.unwrap()["counts"]["success"], 3);
+    assert_eq!(
+        calls(&env, "staged.runs"),
+        [
+            "r1-Foo-1.0-foss-2025a",
+            "r1-Bar-2.0-foss-2025a",
+            "r1-Foo-1.0-foss-2025a.2"
+        ]
+    );
+    assert!(calls(&env, "eb.calls").is_empty());
+
+    let again = go(&env, list, &[]);
+    assert_eq!(again.code, 78, "{}", again.stderr);
+    let r = again.result.unwrap();
+    assert_eq!(r["counts"]["refused"], 3);
+    assert_eq!(r["lines"][0]["translated_from"], 2);
 }
 
 #[test]

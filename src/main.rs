@@ -121,8 +121,9 @@ struct Common {
     /// Build type name (selects per-build-type overrides).
     #[arg(long, env = "EB_PIPELINE_BUILD_TYPE")]
     build_type: String,
-    /// Run label recorded in the result and passed to tools. Default: the log
-    /// stamp for `run`, `<run-id>` for `plan`.
+    /// Run label recorded in the result and passed to tools; a staged rebuild
+    /// line passes `<run-id>-<easyconfig stem>`. Default: the log stamp for
+    /// `run`, `<run-id>` for `plan`.
     #[arg(long, env = "EB_PIPELINE_RUN_ID")]
     run_id: Option<String>,
     /// Timestamp directory under the log root: a UTC time as

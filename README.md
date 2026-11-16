@@ -174,7 +174,11 @@ the result.
   that name without `.lua` exists. Otherwise it is a normal `eb` call.
   `software_root` and `modules_root` are per-target keys, defaulting to
   `<install_root>/software` and `<install_root>/modules`; they go to
-  `eb-staged-rebuild --software` and `--modules` and to the installed check. A failed line triggers
+  `eb-staged-rebuild --software` and `--modules` and to the installed check.
+  Each staged line passes its own `--run-id`: `<run-id>-` followed by the
+  easyconfig file name without `.eb`, with `.2`, `.3` appended when a list
+  repeats a line. eb-staged-rebuild refuses a run id it already holds, so a
+  staged line runs again under a new `--run-id`. A failed line triggers
   `eb-keep-logs failed` when `[logs].keep_failed` is set.
   That step runs with `EASYBUILD_OUTPUT_STYLE=basic`, whatever `[scheduler.env]`
   sets, so that `eb --last-log` prints the log path on one line.
