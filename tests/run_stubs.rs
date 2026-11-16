@@ -277,6 +277,79 @@ fn one_failed_line_exits_one_never_a_sum() {
     assert!(k[0].starts_with("failed 1 Foo-1.0-foss-2025a "), "{k:?}");
 }
 
+/// Replace the site's `[modules]` table: source `init`, then load `modules`.
+fn with_modules(env: &Env, init: &str, modules: &[&str]) {
+    let path = env.dir.path().join("init.sh");
+    std::fs::write(&path, init).unwrap();
+    let list: Vec<String> = modules.iter().map(|m| format!("{m:?}")).collect();
+    let text = std::fs::read_to_string(&env.site).unwrap().replace(
+        "[modules]\ninit = []",
+        &format!(
+            "[modules]\nshell_init = {:?}\ninit = [{}]",
+            path.display().to_string(),
+            list.join(", ")
+        ),
+    );
+    std::fs::write(&env.site, text).unwrap();
+}
+
+/// `module` for the stub inits: it records each call, and `Missing/1.0` does
+/// not load.
+const MODULE_FN: &str = r#"module() {
+    echo "$*" >> "$STUB_DIR/module.calls"
+    [ "$*" != "load Missing/1.0" ]
+}
+"#;
+
+#[test]
+fn the_module_wrapper_sources_an_init_that_reads_unset_variables() {
+    // EESSI 2026.06's init/lmod/bash reads EESSI_NO_MODULE_PURGE_ON_INIT
+    // without a default.
+    let env = setup("");
+    let init = format!("if [ -z \"$EESSI_NO_MODULE_PURGE_ON_INIT\" ]; then :; fi\n{MODULE_FN}");
+    with_modules(
+        &env,
+        &init,
+        &["EESSI/2026.06", "EESSI-extend/2026.06-easybuild"],
+    );
+    let o = go(&env, LIST, &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(calls(&env, "eb.calls").len(), 2);
+    assert_eq!(
+        calls(&env, "module.calls")[..3],
+        [
+            "purge",
+            "load EESSI/2026.06",
+            "load EESSI-extend/2026.06-easybuild"
+        ]
+    );
+}
+
+#[test]
+fn the_module_wrapper_sources_an_init_whose_last_test_is_false() {
+    let env = setup("");
+    let init = format!("{MODULE_FN}[ -n \"${{EESSI_MODULE_DEBUG_INIT:-}}\" ] && echo debug\n");
+    with_modules(&env, &init, &["EESSI/2026.06"]);
+    let o = go(&env, LIST, &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(calls(&env, "eb.calls").len(), 2);
+}
+
+#[test]
+fn a_module_that_does_not_load_fails_the_line() {
+    let env = setup("");
+    with_modules(&env, MODULE_FN, &["Missing/1.0"]);
+    let o = go(&env, "Foo-1.0-foss-2025a.eb\n", &[]);
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    assert!(calls(&env, "eb.calls").is_empty());
+    assert_eq!(o.result.unwrap()["counts"]["failed"], 1);
+    assert_eq!(
+        calls(&env, "module.calls"),
+        ["purge", "load Missing/1.0", "purge", "load Missing/1.0"],
+        "the build and keep-failed steps each stop at the module"
+    );
+}
+
 const ADMISSION: &str = r#"
 [admission]
 quota_cmd = "/opt/q"
