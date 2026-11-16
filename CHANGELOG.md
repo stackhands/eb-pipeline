@@ -96,6 +96,13 @@ All notable changes to this project are documented here.
   one ledger configuration. That file names one `target`, so on a site with a
   sapphirerapids and an icelake target the icelake rebuilds were recorded as
   `x86_64/intel/sapphirerapids`.
+- The result file lists `phases` in pipeline order. Phases that were not
+  configured came first, ahead of `preflight`.
+- A line that ran through eb-staged-rebuild carries a `note` naming it,
+  whatever its status. A successful staged line read like a plain `eb` build.
+- The schema says that `[targets.select] option` includes the leading dashes,
+  and `check` suggests the dashed form when they are missing. The schema called
+  it an option name, which reads as `for`, a value `check` rejects.
 
 ## 0.3.0 - 2026-11-16
 

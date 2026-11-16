@@ -600,6 +600,25 @@ fn selection_separator() {
 }
 
 #[test]
+fn select_option_needs_its_leading_dashes() {
+    for option in ["for", "-for"] {
+        let frag = format!("[targets.select]\noption = \"{option}\"\nvalue = \"o\"\n");
+        let s = site::parse(&with_target(&frag)).unwrap();
+        let errs = site::validate(&s, None);
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("select.option") && e.contains("write `--for`")),
+            "{option}: {errs:?}"
+        );
+    }
+    let doc = eb_pipeline::schema::reference();
+    let (_, select) = doc.split_once("[targets[].select]").unwrap();
+    let (_, option) = select.split_once("option (string, required)").unwrap();
+    let text = option.lines().nth(1).unwrap_or_default();
+    assert!(text.contains("leading dashes"), "{text}");
+}
+
+#[test]
 fn selection_is_validated() {
     for (frag, needle) in [
         ("option = \"only\"\nvalue = \"o\"", "select.option"),

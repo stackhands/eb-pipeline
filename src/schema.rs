@@ -206,7 +206,7 @@ doc_struct! {
     /// Per-target line selection by a build list option.
     Select {
         option: String => ("string", "", true,
-            "Long option name that carries the selection on a build list line, written `--name=a,b` or `--name a,b`."),
+            "Long option that carries the selection on a build list line, leading dashes included: `option = \"--name\"` reads `--name=a,b` or `--name a,b`."),
         value: String => ("string", "", true, "This target's token in the option's value list."),
         #[serde(default = "d_sep")]
         separator: String => ("string", ",", false, "Separator between tokens in the option's value."),
