@@ -319,8 +319,8 @@ doc_struct! {
         quota_cmd: Option<String> => ("string", "none", false,
             "Shell command printing the quota JSON, passed to `stack admit --quota-cmd`."),
         live_jobs_cmd: Option<String> => ("string", "none", false,
-            "Shell command printing live job ids, passed to `stack admit --live-jobs-cmd`."),
-        lock: Option<String> => ("string", "none", false, "Lock file shared by all admission controllers."),
+            "Shell command printing live job ids, passed to `stack admit --live-jobs-cmd`. Without it every other job's reservation counts, including those of jobs that ended without removing theirs; `check` warns."),
+        lock: Option<String> => ("string", "none", false, "Lock file shared by all admission controllers; `run` also takes it to remove the job's reservation."),
         #[serde(default = "d_lock_kind")]
         lock_kind: String => ("string", "flock", false, "`flock` or `posix`; must match the other lock holders."),
         reservations: Option<String> => ("string", "none", false, "Directory of reservations."),

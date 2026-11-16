@@ -280,6 +280,26 @@ fn plan_shows_job_id_placeholder_and_default_footprint() {
 }
 
 #[test]
+fn check_warns_when_admission_has_no_live_jobs_cmd() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("site.toml");
+    let text = std::fs::read_to_string(example("eessi-site.toml")).unwrap();
+    let without = text.replace("live_jobs_cmd = \"/opt/eb-tools/bin/live-jobs\"\n", "");
+    assert_ne!(without, text);
+    for (site, warns) in [(without, true), (text, false)] {
+        std::fs::write(&path, site).unwrap();
+        let o = bin().args(["check", "--site"]).arg(&path).output().unwrap();
+        let err = String::from_utf8(o.stderr).unwrap();
+        assert_eq!(o.status.code(), Some(0), "{err}");
+        assert_eq!(
+            err.contains("admission.live_jobs_cmd is unset"),
+            warns,
+            "{err}"
+        );
+    }
+}
+
+#[test]
 fn plan_expands_a_shard_plan() {
     let d = tempfile::tempdir().unwrap();
     let list = d.path().join("l.txt");

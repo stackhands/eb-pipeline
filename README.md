@@ -165,6 +165,14 @@ the result.
   have no record. A refusal after the last attempt ends the run with exit
   78 and a message that names the attempt count and the tool's last JSON line.
   With `required = true`, a missing `quota_cmd` or `reservations` refuses with 78.
+  When an admitted unit's builds end, or the run ends first, `run` removes the
+  job's reservation `<reservations>/<job>.json` under `lock`, taken as
+  `lock_kind`. A record another writer has replaced since, such as a
+  `forecast` or `waiting` one, is kept with a WARN. A job the scheduler kills
+  leaves its reservation behind, so set `live_jobs_cmd` to print the running
+  jobs of the build account, for example `squeue -h -t R -u <build-user> -o %A`.
+  Without it `stack admit` counts every other job's reservation, and `check`
+  warns.
 - `build`: one `eb` call per list line, started through the scheduler launch
   line of the target. A line goes through `eb-staged-rebuild run` only when
   all three hold: `[rebuild] staged = true` (a target can override it with
