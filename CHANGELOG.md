@@ -55,6 +55,16 @@ All notable changes to this project are documented here.
 - The README gives the `software_root` and `modules_root` defaults under the
   target's `site_prefix`, as `explain` resolves them. It said
   `<install_root>/software` and `<install_root>/modules`.
+- `run` removes the job's reservation, `<reservations>/<job>.json`, under the
+  admission lock when an admitted unit's builds end and when the run ends
+  first. Before, the reservation of the last unit stayed, and without
+  `live_jobs_cmd` every later job counted it against its own admission. A
+  record another writer has replaced since, such as a `forecast` or `waiting`
+  one, is kept with a WARN.
+- `check` warns when admission is configured without `live_jobs_cmd`.
+- The `build` phase is `skipped` with a note when admission refused before
+  any line started, and `refused` when every line that ran was refused. It
+  was `failed` in both cases although no line failed.
 
 ## 0.3.0 - 2026-11-16
 

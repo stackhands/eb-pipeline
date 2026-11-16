@@ -219,6 +219,83 @@ fn last_json_line(path: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The reservation `stack admit` wrote for this job, `<reservations>/<job>.json`.
+struct Reservation {
+    path: PathBuf,
+    job: String,
+    lock: Option<PathBuf>,
+    posix: bool,
+}
+
+/// Take the admission lock the way `stack admit` takes it: `flock`, or a
+/// POSIX record lock over the whole file. Dropping the file releases it.
+fn admission_lock(path: &Path, posix: bool) -> std::io::Result<File> {
+    use std::os::fd::AsRawFd;
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)?;
+    let fd = f.as_raw_fd();
+    // SAFETY: `fd` is open for the whole call, and a zeroed `libc::flock` is
+    // a valid value of that plain C struct.
+    let rc = unsafe {
+        if posix {
+            let mut l: libc::flock = std::mem::zeroed();
+            l.l_type = libc::F_WRLCK as _;
+            l.l_whence = libc::SEEK_SET as _;
+            libc::fcntl(fd, libc::F_SETLKW, &raw const l)
+        } else {
+            libc::flock(fd, libc::LOCK_EX)
+        }
+    };
+    if rc == 0 {
+        Ok(f)
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+/// Remove this job's reservation under the admission lock. A record that is
+/// no longer the one `stack admit` wrote for this job is kept: a forecast or
+/// waiting record belongs to another writer.
+fn release(r: Reservation, target: &str) {
+    let kept = |why: String| {
+        log(
+            "WARN",
+            "admission",
+            target,
+            &format!("reservation {} kept: {why}", r.path.display()),
+        )
+    };
+    let _lock = match r.lock.as_deref().map(|l| admission_lock(l, r.posix)) {
+        Some(Err(e)) => return kept(format!("cannot take the lock: {e}")),
+        held => held,
+    };
+    let text = match std::fs::read_to_string(&r.path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => return kept(e.to_string()),
+    };
+    let ours = serde_json::from_str::<serde_json::Value>(&text).is_ok_and(|v| {
+        v["job"] == r.job.as_str() && v.get("phase").is_none_or(|p| p == "admitted")
+    });
+    if !ours {
+        return kept("it is no longer this job's admitted reservation".into());
+    }
+    match std::fs::remove_file(&r.path) {
+        Ok(()) => log(
+            "INFO",
+            "admission",
+            target,
+            &format!("released {}", r.path.display()),
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => kept(e.to_string()),
+    }
+}
+
 pub struct Options {
     pub dry_run: bool,
 }
@@ -229,6 +306,8 @@ struct State {
     pending: bool,
     failed: bool,
     forced_code: Option<i32>,
+    /// Released when the admitted unit ends, or by `finish`.
+    reservation: Option<Reservation>,
 }
 
 impl State {
@@ -278,6 +357,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
         pending: false,
         failed: false,
         forced_code: None,
+        reservation: None,
     };
 
     let plan = match build_plan(p, lines, None) {
@@ -689,6 +769,15 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                 outcome: kind.into(),
                 last_json: last.clone(),
             });
+            if kind == "admitted" {
+                st.reservation = p.job_id.as_ref().map(|job| Reservation {
+                    path: Path::new(a.reservations.as_deref().unwrap_or_default())
+                        .join(format!("{job}.json")),
+                    job: job.clone(),
+                    lock: a.lock.as_ref().map(PathBuf::from),
+                    posix: a.lock_kind == "posix",
+                });
+            }
             if kind != "admitted" {
                 let msg = if kind == "refused" {
                     format!(
@@ -816,6 +905,9 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                 break;
             }
         }
+        if let Some(r) = st.reservation.take() {
+            release(r, &target);
+        }
         if interrupted().is_some() {
             break;
         }
@@ -826,21 +918,26 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
     if site.admission_on().is_some() && !st.res.admission.is_empty() && !st.refused {
         st.phase("admission", "ok", Some(0), None);
     }
-    let build_failed = st
+    let build: Vec<&str> = st
         .res
         .lines
         .iter()
-        .any(|l| l.status == "failed" && l.phase == "build");
-    st.phase(
-        "build",
-        if build_failed || st.refused && st.res.lines.iter().all(|l| l.status != "success") {
-            "failed"
-        } else {
-            "ok"
-        },
-        None,
-        None,
-    );
+        .filter(|l| l.phase == "build")
+        .map(|l| l.status.as_str())
+        .collect();
+    let (status, note) = if build.contains(&"failed") {
+        ("failed", None)
+    } else if st.refused && build.iter().all(|s| *s == "skipped") {
+        (
+            "skipped",
+            Some("admission refused before any build line started".to_string()),
+        )
+    } else if st.refused && !build.contains(&"success") {
+        ("refused", None)
+    } else {
+        ("ok", None)
+    };
+    st.phase("build", status, None, note);
 
     // caches only after a clean build
     if !st.failed && !st.refused && !st.pending {
@@ -966,6 +1063,9 @@ fn stop_if_signalled(st: &mut State, phase: &str) -> Option<i32> {
 }
 
 fn finish(mut st: State, forced: Option<i32>) -> RunResult {
+    if let Some(r) = st.reservation.take() {
+        release(r, &st.res.target);
+    }
     st.res.ended_at = chrono::Utc::now().to_rfc3339();
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for l in &st.res.lines {

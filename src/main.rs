@@ -182,6 +182,14 @@ fn cmd_check(site_path: &Path, lists_dir: Option<&Path>, probe: bool) -> Result<
                 "admission.required is set without quota_cmd and reservations; `run` will refuse with exit 78",
             );
         }
+        if a.live_jobs_cmd.is_none() && a.quota_cmd.is_some() && a.reservations.is_some() {
+            log(
+                "WARN",
+                "check",
+                &s.site.name,
+                "admission.live_jobs_cmd is unset; stack admit then counts every other job's reservation, including those of jobs that ended without removing theirs",
+            );
+        }
     }
     if probe {
         tools::check_versions(&s, true)?;

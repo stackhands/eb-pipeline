@@ -19,7 +19,19 @@ case "$sub" in
   admit)
     n=$(cat "$D/admit.count" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$D/admit.count"
     ok="${STUB_ADMIT_OK_AT:-1}"
-    if [ "$ok" -gt 0 ] && [ "$n" -ge "$ok" ]; then echo "{\"admitted\":true,\"attempt\":$n}"; exit 0; fi
+    if [ "$ok" -gt 0 ] && [ "$n" -ge "$ok" ]; then
+      res=""; job=""
+      while [ $# -gt 0 ]; do
+        case "$1" in --reservations) res="$2";; --job) job="$2";; esac
+        shift
+      done
+      if [ -d "$res" ]; then
+        if [ -e "$res/$job.json" ]; then echo held >> "$D/admit.saw"; else echo free >> "$D/admit.saw"; fi
+        ph=""; [ -n "${STUB_ADMIT_PHASE:-}" ] && ph=",\"phase\":\"$STUB_ADMIT_PHASE\""
+        echo "{\"job\":\"$job\",\"footprint\":1,\"ts\":\"2026-01-01T00:00:00Z\"$ph}" > "$res/$job.json"
+      fi
+      echo "{\"admitted\":true,\"attempt\":$n}"; exit 0
+    fi
     echo "{\"admitted\":false,\"attempt\":$n}"; exit 78;;
   shard)
     echo "${EASYBUILD_FILTER_DEPS:-}" > "$D/shard.filterdeps"
@@ -406,6 +418,143 @@ fn admission_admitted_on_second_attempt() {
     assert_eq!(r["admission"][0]["attempts"], 2);
     assert_eq!(r["admission"][0]["outcome"], "admitted");
     assert_eq!(calls(&env, "eb.calls").len(), 2);
+}
+
+/// Put the reservations and the admission lock under the test directory;
+/// returns the reservation file of the job the driver runs as.
+fn reservations_here(env: &Env, lock_kind: &str) -> PathBuf {
+    let root = env.dir.path();
+    let res = root.join("res");
+    std::fs::create_dir(&res).unwrap();
+    let text = std::fs::read_to_string(&env.site).unwrap().replace(
+        "reservations = \"/scratch/res\"",
+        &format!(
+            "reservations = \"{}\"\nlock = \"{}\"\nlock_kind = \"{lock_kind}\"",
+            res.display(),
+            root.join("admission.lock").display()
+        ),
+    );
+    std::fs::write(&env.site, text).unwrap();
+    res.join("12345.json")
+}
+
+fn result_phase<'a>(r: &'a Value, name: &str) -> &'a Value {
+    r["phases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == name)
+        .unwrap()
+}
+
+#[test]
+fn each_unit_releases_its_reservation_when_it_ends() {
+    let env = setup(&format!(
+        "[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n{ADMISSION}"
+    ));
+    let held = reservations_here(&env, "flock");
+    let o = go(&env, LIST, &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(calls(&env, "admit.saw"), ["free", "free"]);
+    assert!(!held.exists(), "{}", o.stderr);
+    assert!(
+        o.stderr.contains("INFO [admission] cpu: released"),
+        "{}",
+        o.stderr
+    );
+}
+
+#[test]
+fn a_reservation_another_writer_rewrote_is_kept() {
+    for (phase, kept) in [("forecast", true), ("waiting", true), ("admitted", false)] {
+        let env = setup(ADMISSION);
+        let held = reservations_here(&env, "flock");
+        let o = go(&env, LIST, &[("STUB_ADMIT_PHASE", phase)]);
+        assert_eq!(o.code, 0, "{phase}: {}", o.stderr);
+        assert_eq!(held.exists(), kept, "{phase}: {}", o.stderr);
+        assert_eq!(
+            o.stderr
+                .contains("no longer this job's admitted reservation"),
+            kept,
+            "{phase}: {}",
+            o.stderr
+        );
+    }
+}
+
+/// Take the admission lock in this process, as another controller would.
+fn hold_lock(path: &Path, posix: bool) -> std::fs::File {
+    use std::os::fd::AsRawFd;
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    // SAFETY: the descriptor is open, and a zeroed `libc::flock` is a valid
+    // value of that plain C struct.
+    let rc = unsafe {
+        if posix {
+            let mut l: libc::flock = std::mem::zeroed();
+            l.l_type = libc::F_WRLCK as _;
+            l.l_whence = libc::SEEK_SET as _;
+            libc::fcntl(f.as_raw_fd(), libc::F_SETLK, &raw const l)
+        } else {
+            libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB)
+        }
+    };
+    assert_eq!(rc, 0, "{}", std::io::Error::last_os_error());
+    f
+}
+
+#[test]
+fn the_release_waits_for_the_admission_lock() {
+    for kind in ["flock", "posix"] {
+        let env = setup(ADMISSION);
+        let held = reservations_here(&env, kind);
+        let lock = hold_lock(&env.dir.path().join("admission.lock"), kind == "posix");
+        let mut child = driver(&env, LIST, &[], &[]);
+        std::thread::sleep(Duration::from_millis(700));
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "{kind}: the run ended while the lock was held"
+        );
+        assert!(held.exists(), "{kind}");
+        drop(lock);
+        let o = finish(&env, child);
+        assert_eq!(o.code, 0, "{kind}: {}", o.stderr);
+        assert!(!held.exists(), "{kind}: {}", o.stderr);
+    }
+}
+
+#[test]
+fn build_phase_is_skipped_when_admission_refuses_before_any_line() {
+    let env = setup(ADMISSION);
+    let o = go(&env, LIST, &[("STUB_ADMIT_OK_AT", "0")]);
+    assert_eq!(o.code, 78, "{}", o.stderr);
+    let r = o.result.unwrap();
+    assert_eq!(result_phase(&r, "admission")["status"], "refused");
+    let b = result_phase(&r, "build");
+    assert_eq!(b["status"], "skipped", "{b}");
+    assert!(
+        b["note"].as_str().unwrap().contains("admission refused"),
+        "{b}"
+    );
+}
+
+#[test]
+fn build_phase_is_refused_when_every_line_that_ran_was_refused() {
+    let env = setup("[rebuild]\nstaged = true\n");
+    install_module(&env, "Foo/1.0-foss-2025a.lua");
+    let o = go(
+        &env,
+        "Foo-1.0-foss-2025a.eb --rebuild\n",
+        &[("STUB_STAGED_CODE", "2")],
+    );
+    assert_eq!(o.code, 78, "{}", o.stderr);
+    let r = o.result.unwrap();
+    assert_eq!(result_phase(&r, "build")["status"], "refused");
 }
 
 #[test]
