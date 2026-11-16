@@ -332,6 +332,11 @@ Line statuses: `success`, `failed`, `refused`, `pending`, `skipped`. Lines that
 a target's `[targets.select]` left out appear under `deselected` (`easyconfig`
 and `unit`) and in no status count.
 
+Phase statuses: `ok`, `failed`, `refused`, `skipped`, `not configured`,
+`interrupted`, and `unsharded` for `shard`. The `build` phase is `skipped`,
+with a note, when admission refused before any line started, and `refused`
+when every line that ran was refused.
+
 ## A thin CI caller
 
 ```bash

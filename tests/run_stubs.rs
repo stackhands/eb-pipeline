@@ -438,6 +438,15 @@ fn reservations_here(env: &Env, lock_kind: &str) -> PathBuf {
     res.join("12345.json")
 }
 
+fn result_phase<'a>(r: &'a Value, name: &str) -> &'a Value {
+    r["phases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == name)
+        .unwrap()
+}
+
 #[test]
 fn each_unit_releases_its_reservation_when_it_ends() {
     let env = setup(&format!(
@@ -517,6 +526,35 @@ fn the_release_waits_for_the_admission_lock() {
         assert_eq!(o.code, 0, "{kind}: {}", o.stderr);
         assert!(!held.exists(), "{kind}: {}", o.stderr);
     }
+}
+
+#[test]
+fn build_phase_is_skipped_when_admission_refuses_before_any_line() {
+    let env = setup(ADMISSION);
+    let o = go(&env, LIST, &[("STUB_ADMIT_OK_AT", "0")]);
+    assert_eq!(o.code, 78, "{}", o.stderr);
+    let r = o.result.unwrap();
+    assert_eq!(result_phase(&r, "admission")["status"], "refused");
+    let b = result_phase(&r, "build");
+    assert_eq!(b["status"], "skipped", "{b}");
+    assert!(
+        b["note"].as_str().unwrap().contains("admission refused"),
+        "{b}"
+    );
+}
+
+#[test]
+fn build_phase_is_refused_when_every_line_that_ran_was_refused() {
+    let env = setup("[rebuild]\nstaged = true\n");
+    install_module(&env, "Foo/1.0-foss-2025a.lua");
+    let o = go(
+        &env,
+        "Foo-1.0-foss-2025a.eb --rebuild\n",
+        &[("STUB_STAGED_CODE", "2")],
+    );
+    assert_eq!(o.code, 78, "{}", o.stderr);
+    let r = o.result.unwrap();
+    assert_eq!(result_phase(&r, "build")["status"], "refused");
 }
 
 #[test]

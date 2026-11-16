@@ -918,21 +918,26 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
     if site.admission_on().is_some() && !st.res.admission.is_empty() && !st.refused {
         st.phase("admission", "ok", Some(0), None);
     }
-    let build_failed = st
+    let build: Vec<&str> = st
         .res
         .lines
         .iter()
-        .any(|l| l.status == "failed" && l.phase == "build");
-    st.phase(
-        "build",
-        if build_failed || st.refused && st.res.lines.iter().all(|l| l.status != "success") {
-            "failed"
-        } else {
-            "ok"
-        },
-        None,
-        None,
-    );
+        .filter(|l| l.phase == "build")
+        .map(|l| l.status.as_str())
+        .collect();
+    let (status, note) = if build.contains(&"failed") {
+        ("failed", None)
+    } else if st.refused && build.iter().all(|s| *s == "skipped") {
+        (
+            "skipped",
+            Some("admission refused before any build line started".to_string()),
+        )
+    } else if st.refused && !build.contains(&"success") {
+        ("refused", None)
+    } else {
+        ("ok", None)
+    };
+    st.phase("build", status, None, note);
 
     // caches only after a clean build
     if !st.failed && !st.refused && !st.pending {

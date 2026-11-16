@@ -62,6 +62,9 @@ All notable changes to this project are documented here.
   record another writer has replaced since, such as a `forecast` or `waiting`
   one, is kept with a WARN.
 - `check` warns when admission is configured without `live_jobs_cmd`.
+- The `build` phase is `skipped` with a note when admission refused before
+  any line started, and `refused` when every line that ran was refused. It
+  was `failed` in both cases although no line failed.
 
 ## 0.3.0 - 2026-11-16
 
