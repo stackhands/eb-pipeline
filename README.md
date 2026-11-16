@@ -334,11 +334,11 @@ further child, writes the result file, and exits 143 or 130.
 }
 ```
 
-`run` writes the result file unless `--dry-run` is set or one of these stops it
-first: an invalid site file, an unknown target, an unreadable, empty or
-malformed list, or a tool below its `min_version`. Those exit 2, or 78 when the
-licence gate alone fails, and leave an existing file at the `--result` path as
-it was, so read the exit code before the file.
+`run` writes the result file unless `--dry-run` is set or an input error stops
+it first, such as an invalid site file, an unknown target, an unreadable, empty
+or malformed list, or a tool below its `min_version`. Input errors exit 2, or 78
+when the licence gate alone fails, and leave an existing file at the `--result`
+path as it was, so read the exit code before the file.
 
 Line statuses: `success`, `failed`, `refused`, `pending`, `skipped`. Lines that
 a target's `[targets.select]` left out appear under `deselected` (`easyconfig`
