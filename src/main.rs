@@ -125,8 +125,9 @@ struct Common {
     /// stamp for `run`, `<run-id>` for `plan`.
     #[arg(long, env = "EB_PIPELINE_RUN_ID")]
     run_id: Option<String>,
-    /// Timestamp directory under the log root (`YYYYMMDD_HHMMSS`). Default:
-    /// the current UTC time, taken once per run; `<log-stamp>` for `plan`.
+    /// Timestamp directory under the log root: a UTC time as
+    /// `YYYYMMDD_HHMMSS`, the name `eb-keep-logs rotate` ages. Default: the
+    /// current UTC time, taken once per run; `<log-stamp>` for `plan`.
     #[arg(long, env = "EB_PIPELINE_LOG_STAMP")]
     log_stamp: Option<String>,
 }
@@ -269,6 +270,11 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         dry,
         is_run,
     } = m;
+    if let Some(stamp) = c.log_stamp.as_deref().filter(|s| !util::is_log_stamp(s)) {
+        return Err(Fail::usage(format!(
+            "--log-stamp `{stamp}` is not a UTC time as YYYYMMDD_HHMMSS"
+        )));
+    }
     let (s, errs) = {
         let s = site::load(&c.site)?;
         let e = site::validate(&s, None);

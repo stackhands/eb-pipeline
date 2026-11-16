@@ -34,6 +34,16 @@ pub fn split_args(s: &str) -> Result<Vec<String>, Fail> {
     Ok(out)
 }
 
+/// Whether `s` is a log stamp: a UTC time as `YYYYMMDD_HHMMSS`, the name
+/// `eb-keep-logs rotate` ages as a run directory.
+pub fn is_log_stamp(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 15
+        && b[8] == b'_'
+        && b[..8].iter().chain(&b[9..]).all(u8::is_ascii_digit)
+        && chrono::NaiveDateTime::parse_from_str(s, "%Y%m%d_%H%M%S").is_ok()
+}
+
 /// Parse dotted numbers (`1.2.3`); a leading `v` is accepted.
 pub fn parse_version(s: &str) -> Option<Vec<u64>> {
     let s = s.trim().trim_start_matches('v');
@@ -158,5 +168,29 @@ mod tests {
         let l = parse_list("# c\n\nFoo-1.0-foss-2025a.eb --rebuild\n").unwrap();
         assert_eq!(l.len(), 1);
         assert_eq!(l[0].args, vec!["--rebuild"]);
+    }
+
+    #[test]
+    fn log_stamps() {
+        for ok in ["20261116_024713", "20240229_235959", "19700101_000000"] {
+            assert!(is_log_stamp(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "2026-11-16",
+            "20261116",
+            "20261116_02471",
+            "20261116-024713",
+            "20261116_0247130",
+            "20261301_000000",
+            "20250229_000000",
+            "20261116_240000",
+            "20261116_006000",
+            "+2026116_024713",
+            " 2026116_024713",
+            "../20261116_0247",
+        ] {
+            assert!(!is_log_stamp(bad), "{bad:?}");
+        }
     }
 }
