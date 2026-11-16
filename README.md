@@ -398,6 +398,34 @@ rc=$?
 The caller names no partition, path, licence group or quota command. It maps
 `rc` to its own status and archives the result file and the log directory.
 
+## One job per target
+
+A run builds one target. To build a list on every target, the caller starts
+one `run` per name that `targets` prints, in file order:
+
+```bash
+export EB_PIPELINE_SITE=site.toml EB_PIPELINE_LIST="$LIST" EB_PIPELINE_BUILD_TYPE="$BUILD_TYPE"
+names=$(eb-pipeline targets) || exit
+for t in $names; do
+  EB_PIPELINE_TARGET=$t EB_PIPELINE_RUN_ID="$CI_RUN_ID-$t" \
+    eb-pipeline run --result "result-$t.json" || echo "$t: exit $?" >&2
+done
+```
+
+An invalid site file exits 2 with nothing on stdout, so no run starts. Each
+target needs a run id of its own. `stack shard` writes its plan into
+`<shard_dir>/<run-id>`, which has no target in it, and eb-staged-rebuild
+refuses a run id it already holds, so targets that share
+`[rebuild] state_root` would pass it the same `<run-id>-<easyconfig stem>`.
+The default run id, the log stamp, is the same for two runs that start in the
+same second. Logs go to `<log_root>/<log-stamp>/<target>/`, so targets never
+share a log directory.
+
+`targets --format json` prints the names as a JSON array on one line, the form
+a CI matrix reads. [examples/ci/github-actions.yml](examples/ci/github-actions.yml)
+is a GitHub Actions workflow with one job that prints the array and one build
+job per target; a target that fails leaves the others running.
+
 ## Development
 
 ```bash

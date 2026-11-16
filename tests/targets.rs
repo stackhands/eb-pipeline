@@ -120,3 +120,25 @@ fn the_readme_lists_targets_among_the_subcommands_and_streams() {
         .unwrap_or_default();
     assert!(streams.contains("`targets`"), "{streams:?}");
 }
+
+#[test]
+fn the_ci_example_runs_one_job_per_target() {
+    let path = root().join("examples/ci/github-actions.yml");
+    let wf = std::fs::read_to_string(&path).unwrap();
+    for needed in [
+        "names=$(eb-pipeline targets --format json)",
+        "target: ${{ fromJSON(needs.targets.outputs.names) }}",
+        "fail-fast: false",
+        "EB_PIPELINE_TARGET: ${{ matrix.target }}",
+        "EB_PIPELINE_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}",
+        "eb-pipeline run --result",
+    ] {
+        assert!(wf.contains(needed), "{} lacks `{needed}`", path.display());
+    }
+    // EB_PIPELINE_LINT_DENY adds an operator's own site names to refuse.
+    let denied: Vec<String> = eb_pipeline::lint::deny_from_env()
+        .into_iter()
+        .filter(|d| wf.contains(d.as_str()))
+        .collect();
+    assert!(denied.is_empty(), "{}: {denied:?}", path.display());
+}
