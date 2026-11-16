@@ -344,7 +344,8 @@ further child, writes the result file, and exits 143 or 130.
 ## Result file
 
 `phases` holds the phases the run recorded, in pipeline order from `preflight`
-to `logs`.
+to `logs`. A line that ran through eb-staged-rebuild carries a `note` naming
+it, whatever its status.
 
 ```json
 {

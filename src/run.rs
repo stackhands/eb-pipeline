@@ -848,7 +848,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                 exit_code: Some(ex.code),
                 translated_from: None,
                 log: ex.log.display().to_string(),
-                note: None,
+                note: staged.then(|| "ran through eb-staged-rebuild".into()),
             };
             if ex.code != 0 {
                 let outcome = if staged {

@@ -957,6 +957,28 @@ fn lookalike_options_do_not_trigger_staged_rebuild() {
 }
 
 #[test]
+fn a_staged_line_records_that_it_ran_through_eb_staged_rebuild() {
+    let list = "Foo-1.0-foss-2025a.eb --rebuild\nBar-2.0-foss-2025a.eb\n";
+    for (code, status) in [("0", "success"), ("1", "failed")] {
+        // a fresh site: the staged stub refuses a run id it has already seen
+        let env = setup("[rebuild]\nstaged = true\n");
+        install_module(&env, "Foo/1.0-foss-2025a.lua");
+        let o = go(&env, list, &[("STUB_STAGED_CODE", code)]);
+        let r = o.result.unwrap();
+        let staged = &r["lines"][0];
+        assert_eq!(staged["status"], status, "{}", o.stderr);
+        assert!(
+            staged["note"]
+                .as_str()
+                .is_some_and(|n| n.contains("eb-staged-rebuild")),
+            "{staged}"
+        );
+        assert_eq!(r["lines"][1]["status"], "success");
+        assert!(r["lines"][1].get("note").is_none(), "{}", r["lines"][1]);
+    }
+}
+
+#[test]
 fn target_can_override_staged() {
     let env = setup("[rebuild]\nstaged = true\n");
     let text = std::fs::read_to_string(&env.site)

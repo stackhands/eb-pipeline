@@ -98,6 +98,8 @@ All notable changes to this project are documented here.
   `x86_64/intel/sapphirerapids`.
 - The result file lists `phases` in pipeline order. Phases that were not
   configured came first, ahead of `preflight`.
+- A line that ran through eb-staged-rebuild carries a `note` naming it,
+  whatever its status. A successful staged line read like a plain `eb` build.
 
 ## 0.3.0 - 2026-11-16
 
