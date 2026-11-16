@@ -37,6 +37,9 @@ All notable changes to this project are documented here.
   are named in UTC and rotate counts ages from the local midnight of the
   name's date, so away from UTC a run's age was a day off between the two
   midnights.
+- `stack shard` runs inside the module wrapper and sees what the `[modules]`
+  init list sets. Without EESSI-extend's `EASYBUILD_FILTER_DEPS`, the planner
+  put filtered tools such as M4, Bison and zlib into the prelude list.
 
 ## 0.3.0 - 2026-11-16
 

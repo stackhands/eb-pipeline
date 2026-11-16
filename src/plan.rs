@@ -327,7 +327,7 @@ impl<'a> Planner<'a> {
         }
         Ok(Cmd {
             name: "shard".into(),
-            argv: self.wrapped(Role::Plan, "shard", a, false)?,
+            argv: self.wrapped(Role::Plan, "shard", a, true)?,
             env: BTreeMap::new(),
             note: Some(format!(
                 "exit {} means the plan was built unsharded and the list builds as one unit",

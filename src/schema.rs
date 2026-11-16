@@ -410,7 +410,7 @@ doc_struct! {
     /// Environment modules.
     Modules {
         init: Vec<String> => ("array of string", "", true,
-            "Modules loaded, in order, after `module purge` in every EasyBuild phase. May be empty."),
+            "Modules loaded, in order, after `module purge` in every EasyBuild phase and around `stack shard`. May be empty."),
         #[serde(default)]
         unuse_path: bool => ("boolean", "false", false, "Clears MODULEPATH before loading."),
         #[serde(default = "d_shell")]
