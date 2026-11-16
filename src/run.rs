@@ -220,6 +220,45 @@ fn last_json_line(path: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The lock eb-staged-rebuild names when it gives up waiting for another
+/// writer.
+fn held_lock(path: &Path) -> Option<String> {
+    const HELD: &str = "another eb-staged-rebuild holds the lock at ";
+    let bytes = std::fs::read(path).ok()?;
+    String::from_utf8_lossy(&bytes)
+        .lines()
+        .rev()
+        .find_map(|l| l.split_once(HELD).map(|(_, lock)| lock.trim().to_string()))
+}
+
+/// Why a staged line was refused, when eb-staged-rebuild found a lock held:
+/// the lock, and whether `rebuild.lock_timeout` ran out waiting for it.
+fn lock_refusal(
+    p: &Planner,
+    cmd: &Cmd,
+    env: &BTreeMap<String, String>,
+    log: &Path,
+) -> Option<String> {
+    const ROOT: &str = "EB_STAGED_REBUILD_STATE_ROOT";
+    let lock = held_lock(log)?;
+    let env_root = cmd
+        .env
+        .get(ROOT)
+        .or(env.get(ROOT))
+        .cloned()
+        .or_else(|| std::env::var(ROOT).ok());
+    let ours = p.state_root_lock(env_root.as_deref());
+    if !Path::new(&lock).components().eq(ours.components()) {
+        return Some(format!(
+            "another eb-staged-rebuild holds the lock at {lock}"
+        ));
+    }
+    let n = p.scope.site.rebuild_on().map_or(0, |r| r.lock_timeout);
+    Some(format!(
+        "another eb-staged-rebuild holds the lock at {lock}, and rebuild.lock_timeout ({n} s) ran out"
+    ))
+}
+
 /// The reservation `stack admit` wrote for this job, `<reservations>/<job>.json`.
 struct Reservation {
     path: PathBuf,
@@ -856,15 +895,22 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                 } else {
                     StagedOutcome::Failed
                 };
+                let mut detail = None;
                 match outcome {
                     StagedOutcome::Refused => {
                         lr.status = "refused".into();
                         lr.translated_from = Some(ex.code);
                         lr.exit_code = Some(exit::REFUSED);
-                        lr.note = Some(
-                            "eb-staged-rebuild exit 2 is a refusal; translated to refused (78)"
-                                .into(),
-                        );
+                        detail = lock_refusal(p, &cmd, &env, &ex.log);
+                        lr.note = Some(match &detail {
+                            Some(d) => {
+                                format!("eb-staged-rebuild exit 2: {d}; translated to refused (78)")
+                            }
+                            None => {
+                                "eb-staged-rebuild exit 2 is a refusal; translated to refused (78)"
+                                    .into()
+                            }
+                        });
                         st.refused = true;
                     }
                     StagedOutcome::Pending => {
@@ -879,11 +925,12 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                         st.failed = true;
                     }
                 }
+                let detail = detail.map(|d| format!(": {d}")).unwrap_or_default();
                 log(
                     "ERROR",
                     "build",
                     &target,
-                    &format!("{s}: {} (exit {})", lr.status, ex.code),
+                    &format!("{s}: {} (exit {}){detail}", lr.status, ex.code),
                 );
                 if interrupted().is_none() && keep_failed && lr.status == "failed" {
                     if let Ok(kc) = p.keep_failed_cmd(s, &ex.code.to_string()) {

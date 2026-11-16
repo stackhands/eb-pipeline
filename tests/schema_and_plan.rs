@@ -1174,6 +1174,204 @@ fn plan_gives_each_staged_line_its_own_run_id() {
 }
 
 #[test]
+fn a_target_build_path_gives_each_target_its_own_build_directory() {
+    let site = MINIMAL.replace("/scratch/x/build", "/scratch/x/build/{target}");
+    assert!(site::validate(&site::parse(&site).unwrap(), None).is_empty());
+    for t in ["cpu", "other"] {
+        let v = plan_of(&site, "Foo-1.0.eb\n", t);
+        assert_eq!(
+            phase(&v, "build")["env"]["EASYBUILD_BUILDPATH"],
+            format!("/scratch/x/build/{t}")
+        );
+        // Without the placeholder every target gets the same build path.
+        let v = plan_of(MINIMAL, "Foo-1.0.eb\n", t);
+        assert_eq!(
+            phase(&v, "build")["env"]["EASYBUILD_BUILDPATH"],
+            "/scratch/x/build"
+        );
+    }
+}
+
+#[test]
+fn a_target_source_path_gives_each_target_its_own_download_directory() {
+    let site = MINIMAL.replace(
+        "build_path = \"/scratch/x/build\"",
+        "build_path = \"/scratch/x/build\"\nsource_paths = [\"/scratch/x/sources/{target}\", \"/opt/eb/sources\"]",
+    ) + "[sources]\n";
+    assert!(site::validate(&site::parse(&site).unwrap(), None).is_empty());
+    for t in ["cpu", "other"] {
+        let v = plan_of(&site, "Foo-1.0.eb\n", t);
+        for p in ["sources", "build"] {
+            assert_eq!(
+                phase(&v, p)["env"]["EASYBUILD_SOURCEPATH"],
+                format!("/scratch/x/sources/{t}:/opt/eb/sources"),
+                "{p}"
+            );
+        }
+    }
+}
+
+#[test]
+fn work_dir_is_the_target_build_path() {
+    let site = with_target(
+        "[targets.route]\nkind = \"command\"\ncommand = \"/opt/r/route\"\nargs = [\"--rw\", \"{work_dir}\"]\n",
+    )
+    .replace("/scratch/x/build", "/scratch/x/build/{target}");
+    let s = site::parse(&site).unwrap();
+    assert!(site::validate(&s, None).is_empty());
+    let t = &resolve::explain(&s, Some("other"), None).unwrap()["targets"][0];
+    let launch: Vec<String> = serde_json::from_value(t["phases"]["cpu"]["launch"].clone()).unwrap();
+    assert_eq!(
+        launch[..4],
+        ["/opt/r/route", "--rw", "/scratch/x/build/other", "--"]
+    );
+    assert_eq!(t["env"]["EASYBUILD_BUILDPATH"], "/scratch/x/build/other");
+}
+
+#[test]
+fn a_target_state_root_gives_each_target_its_own_state_root() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("all/Foo")).unwrap();
+    std::fs::write(d.path().join("all/Foo/1.0.lua"), "").unwrap();
+    let site = format!(
+        "{}\n[rebuild]\nstaged = true\nstate_root = \"/opt/eb/{{target}}/.eb-staged-rebuild\"\n",
+        with_target(&format!(
+            "site_prefix = \"/opt/eb/other\"\nmodules_root = \"{}\"",
+            d.path().display()
+        ))
+    );
+    let s = site::parse(&site).unwrap();
+    assert!(site::validate(&s, None).is_empty());
+    let v = plan_of(&site, "Foo-1.0.eb --rebuild\n", "other");
+    let a = argv_of(&phase(&v, "build")["commands"][0]);
+    let i = a.iter().position(|x| x == "--state-root").unwrap();
+    assert_eq!(a[i + 1], "/opt/eb/other/.eb-staged-rebuild");
+    let e = resolve::explain(&s, None, None).unwrap();
+    assert_eq!(
+        e["targets"][0]["state_root"],
+        "/opt/eb/cpu/.eb-staged-rebuild"
+    );
+    assert_eq!(
+        e["targets"][1]["state_root"],
+        "/opt/eb/other/.eb-staged-rebuild"
+    );
+}
+
+#[test]
+fn a_staged_line_waits_a_bounded_time_for_the_state_root_lock() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("all/Foo")).unwrap();
+    std::fs::write(d.path().join("all/Foo/1.0.lua"), "").unwrap();
+    let target = with_target(&format!("modules_root = \"{}\"", d.path().display()));
+    for (key, wait) in [
+        ("", "600"),
+        ("lock_timeout = 45\n", "45"),
+        ("lock_timeout = 0\n", "0"),
+    ] {
+        let site = format!("{target}\n[rebuild]\nstaged = true\n{key}");
+        let v = plan_of(&site, "Foo-1.0.eb --rebuild\n", "other");
+        let a = argv_of(&phase(&v, "build")["commands"][0]);
+        let i = a.iter().position(|x| x == "--lock-timeout").unwrap();
+        assert_eq!(a[i + 1], wait, "{key:?}");
+        assert_eq!(a[i - 2], "--run-id", "{a:?}");
+    }
+    let negative = format!("{target}\n[rebuild]\nlock_timeout = -1\n");
+    assert!(site::parse(&negative).is_err());
+}
+
+#[test]
+fn per_target_paths_take_the_target_placeholder_only() {
+    let errs = |text: String| site::validate(&site::parse(&text).unwrap(), None);
+    let build_path = |p: &str| MINIMAL.replace("/scratch/x/build", p);
+    let state_root = |p: &str| {
+        format!(
+            "{}\n[rebuild]\nstaged = true\nstate_root = \"{p}\"\n",
+            with_target("site_prefix = \"/opt/eb/other\"")
+        )
+    };
+    assert!(errs(build_path("/scratch/x/{target}/b-{target}")).is_empty());
+    assert_eq!(
+        errs(build_path("/scratch/x/{targets}")),
+        ["filesystems.build_path: unknown placeholder {targets}; known: {target}"]
+    );
+    assert_eq!(
+        errs(build_path("/scratch/x/{target")),
+        ["filesystems.build_path: unbalanced `{`"]
+    );
+    let source_paths = |p: &str| {
+        MINIMAL.replace(
+            "build_path = \"/scratch/x/build\"",
+            &format!(
+                "build_path = \"/scratch/x/build\"\nsource_paths = [\"/opt/eb/sources\", \"{p}\"]"
+            ),
+        )
+    };
+    assert!(errs(source_paths("/scratch/x/sources/{target}")).is_empty());
+    assert_eq!(
+        errs(source_paths("/scratch/x/{site}")),
+        ["filesystems.source_paths: unknown placeholder {site}; known: {target}"]
+    );
+    assert_eq!(
+        errs(MINIMAL.replace("/scratch/x/tmp", "/scratch/x/tmp/{target}")),
+        ["filesystems.tmp: {target} expands in filesystems.build_path, filesystems.source_paths and rebuild.state_root only"]
+    );
+    assert!(errs(state_root("/opt/eb/{target}/state")).is_empty());
+    assert_eq!(
+        errs(state_root("/opt/eb/{phase}/state")),
+        ["rebuild.state_root: unknown placeholder {phase}; known: {target}"]
+    );
+    assert_eq!(
+        errs(MINIMAL.replace(
+            "kind = \"slurm\"",
+            "kind = \"slurm\"\njob_name_template = \"{project}-{nope}\""
+        )),
+        ["scheduler.job_name_template: unknown placeholder {nope}; known: {project}, {build}, {phase}, {target}"]
+    );
+}
+
+#[test]
+fn a_target_state_root_cannot_split_one_live_tree() {
+    // Both targets of MINIMAL install into /opt/eb.
+    let site =
+        format!("{MINIMAL}\n[rebuild]\nstaged = true\nstate_root = \"/opt/eb/{{target}}/state\"\n");
+    let errs = site::validate(&site::parse(&site).unwrap(), None);
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(
+        errs[0].starts_with("targets.other: ")
+            && errs[0].contains("/opt/eb/software")
+            && errs[0].contains("targets.cpu"),
+        "{errs:?}"
+    );
+    // One state root for both locks the tree once.
+    let shared = site.replace("/opt/eb/{target}/state", "/opt/eb/state");
+    assert!(site::validate(&site::parse(&shared).unwrap(), None).is_empty());
+    for fix in [
+        "site_prefix = \"/opt/eb/other\"",
+        "software_root = \"/opt/eb/other/software\"",
+        "staged = false",
+    ] {
+        let fixed = site.replace("name = \"other\"", &format!("name = \"other\"\n{fix}"));
+        let errs = site::validate(&site::parse(&fixed).unwrap(), None);
+        assert!(errs.is_empty(), "{fix}: {errs:?}");
+    }
+}
+
+#[test]
+fn a_target_name_is_a_directory_name() {
+    for bad in [".", ".."] {
+        let text = MINIMAL.replace("name = \"other\"", &format!("name = \"{bad}\""));
+        let errs = site::validate(&site::parse(&text).unwrap(), None);
+        assert!(
+            errs.iter()
+                .any(|e| e.starts_with(&format!("targets: invalid name `{bad}`;"))),
+            "{errs:?}"
+        );
+    }
+    let text = MINIMAL.replace("name = \"other\"", "name = \"a..b\"");
+    assert!(site::validate(&site::parse(&text).unwrap(), None).is_empty());
+}
+
+#[test]
 fn eessi_site_install_staged_targets_need_both_roots() {
     let errs = |text: &str| -> Vec<String> {
         site::validate(&site::parse(text).unwrap(), None)
@@ -1256,6 +1454,27 @@ fn eessi_template_roots_sit_under_the_eessi_extend_path() {
         let md = t["modules_root"].as_str().unwrap();
         assert!(sw.starts_with(&base) && sw.ends_with("/software"), "{sw}");
         assert!(md.starts_with(&base) && md.ends_with("/modules"), "{md}");
+    }
+}
+
+#[test]
+fn eessi_template_targets_have_a_build_path_and_a_state_root_each() {
+    let text = std::fs::read_to_string(example("eessi-site.toml")).unwrap();
+    let s = site::parse(&text).unwrap();
+    let v = resolve::explain(&s, None, None).unwrap();
+    let targets = v["targets"].as_array().unwrap();
+    assert_eq!(targets.len(), 4);
+    for t in targets {
+        let name = t["name"].as_str().unwrap();
+        assert_eq!(
+            t["env"]["EASYBUILD_BUILDPATH"],
+            format!("/scratch/<build-user>/build/{name}")
+        );
+        assert_eq!(t["site_prefix"], format!("/opt/eb/{name}"));
+        assert_eq!(
+            t["state_root"],
+            format!("/opt/eb/{name}/.eb-staged-rebuild")
+        );
     }
 }
 

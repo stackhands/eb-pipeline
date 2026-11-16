@@ -100,6 +100,29 @@ impl<'a> Scope<'a> {
             .unwrap_or_else(|| self.site.filesystems.install_root.clone())
     }
 
+    /// EASYBUILD_BUILDPATH of the target.
+    pub fn build_path(&self) -> String {
+        self.per_target(&self.site.filesystems.build_path)
+    }
+
+    /// EASYBUILD_SOURCEPATH entries of the target.
+    pub fn source_paths(&self) -> Vec<String> {
+        let paths = &self.site.filesystems.source_paths;
+        paths.iter().map(|p| self.per_target(p)).collect()
+    }
+
+    /// eb-staged-rebuild `--state-root` of the target; `None` leaves the
+    /// tool's default.
+    pub fn state_root(&self) -> Option<String> {
+        let r = self.site.rebuild.as_ref()?;
+        r.state_root.as_deref().map(|s| self.per_target(s))
+    }
+
+    /// A site path with `{target}` expanded to the target's name.
+    fn per_target(&self, path: &str) -> String {
+        path.replace("{target}", &self.target.name)
+    }
+
     /// Install path EESSI-extend sets for a site install when it loads, over
     /// the exported EASYBUILD_INSTALLPATH. EasyBuild prefers the split install
     /// variables to it, so split mode gets no note.
@@ -206,7 +229,7 @@ impl<'a> Scope<'a> {
         let log_dir = self.log_dir();
         t.replace("{phase_dir}", &format!("{log_dir}/{phase}"))
             .replace("{log_dir}", &log_dir)
-            .replace("{work_dir}", &self.site.filesystems.build_path)
+            .replace("{work_dir}", &self.build_path())
             .replace("{target}", &self.target.name)
             .replace("{phase}", phase)
     }
@@ -335,9 +358,9 @@ impl<'a> Scope<'a> {
             e.insert(k.to_string(), v);
         };
         put("EASYBUILD_TMPDIR", fs.tmp.clone());
-        put("EASYBUILD_BUILDPATH", fs.build_path.clone());
+        put("EASYBUILD_BUILDPATH", self.build_path());
         if !fs.source_paths.is_empty() {
-            put("EASYBUILD_SOURCEPATH", fs.source_paths.join(":"));
+            put("EASYBUILD_SOURCEPATH", self.source_paths().join(":"));
         }
         if fs.export_install_vars == "split" {
             put("EASYBUILD_INSTALLPATH_SOFTWARE", self.software_root());
@@ -531,6 +554,7 @@ pub fn explain(site: &Site, target: Option<&str>, build_type: Option<&str>) -> R
             "modules_root": scope.modules_root(),
             "install_note": scope.eessi_install_note(),
             "staged": t.staged,
+            "state_root": scope.state_root(),
             "ledger_config": scope.ledger_config(),
             "route": t.route,
             "select": t.select,

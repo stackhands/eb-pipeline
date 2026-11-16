@@ -199,7 +199,12 @@ allocated task, so give each role a task count; the templates use
   Each staged line passes its own `--run-id`: `<run-id>-` followed by the
   easyconfig file name without `.eb`, with `.2`, `.3` appended when a list
   repeats a line. eb-staged-rebuild refuses a run id it already holds, so a
-  staged line runs again under a new `--run-id`. A failed line triggers
+  staged line runs again under a new `--run-id`. eb-staged-rebuild holds
+  `<state root>/.lock` for the whole of a staged build and publish, and each
+  staged line passes `--lock-timeout` from `[rebuild] lock_timeout` (default
+  600 seconds; 0 refuses at once). A line whose wait runs out is `refused`, and
+  its note and the ERROR line name the lock that another eb-staged-rebuild
+  holds. A failed line triggers
   `eb-keep-logs failed` when `[logs].keep_failed` is set.
   That step runs with `EASYBUILD_OUTPUT_STYLE=basic`, whatever `[scheduler.env]`
   sets, so that `eb --last-log` prints the log path on one line.
@@ -252,8 +257,9 @@ that `stack shard` lifts out) in a command. Beyond `kind` and `command`:
 | `phases` | `build` (default) and `sources`: the phases whose CPU-role commands are routed |
 
 Placeholders in `args` and `env`: `{phase_dir}` (`<log_dir>/<phase>`, created
-before the command starts), `{log_dir}`, `{work_dir}` (`filesystems.build_path`),
-`{target}`, `{phase}`, `{runtime_root}`, `{shares_ro}`, `{shares_rw}`. Share
+before the command starts), `{log_dir}`, `{work_dir}` (the target's
+`filesystems.build_path`), `{target}`, `{phase}`, `{runtime_root}`,
+`{shares_ro}`, `{shares_rw}`. Share
 entries accept the first three. A route with only `kind` and `command` plans
 exactly the 0.1.0 argv.
 
@@ -268,6 +274,24 @@ exactly the 0.1.0 argv.
   commands as `EB_PIPELINE_FETCH_PROFILE`, serialised as JSON with sorted keys.
 - `[targets.package_env.<Name>]` adds to `[modules.package_env.<Name>]` for that
   target; per key the target value wins.
+
+### Per-target paths
+
+`{target}` in `[filesystems] build_path`, in the entries of
+`[filesystems] source_paths` and in `[rebuild] state_root` expands to the
+target's name. `build_path = "/scratch/<build-user>/build/{target}"` gives each
+target an `EASYBUILD_BUILDPATH` of its own, which `{work_dir}` follows.
+EasyBuild looks for a source in every `source_paths` entry and downloads a
+missing one into the first, writing the file in place, so
+`source_paths = ["/scratch/<build-user>/sources/{target}", "/opt/eb/sources"]`
+gives each target a download directory of its own and still finds the sources
+under `/opt/eb/sources`. `state_root = "/opt/eb/{target}/.eb-staged-rebuild"`
+gives each target an eb-staged-rebuild state root, and so a lock, of its own.
+`plan` and `explain` show the expanded paths. `check` refuses any other
+placeholder in those keys, `{target}` in the other `[filesystems]` paths, the
+target names `.` and `..`, and a `{target}` state root when two staged targets
+share a software root: eb-staged-rebuild locks a live tree through its state
+root, so one tree takes one state root.
 
 ### Install paths, cache module, installed module dirs
 
@@ -345,7 +369,7 @@ Sibling tool codes are mapped explicitly:
 |---|---|---|
 | eb-stack `stack admit` | 0 / 78 / 1 / 2 | admitted / refused (retry) / failed / usage, exit 2 |
 | eb-stack `stack shard` | `shards.planner_exit_unsharded` (default 3) | unsharded, continue |
-| eb-staged-rebuild `run` | 2 | refusal there; the line is recorded as `refused` with `translated_from = 2` and the run ends with 78 |
+| eb-staged-rebuild `run` | 2 | refusal there, such as a lock still held when `--lock-timeout` runs out; the line is recorded as `refused` with `translated_from = 2` and the run ends with 78 |
 | eb-staged-rebuild `run` | 75 | pending; the line is recorded as `pending`, exit 75 |
 | eb-staged-rebuild `run` | other non-zero | failed |
 
@@ -422,31 +446,47 @@ The default run id, the log stamp, is the same for two runs that start in the
 same second. Logs go to `<log_root>/<log-stamp>/<target>/`, so targets never
 share a log directory.
 
-The targets of a site file share their EasyBuild build path, so run them one
-at a time. Every target gets one `EASYBUILD_BUILDPATH` from
-`[filesystems] build_path`, and EasyBuild builds an easyconfig in
+Without `{target}` in `[filesystems] build_path`, the targets of a site file
+share their EasyBuild build path, so run them one at a time. Every target then
+gets one `EASYBUILD_BUILDPATH`, and EasyBuild builds an easyconfig in
 `<build_path>/<name>/<version>/<toolchain>-<toolchain version><versionsuffix>`,
 with no target in the path. A build removes that directory when it starts and
 again after it installs, so two targets that build one easyconfig at once
-remove each other's build directory, and the build that loses it fails. Staged
-lines of targets that share `[rebuild] state_root`, as the targets of
-`eessi-site.toml` do, take one lock. `run` passes eb-staged-rebuild no
-`--lock-timeout`, so a second staged build waits for the first with no
-deadline, and eb-staged-rebuild has not measured that lock between two build
-nodes. `EASYBUILD_TMPDIR` is safe to share: each `eb` makes its own `eb-*`
-directory under it.
+remove each other's build directory, and the build that loses it fails.
+EasyBuild downloads a missing source into the first `source_paths` entry and
+writes the file in place, so a target that looks for a source that another
+target is still downloading there finds the partial file and fails its
+checksum. Staged lines of targets that share `[rebuild] state_root` take one
+lock, and eb-staged-rebuild holds it for the whole of a staged build. A second
+staged build waits up to `[rebuild] lock_timeout` for it, 600 seconds unless
+set, and is `refused` when the first still holds it then, so the run ends with
+78 instead of waiting with no deadline. eb-staged-rebuild has not measured that
+lock between two build nodes. `EASYBUILD_TMPDIR` is safe to share: each `eb`
+makes its own `eb-*` directory under it.
 
 `targets --format json` prints the names as a JSON array on one line, the form
 a CI matrix reads. [examples/ci/github-actions.yml](examples/ci/github-actions.yml)
 is a GitHub Actions workflow with one job that prints the array and one build
-job per target. It sets `max-parallel: 1`, and a target that fails leaves the
-others running. Raise `max-parallel` only where no two targets that build at
-once can reach the same build directory. `[filesystems] build_path` is one path
-for every target, so that needs a build path on storage that no two targets'
-build nodes share. Give each target its own state root as well, by leaving
-`[rebuild] state_root` unset: eb-staged-rebuild then keeps its state in
-`<parent of software>/.eb-staged-rebuild`, next to each target's software tree.
-Dependabot updates the action pins in `examples/ci/` along with those in
+job per target. It sets `max-parallel: 1`, the safe default, and a target that
+fails leaves the others running. Raise `max-parallel` only when no two targets
+that build at once share a build directory, a download directory or, with
+staged rebuilds, a state root:
+
+- `{target}` in `build_path` gives each target a build path of its own. A
+  `build_path` without it is one path for every target, so it needs storage
+  that no two targets' build nodes share.
+- `{target}` in the first `source_paths` entry gives each target a download
+  directory of its own.
+- `{target}` in `state_root` gives each target a state root, and so a lock, of
+  its own, and so does leaving `state_root` unset: eb-staged-rebuild then keeps
+  its state in `<parent of software>/.eb-staged-rebuild`, next to each target's
+  software tree. The staged lines of targets that share a state root take
+  turns, and one that waits longer than `lock_timeout` is refused.
+
+[Per-target paths](#per-target-paths) has examples of all three.
+`eessi-site.toml` has `{target}` in `build_path` and `state_root`; give its
+targets a first source path each before raising `max-parallel`. Dependabot
+updates the action pins in `examples/ci/` along with those in
 `.github/workflows/`.
 
 ## Development
