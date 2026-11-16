@@ -54,9 +54,11 @@ the three tools above the site file enables.
    ```
 
 3. Write a build list: one easyconfig per line, EasyBuild options after it.
+   This one builds pigz on GCCcore 15.2.0, the compiler EESSI 2026.06
+   provides.
 
    ```bash
-   printf 'zlib-1.3.1-GCCcore-14.2.0.eb\n' > list.txt
+   printf 'pigz-2.8-GCCcore-15.2.0.eb\n' > list.txt
    ```
 
 4. Plan it. `plan` computes everything and executes nothing; the JSON is the
