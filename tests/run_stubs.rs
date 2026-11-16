@@ -28,6 +28,9 @@ case "$sub" in
     while [ $# -gt 0 ]; do
       [ "$1" = --out-dir ] && out="$2"
       [ "$1" = --build-list ] && bl="$2"
+      if [ "$1" = --installed-modules-dir ] && [ ! -d "$2" ]; then
+        echo "error: --installed-modules-dir $2: No such file or directory (os error 2)" >&2; exit 2
+      fi
       shift
     done
     mkdir -p "$out"
@@ -511,6 +514,43 @@ fn shard_failure_exits_one() {
     let o = go(&env, LIST, &[("STUB_SHARD", "fail")]);
     assert_eq!(o.code, 1, "{}", o.stderr);
     assert!(calls(&env, "eb.calls").is_empty());
+}
+
+/// Rewrites the site file's `@ROOT@` to the test directory.
+fn rooted(env: &Env) -> String {
+    let r = env.dir.path().display().to_string();
+    let text = std::fs::read_to_string(&env.site)
+        .unwrap()
+        .replace("@ROOT@", &r);
+    std::fs::write(&env.site, text).unwrap();
+    r
+}
+
+#[test]
+fn shard_phase_leaves_out_installed_modules_dirs_not_created_yet() {
+    let env = setup("[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\ninstalled_modules_dirs = [\"@ROOT@/eessi/modules/all\", \"@ROOT@/site/modules/all\"]\ninstalled_modules_dirs_from_env = [\"STUB_MODS\"]\n");
+    let r = rooted(&env);
+    std::fs::create_dir_all(format!("{r}/eessi/modules/all")).unwrap();
+    let user = format!("{r}/user/modules/all");
+    let o = go(&env, LIST, &[("STUB_MODS", user.as_str())]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let c = calls(&env, "eb-stack.calls");
+    let dirs: Vec<&str> = c[0]
+        .split(" --installed-modules-dir ")
+        .skip(1)
+        .map(|d| d.split(' ').next().unwrap())
+        .collect();
+    assert_eq!(dirs, [format!("{r}/eessi/modules/all")], "{c:?}");
+    for d in ["site", "user"] {
+        assert!(
+            o.stderr.contains(&format!(
+                "WARN [shard] cpu: {r}/{d}/modules/all does not exist; no module counts as installed there"
+            )),
+            "{}",
+            o.stderr
+        );
+    }
+    assert_eq!(calls(&env, "eb.calls").len(), 2);
 }
 
 #[test]
@@ -1079,22 +1119,30 @@ fn split_install_vars_reach_the_build() {
 
 #[test]
 fn installed_modules_dirs_come_from_the_environment_at_run_time() {
-    let site = "[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\ninstalled_modules_dirs = [\"/opt/m\"]\ninstalled_modules_dirs_from_env = [\"STUB_MODS\", \"STUB_MODS2\"]\n";
+    let site = "[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\ninstalled_modules_dirs = [\"@ROOT@/m\"]\ninstalled_modules_dirs_from_env = [\"STUB_MODS\", \"STUB_MODS2\"]\n";
     let env = setup(site);
+    let r = rooted(&env);
+    for d in ["m", "a/x", "a/y"] {
+        std::fs::create_dir_all(format!("{r}/{d}")).unwrap();
+    }
+    let mods = format!("{r}/a/x:{r}/a/y");
     let o = go(
         &env,
         LIST,
-        &[("STUB_MODS", "/a/x:/a/y"), ("STUB_MODS2", "")],
+        &[("STUB_MODS", mods.as_str()), ("STUB_MODS2", "")],
     );
     assert_eq!(o.code, 0, "{}", o.stderr);
     let c = calls(&env, "eb-stack.calls");
     assert!(
-        c[0].contains("--installed-modules-dir /opt/m --installed-modules-dir /a/x --installed-modules-dir /a/y"),
+        c[0].contains(&format!(
+            "--installed-modules-dir {r}/m --installed-modules-dir {r}/a/x --installed-modules-dir {r}/a/y"
+        )),
         "{c:?}"
     );
     assert!(!c[0].contains("STUB_MODS"), "{c:?}");
     // an unset variable refuses before any work
     let env = setup(site);
+    rooted(&env);
     let o = go(&env, LIST, &[("STUB_MODS", "/a/x")]);
     assert_eq!(o.code, 78, "{}", o.stderr);
     assert!(calls(&env, "eb-stack.calls").is_empty());
