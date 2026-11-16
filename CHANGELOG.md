@@ -22,6 +22,10 @@ All notable changes to this project are documented here.
   are refused. `stack shard` writes bare names beside `plan.json`.
 - A signal records the build lines that had not started as `skipped`.
 - `templates/eessi-site.toml` marks only `cpu-a` as the default target.
+- Keep-failed steps run with `EASYBUILD_OUTPUT_STYLE=basic`. Without a
+  terminal, EasyBuild 5 wraps the log path that `eb --last-log` prints at 80
+  columns, and `eb-keep-logs failed` kept nothing unless the site had set the
+  style itself.
 
 ## 0.3.0 - 2026-11-16
 

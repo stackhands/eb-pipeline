@@ -419,6 +419,24 @@ fn zero_one_site_files_plan_as_before() {
     assert!(c.get("env").is_none());
 }
 
+#[test]
+fn keep_failed_runs_with_the_basic_output_style() {
+    // Without a terminal, `eb --last-log` in EasyBuild's default style wraps
+    // the path at 80 columns, and `eb-keep-logs failed` reads that path.
+    for scheduler_env in ["", "[scheduler.env]\nEASYBUILD_OUTPUT_STYLE = \"rich\"\n"] {
+        let site = format!("{MINIMAL}{scheduler_env}[logs]\nkeep_failed = true\n");
+        let v = plan_of(&site, "Foo-1.0-foss-2025a.eb\n", "other");
+        let build = phase(&v, "build");
+        let keep = &build["commands"][1];
+        assert_eq!(keep["name"], "keep-failed:Foo-1.0-foss-2025a");
+        assert_eq!(
+            keep["env"]["EASYBUILD_OUTPUT_STYLE"], "basic",
+            "{scheduler_env}"
+        );
+        assert!(build["commands"][0].get("env").is_none(), "{scheduler_env}");
+    }
+}
+
 const SELECT_LIST: &str = "A-1.0.eb\nB-1.0.eb --only-targets=other\nC-1.0.eb --only-targets=x,other --rebuild\nD-1.0.eb --only-targets x\nE-1.0.eb --only-targets=x\n";
 
 fn build_names(v: &serde_json::Value) -> Vec<String> {

@@ -164,6 +164,8 @@ the result.
   `<install_root>/software` and `<install_root>/modules`; they go to
   `eb-staged-rebuild --software` and `--modules` and to the installed check. A failed line triggers
   `eb-keep-logs failed` when `[logs].keep_failed` is set.
+  That step runs with `EASYBUILD_OUTPUT_STYLE=basic`, whatever `[scheduler.env]`
+  sets, so that `eb --last-log` prints the log path on one line.
 - `caches`: runs `[caches].command` once for the selected target, after a clean
   build, with `EB_PIPELINE_CACHE_*` in the environment.
 - `logs`: `eb-keep-logs rotate` on `filesystems.log_root`.

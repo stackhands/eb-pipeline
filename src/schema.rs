@@ -463,7 +463,7 @@ doc_struct! {
         enabled: bool => ("boolean", "true", false, "Set false to skip the phase."),
         #[serde(default = "yes")]
         keep_failed: bool => ("boolean", "true", false,
-            "Run `eb-keep-logs failed` after a failed line."),
+            "Run `eb-keep-logs failed` after a failed line, with EASYBUILD_OUTPUT_STYLE=basic so that `eb --last-log` prints the log path on one line."),
         rotate: Option<Rotate> => ("table", "none", false,
             "Run `eb-keep-logs rotate <log_root>` at the end of the run."),
     }
