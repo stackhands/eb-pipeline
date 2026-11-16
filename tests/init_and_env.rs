@@ -80,6 +80,24 @@ fn init_prints_on_stdout_and_refuses_an_unknown_name() {
 }
 
 #[test]
+fn help_lists_dry_run_output_among_what_stdout_carries() {
+    let o = bin().arg("--help").output().unwrap();
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    let help = String::from_utf8_lossy(&o.stdout)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let carried = help
+        .split_once("Output streams: stdout carries ")
+        .and_then(|(_, rest)| rest.split_once(" output only."))
+        .map(|(carried, _)| carried)
+        .unwrap_or_default();
+    for name in ["plan", "explain", "schema", "init", "run --dry-run"] {
+        assert!(carried.contains(name), "{name} missing from {carried:?}");
+    }
+}
+
+#[test]
 fn flags_fall_back_to_the_environment() {
     let o = bin()
         .arg("check")

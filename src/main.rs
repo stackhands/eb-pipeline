@@ -21,8 +21,9 @@ command line wins. EB_PIPELINE__SECTION__KEY=value sets one site file value, for
 example EB_PIPELINE__FILESYSTEMS__SCRATCH=/scratch/eb; the result is validated
 like the file.
 
-Output streams: stdout carries plan, explain, schema and init output only. Events go to
-stderr as `LEVEL [phase] target: message`. The result JSON goes to --result.
+Output streams: stdout carries plan, explain, schema, init and run --dry-run output
+only. Events go to stderr as `LEVEL [phase] target: message`. The result JSON goes
+to --result.
 
 ";
 

@@ -65,6 +65,8 @@ All notable changes to this project are documented here.
 - The `build` phase is `skipped` with a note when admission refused before
   any line started, and `refused` when every line that ran was refused. It
   was `failed` in both cases although no line failed.
+- `eb-pipeline --help` lists `run --dry-run` output among what stdout carries,
+  as the README does.
 - The README says when `run` writes the result file: never for `--dry-run`, and
   never when an input error stops it first, which leaves an older file in place.
 - The README says that `run` builds its units one at a time, with no option to
