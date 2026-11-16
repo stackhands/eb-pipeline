@@ -401,7 +401,8 @@ The caller names no partition, path, licence group or quota command. It maps
 ## One job per target
 
 A run builds one target. To build a list on every target, the caller starts
-one `run` per name that `targets` prints, in file order:
+one `run` per name that `targets` prints, in file order, each after the
+previous one has finished:
 
 ```bash
 export EB_PIPELINE_SITE=site.toml EB_PIPELINE_LIST="$LIST" EB_PIPELINE_BUILD_TYPE="$BUILD_TYPE"
@@ -421,10 +422,30 @@ The default run id, the log stamp, is the same for two runs that start in the
 same second. Logs go to `<log_root>/<log-stamp>/<target>/`, so targets never
 share a log directory.
 
+The targets of a site file share their EasyBuild build path, so run them one
+at a time. Every target gets one `EASYBUILD_BUILDPATH` from
+`[filesystems] build_path`, and EasyBuild builds an easyconfig in
+`<build_path>/<name>/<version>/<toolchain>-<toolchain version><versionsuffix>`,
+with no target in the path. A build removes that directory when it starts and
+again after it installs, so two targets that build one easyconfig at once
+remove each other's build directory, and the build that loses it fails. Staged
+lines of targets that share `[rebuild] state_root`, as the targets of
+`eessi-site.toml` do, take one lock. `run` passes eb-staged-rebuild no
+`--lock-timeout`, so a second staged build waits for the first with no
+deadline, and eb-staged-rebuild has not measured that lock between two build
+nodes. `EASYBUILD_TMPDIR` is safe to share: each `eb` makes its own `eb-*`
+directory under it.
+
 `targets --format json` prints the names as a JSON array on one line, the form
 a CI matrix reads. [examples/ci/github-actions.yml](examples/ci/github-actions.yml)
 is a GitHub Actions workflow with one job that prints the array and one build
-job per target; a target that fails leaves the others running.
+job per target. It sets `max-parallel: 1`, and a target that fails leaves the
+others running. Raise `max-parallel` only where no two targets that build at
+once can reach the same build directory. `[filesystems] build_path` is one path
+for every target, so that needs a build path on storage that no two targets'
+build nodes share. Give each target its own state root as well, by leaving
+`[rebuild] state_root` unset: eb-staged-rebuild then keeps its state in
+`<parent of software>/.eb-staged-rebuild`, next to each target's software tree.
 
 ## Development
 

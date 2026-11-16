@@ -39,8 +39,13 @@ jobs:
     needs: targets
     runs-on: [self-hosted, eb-build]
     strategy:
-      # A failed target leaves the others running. Without max-parallel, as
-      # many targets build at once as there are free runners with the label.
+      # One target at a time. Every target gets the same EASYBUILD_BUILDPATH,
+      # and EasyBuild removes the build directory of an easyconfig when a
+      # build of it starts, so two targets building one easyconfig at once
+      # break each other's build. "One job per target" in the eb-pipeline
+      # README has the details.
+      max-parallel: 1
+      # A failed target leaves the others running.
       fail-fast: false
       matrix:
         target: ${{ fromJSON(needs.targets.outputs.names) }}

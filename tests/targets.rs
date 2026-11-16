@@ -142,3 +142,16 @@ fn the_ci_example_runs_one_job_per_target() {
         .collect();
     assert!(denied.is_empty(), "{}: {denied:?}", path.display());
 }
+
+/// Every target gets one EASYBUILD_BUILDPATH, and EasyBuild removes the build
+/// directory of an easyconfig when a build of it starts.
+#[test]
+fn the_ci_example_builds_one_target_at_a_time() {
+    let path = root().join("examples/ci/github-actions.yml");
+    let wf = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        wf.lines().any(|l| l.trim() == "max-parallel: 1"),
+        "{} lacks `max-parallel: 1`",
+        path.display()
+    );
+}
