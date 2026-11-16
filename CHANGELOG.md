@@ -10,6 +10,7 @@ All notable changes to this project are documented here.
   the compiler EESSI 2026.06 provides. Its
   `zlib-1.3.1-GCCcore-14.2.0.eb` needed GCCcore 14.2.0 built from source
   first.
+- The README lists the other stackhands tools.
 
 ### Fixed
 
