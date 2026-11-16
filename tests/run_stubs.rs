@@ -950,6 +950,39 @@ fn target_can_override_staged() {
 }
 
 #[test]
+fn staged_rebuild_takes_the_ledger_config_of_its_target() {
+    let rebuild = "[rebuild]\nstaged = true\nledger_config = \"/etc/eb/ledger.json\"\n";
+    let env = setup(rebuild);
+    install_module(&env, "Foo/1.0-foss-2025a.lua");
+    assert_eq!(
+        staged_or_plain(&env, "Foo-1.0-foss-2025a.eb --rebuild\n"),
+        (1, 0)
+    );
+    let c = calls(&env, "staged.calls");
+    assert!(
+        c[0].contains(" --ledger-config /etc/eb/ledger.json -- "),
+        "{c:?}"
+    );
+    // the target's own configuration wins
+    let env = setup(rebuild);
+    let text = std::fs::read_to_string(&env.site).unwrap().replace(
+        "name = \"cpu\"",
+        "name = \"cpu\"\nledger_config = \"/etc/eb/ledger-cpu.json\"",
+    );
+    std::fs::write(&env.site, text).unwrap();
+    install_module(&env, "Foo/1.0-foss-2025a.lua");
+    assert_eq!(
+        staged_or_plain(&env, "Foo-1.0-foss-2025a.eb --rebuild\n"),
+        (1, 0)
+    );
+    let c = calls(&env, "staged.calls");
+    assert!(
+        c[0].contains(" --ledger-config /etc/eb/ledger-cpu.json -- "),
+        "{c:?}"
+    );
+}
+
+#[test]
 fn staged_rebuild_gets_the_target_roots() {
     // defaults: <install_root>/software and <install_root>/modules
     let env = setup("[rebuild]\nstaged = true\n");

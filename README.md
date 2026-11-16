@@ -301,6 +301,15 @@ Limitation: the licence gate checks configuration only. It confirms that every
 required package has a group, a threshold or an exemption; it does not verify
 file permissions or group membership on the host.
 
+### Staged rebuild ledger
+
+`[rebuild] ledger_config` is the file passed to `eb-staged-rebuild run
+--ledger-config`. It names one `target`, which eb-staged-rebuild copies into
+every ledger record, so each target that takes staged rebuilds needs a file of
+its own: a target's `ledger_config` overrides the one in `[rebuild]`, and
+`check` refuses two such targets that resolve to the same file. `explain` shows
+the file of each target.
+
 ## Exit codes
 
 | code | meaning |

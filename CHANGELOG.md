@@ -83,6 +83,11 @@ All notable changes to this project are documented here.
 - A rebuild line on a staged target whose module file is missing under
   `modules_root` is noted on its planned build command and logged as a WARN
   when it runs with plain `eb`.
+- A target's `ledger_config` overrides `[rebuild] ledger_config`, `explain`
+  shows it, and `check` refuses two targets that take staged rebuilds through
+  one ledger configuration. That file names one `target`, so on a site with a
+  sapphirerapids and an icelake target the icelake rebuilds were recorded as
+  `x86_64/intel/sapphirerapids`.
 
 ## 0.3.0 - 2026-11-16
 
