@@ -1126,6 +1126,107 @@ fn plan_gives_each_staged_line_its_own_run_id() {
 }
 
 #[test]
+fn eessi_site_install_staged_targets_need_both_roots() {
+    let errs = |text: &str| -> Vec<String> {
+        site::validate(&site::parse(text).unwrap(), None)
+            .into_iter()
+            .filter(|e| e.contains("need software_root and modules_root"))
+            .collect()
+    };
+    let site =
+        format!("{MINIMAL}\n[modules.eessi]\nsite_install = true\n[rebuild]\nstaged = true\n");
+    let e = errs(&site);
+    assert_eq!(e.len(), 2, "{e:?}");
+    assert!(e[0].starts_with("targets.cpu: "), "{e:?}");
+    assert!(e[1].starts_with("targets.other: "), "{e:?}");
+
+    let roots = "\nsoftware_root = \"/opt/s\"\nmodules_root = \"/opt/m\"";
+    let fixed = site
+        .replace("name = \"cpu\"", &format!("name = \"cpu\"{roots}"))
+        .replace("name = \"other\"", "name = \"other\"\nstaged = false");
+    assert!(errs(&fixed).is_empty(), "{:?}", errs(&fixed));
+    let half = site.replace(
+        "name = \"cpu\"",
+        "name = \"cpu\"\nmodules_root = \"/opt/m\"",
+    );
+    assert_eq!(errs(&half).len(), 2);
+    let split = site.replace(
+        "install_root = \"/opt/eb\"",
+        "install_root = \"/opt/eb\"\nexport_install_vars = \"split\"",
+    );
+    assert!(errs(&split).is_empty());
+    assert!(errs(&site.replace("staged = true", "staged = false")).is_empty());
+    assert!(errs(&site.replace("site_install = true", "site_install = false")).is_empty());
+}
+
+#[test]
+fn explain_names_the_eessi_extend_install_path() {
+    let site = format!("{MINIMAL}\n[modules.eessi]\nsite_install = true\n").replace(
+        "name = \"other\"",
+        "name = \"other\"\nsite_prefix = \"/opt/site/\"\ncpu_target = \"x86_64/amd/zen4\"\naccel_target = \"accel/nvidia/cc90\"",
+    );
+    let note = |text: &str| {
+        let s = site::parse(text).unwrap();
+        resolve::explain(&s, Some("other"), None).unwrap()["targets"][0]["install_note"].clone()
+    };
+    assert_eq!(
+        note(&site),
+        "EESSI-extend replaces EASYBUILD_INSTALLPATH when it loads: \
+         /opt/site/versions/<release>/software/linux/x86_64/amd/zen4, \
+         plus `/accel/nvidia/cc90` for an NVIDIA target when EESSI_ACCELERATOR_INSTALL is set"
+    );
+    let cpu_only = site.replace(
+        "accel_target = \"accel/nvidia/cc90\"",
+        "accel_target = \"\"",
+    );
+    assert!(note(&cpu_only)
+        .as_str()
+        .unwrap()
+        .ends_with("/linux/x86_64/amd/zen4"));
+    let split = site.replace(
+        "install_root = \"/opt/eb\"",
+        "install_root = \"/opt/eb\"\nexport_install_vars = \"split\"",
+    );
+    assert!(note(&split).is_null());
+    assert!(note(&site.replace("site_install = true", "site_install = false")).is_null());
+    assert!(note(MINIMAL).is_null());
+}
+
+#[test]
+fn eessi_template_roots_sit_under_the_eessi_extend_path() {
+    let text = std::fs::read_to_string(example("eessi-site.toml")).unwrap();
+    let s = site::parse(&text).unwrap();
+    let v = resolve::explain(&s, None, None).unwrap();
+    for t in v["targets"].as_array().unwrap() {
+        let base = format!(
+            "{}/versions/<release>/software/linux/",
+            t["site_prefix"].as_str().unwrap()
+        );
+        let note = t["install_note"].as_str().unwrap();
+        assert!(note.contains(&format!("loads: {base}")), "{note}");
+        let sw = t["software_root"].as_str().unwrap();
+        let md = t["modules_root"].as_str().unwrap();
+        assert!(sw.starts_with(&base) && sw.ends_with("/software"), "{sw}");
+        assert!(md.starts_with(&base) && md.ends_with("/modules"), "{md}");
+    }
+}
+
+#[test]
+fn plan_notes_a_rebuild_line_that_runs_in_place() {
+    let site = format!("{MINIMAL}\n[rebuild]\nstaged = true\n");
+    let v = plan_of(&site, "Foo-1.0.eb --rebuild\nBar-1.0.eb\n", "other");
+    let cmds = phase(&v, "build")["commands"].clone();
+    assert_eq!(argv_of(&cmds[0]).iter().filter(|a| *a == "eb").count(), 1);
+    assert_eq!(
+        cmds[0]["note"],
+        "no module file /opt/eb/modules/all/Foo/1.0[.lua]; the rebuild runs as plain eb"
+    );
+    assert!(cmds[1].get("note").is_none());
+    let off = plan_of(MINIMAL, "Foo-1.0.eb --rebuild\n", "other");
+    assert!(phase(&off, "build")["commands"][0].get("note").is_none());
+}
+
+#[test]
 fn installed_modules_dirs_from_env_plans_placeholders() {
     let site = format!(
         "{MINIMAL}\n[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\ninstalled_modules_dirs = [\"/opt/m\"]\ninstalled_modules_dirs_from_env = [\"MODS_A\", \"MODS_B\"]\n"

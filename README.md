@@ -263,6 +263,17 @@ exactly the 0.1.0 argv.
   target's `software_root` and `modules_root` instead of `EASYBUILD_INSTALLPATH`.
   `read_only_installdir_value` sets the value of `EASYBUILD_READ_ONLY_INSTALLDIR`
   (default `"1"`).
+- With `[modules.eessi] site_install = true` and a single install path,
+  EESSI-extend replaces `EASYBUILD_INSTALLPATH` when it loads:
+  `$EESSI_SITE_SOFTWARE_PREFIX/versions/<release>/software/linux/<cpu_target>`,
+  plus `/<accel_target>` for an NVIDIA target when `EESSI_ACCELERATOR_INSTALL`
+  is set. `explain` names that path in each target's `install_note`. A target
+  that takes staged rebuilds must then set `software_root` and `modules_root`
+  to the `software` and `modules` directories under it; `check` refuses the
+  site file otherwise.
+- A `--rebuild`, `-f` or `--force` line on a staged target whose module file
+  is missing under `modules_root` builds with plain `eb`. `plan` notes it on
+  the build command and `run` logs a WARN.
 - `[caches] init_module` is the default `EB_PIPELINE_CACHE_INIT_MODULE`; an entry
   in `[[caches.targets]]` overrides it.
 - `shards.installed_modules_dirs_from_env` names variables whose colon-separated

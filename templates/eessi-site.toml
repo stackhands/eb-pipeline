@@ -40,6 +40,9 @@ eb_optarch = "GCC:-march=<march>"
 max_parallel = 128
 cpu_target = "<vendor>/<uarch>"
 site_prefix = "/opt/eb/cpu-a"
+# EESSI-extend installs into <site_prefix>/versions/<release>/software/linux/<cpu_target>.
+software_root = "/opt/eb/cpu-a/versions/<release>/software/linux/<cpu_target>/software"
+modules_root = "/opt/eb/cpu-a/versions/<release>/software/linux/<cpu_target>/modules"
 default = true
 
 [targets.phases]
@@ -60,6 +63,8 @@ eb_optarch = "GCC:-march=<march>"
 max_parallel = 96
 cpu_target = "<vendor>/<uarch>"
 site_prefix = "/opt/eb/cpu-b"
+software_root = "/opt/eb/cpu-b/versions/<release>/software/linux/<cpu_target>/software"
+modules_root = "/opt/eb/cpu-b/versions/<release>/software/linux/<cpu_target>/modules"
 
 [targets.phases]
 build = "-p <cpu-partition-b> -N 1 --ntasks-per-node=1 -c 96 -t 2-00:00:00"
@@ -72,6 +77,10 @@ cuda_compute_capabilities = "9.0"
 cpu_target = "<vendor>/<uarch>"
 accel_target = "<accel>/<model>"
 site_prefix = "/opt/eb/gpu-a"
+# With EESSI_ACCELERATOR_INSTALL set, EESSI-extend appends /<accel_target> for
+# an NVIDIA target, and the roots follow it.
+software_root = "/opt/eb/gpu-a/versions/<release>/software/linux/<cpu_target>/software"
+modules_root = "/opt/eb/gpu-a/versions/<release>/software/linux/<cpu_target>/modules"
 
 [targets.phases]
 build = "-p <gpu-partition> -N 1 --ntasks-per-node=1 -c 72 --gpus-per-node=4 -t 2-00:00:00"
@@ -125,6 +134,8 @@ cuda_compute_capabilities = "8.0"
 cpu_target = "<vendor>/<uarch>"
 accel_target = "<accel>/<model>"
 site_prefix = "/opt/eb/gpu-b"
+software_root = "/opt/eb/gpu-b/versions/<release>/software/linux/<cpu_target>/software"
+modules_root = "/opt/eb/gpu-b/versions/<release>/software/linux/<cpu_target>/modules"
 
 [targets.phases]
 build = "-p <gpu-partition-b> -N 1 --ntasks-per-node=1 -c 32 --gpus-per-node=4 -t 2-00:00:00"

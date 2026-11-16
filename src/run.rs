@@ -827,6 +827,9 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                     return finish(st, Some(f.code));
                 }
             };
+            if let Some(w) = p.in_place_reason(l) {
+                log("WARN", "build", &target, &format!("{s}: {w}"));
+            }
             log("INFO", "build", &target, &format!("{s}: start"));
             let ex = match exec(&cmd, &env, Path::new(&p.log_stdout(s))) {
                 Ok(e) => e,

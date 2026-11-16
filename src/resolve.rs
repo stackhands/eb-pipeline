@@ -90,6 +90,31 @@ impl<'a> Scope<'a> {
             .unwrap_or_else(|| self.site.filesystems.install_root.clone())
     }
 
+    /// Install path EESSI-extend sets for a site install when it loads, over
+    /// the exported EASYBUILD_INSTALLPATH. EasyBuild prefers the split install
+    /// variables to it, so split mode gets no note.
+    pub fn eessi_install_note(&self) -> Option<String> {
+        let es = self.site.eessi_on()?;
+        if !es.site_install || self.site.filesystems.export_install_vars == "split" {
+            return None;
+        }
+        let base = match self.env().get("EESSI_SITE_SOFTWARE_PREFIX") {
+            Some(p) => format!("{}/versions", p.trim_end_matches('/')),
+            None => "<EESSI repository>/host_injections".into(),
+        };
+        let cpu = self.target.cpu_target.as_deref().unwrap_or("<cpu subdir>");
+        let accel = match self.target.accel_target.as_deref() {
+            Some(a) if !a.is_empty() => {
+                format!(", plus `/{a}` for an NVIDIA target when EESSI_ACCELERATOR_INSTALL is set")
+            }
+            _ => String::new(),
+        };
+        Some(format!(
+            "EESSI-extend replaces EASYBUILD_INSTALLPATH when it loads: \
+             {base}/<release>/software/linux/{cpu}{accel}"
+        ))
+    }
+
     fn type_override(&self) -> Option<&BuildTypeOverride> {
         self.build_type.and_then(|b| self.target.build_types.get(b))
     }
@@ -494,6 +519,7 @@ pub fn explain(site: &Site, target: Option<&str>, build_type: Option<&str>) -> R
             "site_prefix": scope.install_prefix(),
             "software_root": scope.software_root(),
             "modules_root": scope.modules_root(),
+            "install_note": scope.eessi_install_note(),
             "staged": t.staged,
             "route": t.route,
             "select": t.select,
