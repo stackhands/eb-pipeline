@@ -507,6 +507,19 @@ impl<'a> Planner<'a> {
         format!("{}-{stem}", self.scope.run_id)
     }
 
+    /// Why a rebuild line on a staged target builds with plain `eb`: no
+    /// module file under the modules root.
+    pub fn in_place_reason(&self, line: &ListLine) -> Option<String> {
+        if !self.staged_enabled() || !wants_rebuild(line) || self.installed(line) {
+            return None;
+        }
+        let rel = module_rel(&line.easyconfig).unwrap_or_else(|| "<Name>/<version>".into());
+        Some(format!(
+            "no module file {}/all/{rel}[.lua]; the rebuild runs as plain eb",
+            self.scope.modules_root()
+        ))
+    }
+
     pub fn log_stdout(&self, stem: &str) -> String {
         format!("{}/{}.stdout.log", self.scope.log_dir(), stem)
     }
@@ -517,7 +530,7 @@ impl<'a> Planner<'a> {
 
     pub fn build_cmd(&self, role: Role, line: &ListLine, stem: &str) -> Result<Cmd, Fail> {
         let mut inner: Vec<String>;
-        let mut note = None;
+        let note;
         if self.is_staged(line) {
             let r = self.site().rebuild_on().expect("rebuild active");
             inner = vec![
@@ -552,6 +565,7 @@ impl<'a> Planner<'a> {
             note = Some("staged rebuild: exit 2 is a refusal, 75 is pending".to_string());
         } else {
             inner = vec!["eb".into()];
+            note = self.in_place_reason(line);
         }
         inner.push(line.easyconfig.clone());
         inner.extend(line.args.iter().cloned());

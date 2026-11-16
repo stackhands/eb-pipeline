@@ -611,6 +611,26 @@ fn each_staged_line_passes_its_own_run_id() {
 }
 
 #[test]
+fn rebuild_line_without_installed_module_warns_and_runs_plain_eb() {
+    let env = setup("[rebuild]\nstaged = true\n");
+    let o = go(&env, "Foo-1.0-foss-2025a.eb --rebuild\n", &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let warn = format!(
+        "WARN [build] cpu: Foo-1.0-foss-2025a: no module file {}/install/modules/all/Foo/1.0-foss-2025a[.lua]; the rebuild runs as plain eb",
+        env.dir.path().display()
+    );
+    assert!(o.stderr.contains(&warn), "{}", o.stderr);
+    assert_eq!(calls(&env, "eb.calls").len(), 1);
+    assert!(calls(&env, "staged.calls").is_empty());
+
+    install_module(&env, "Foo/1.0-foss-2025a.lua");
+    let o = go(&env, "Foo-1.0-foss-2025a.eb --rebuild\n", &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(!o.stderr.contains("no module file"), "{}", o.stderr);
+    assert_eq!(calls(&env, "staged.calls").len(), 1);
+}
+
+#[test]
 fn staged_rebuild_failure_is_a_failure() {
     let env = setup("[rebuild]\nstaged = true\n");
     install_module(&env, "Foo/1.0-foss-2025a.lua");

@@ -353,6 +353,19 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
             fs.export_install_vars
         ));
     }
+    if site.eessi_on().is_some_and(|es| es.site_install) && fs.export_install_vars != "split" {
+        for t in &site.targets {
+            let staged = site
+                .rebuild_on()
+                .is_some_and(|r| t.staged.unwrap_or(r.staged));
+            if staged && (t.software_root.is_none() || t.modules_root.is_none()) {
+                e.push(format!(
+                    "targets.{}: staged rebuilds with modules.eessi.site_install need software_root and modules_root; EESSI-extend installs into <site prefix>/versions/<release>/software/linux/<cpu_target>, so set them to its software and modules directories",
+                    t.name
+                ));
+            }
+        }
+    }
     for (k, v) in [
         ("scratch", &fs.scratch),
         ("tmp", &fs.tmp),

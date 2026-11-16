@@ -72,6 +72,17 @@ All notable changes to this project are documented here.
 - The README says that `run` builds its units one at a time, with no option to
   build one shard alone, and that a shard list holds input lines only, so a
   line needs `--robot` to build missing dependencies.
+- With `[modules.eessi] site_install = true` and a single install path,
+  `check` refuses a target that takes staged rebuilds unless it sets
+  `software_root` and `modules_root`. EESSI-extend replaces
+  `EASYBUILD_INSTALLPATH` when it loads, so the default roots named a tree
+  EasyBuild does not write, the installed check found nothing, and staged
+  rebuilds ran as in-place `eb --rebuild`. `templates/eessi-site.toml` sets
+  both roots under the EESSI-extend layout.
+- `explain` names the install path EESSI-extend sets, as `install_note`.
+- A rebuild line on a staged target whose module file is missing under
+  `modules_root` is noted on its planned build command and logged as a WARN
+  when it runs with plain `eb`.
 
 ## 0.3.0 - 2026-11-16
 
