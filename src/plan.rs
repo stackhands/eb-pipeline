@@ -561,7 +561,9 @@ impl<'a> Planner<'a> {
         Ok(Some(Cmd {
             name: "rotate".into(),
             argv: self.wrapped(Role::Short, "logs", a, false)?,
-            env: BTreeMap::new(),
+            // eb-keep-logs counts a run's age from the local midnight of the
+            // date in its name, and run directories are named in UTC.
+            env: BTreeMap::from([("TZ".to_string(), "UTC".to_string())]),
             note: None,
         }))
     }

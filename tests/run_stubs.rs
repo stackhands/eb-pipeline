@@ -187,9 +187,11 @@ fn driver(env: &Env, list: &str, vars: &[(&str, &str)], extra: &[&str]) -> std::
             "production",
             "--run-id",
             "r1",
-        ])
-        .args(["--log-stamp", "20260101_000000"])
-        .arg("--result")
+        ]);
+    if !extra.contains(&"--log-stamp") {
+        c.args(["--log-stamp", "20260101_000000"]);
+    }
+    c.arg("--result")
         .arg(root.join("result.json"))
         .args(extra)
         .env("PATH", path)
@@ -732,6 +734,44 @@ fn logs_go_under_stamp_and_target() {
     assert_eq!(r["run_id"], "r1");
     let log = r["lines"][0]["log"].as_str().unwrap();
     assert!(log.contains("/logs/20260101_000000/cpu/"), "{log}");
+}
+
+#[test]
+fn a_log_stamp_must_name_a_run_directory() {
+    // `eb-keep-logs rotate` ages only directories named YYYYMMDD_HHMMSS
+    // with a real date, and the stamp is a path component under log_root.
+    for bad in [
+        "",
+        "2026-01-01",
+        "20260101",
+        "20261301_000000",
+        "20260230_000000",
+        "20260101_240000",
+        "../20260101_000000",
+        "20260101_000000/x",
+    ] {
+        let env = setup("");
+        let o = finish(&env, driver(&env, LIST, &[], &["--log-stamp", bad]));
+        assert_eq!(o.code, 2, "{bad:?}: {}", o.stderr);
+        assert!(o.stderr.contains("--log-stamp"), "{bad:?}: {}", o.stderr);
+        assert!(calls(&env, "eb.calls").is_empty(), "{bad:?}");
+        assert!(!env.dir.path().join("20260101_000000").exists(), "{bad:?}");
+    }
+}
+
+#[test]
+fn rotate_counts_run_ages_in_utc() {
+    let env = setup("[logs.rotate]\ncompress_after_days = 30\n");
+    write_exec(
+        &env.stubs.join("eb-keep-logs"),
+        r#"#!/bin/sh
+case "$1" in --version) echo "eb-keep-logs 0.2.0"; exit 0;; esac
+echo "$1 ${TZ:-unset}" >> "$STUB_DIR/keeplogs.tz"
+"#,
+    );
+    let o = go(&env, LIST, &[("TZ", "America/Los_Angeles")]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(calls(&env, "keeplogs.tz"), ["rotate UTC"]);
 }
 
 /// Put `frag` straight after the `cpu` target's name.

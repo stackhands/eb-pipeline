@@ -246,8 +246,11 @@ exactly the 0.1.0 argv.
   `${NAME}`.
 
 Every child writes to `<log_root>/<YYYYMMDD_HHMMSS>/<target>/`. The timestamp
-is taken once per run and `--log-stamp` overrides it. `--run-id` is a separate
-label recorded in the result. The result JSON records the log path of each line.
+is the UTC time, taken once per run. `--log-stamp` overrides it with a stamp of
+the same form, a real UTC date and time; anything else is refused with exit 2.
+The `logs` phase runs `eb-keep-logs rotate` with `TZ=UTC`, so a run's age
+counts from the UTC midnight of its stamp. `--run-id` is a separate label
+recorded in the result. The result JSON records the log path of each line.
 
 `plan --shard-plan DIR` reads the `plan.json` that `stack shard` wrote in `DIR`
 and expands the per-shard admission and build commands.

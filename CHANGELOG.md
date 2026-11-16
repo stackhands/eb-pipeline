@@ -29,6 +29,14 @@ All notable changes to this project are documented here.
 - `[logs.rotate]` requires `compress_after_days`, and a `delete_after_days`
   that is not greater is refused. Both passed `check`, and `run` failed its
   logs phase after the builds with exit 2 from `eb-keep-logs rotate`.
+- `--log-stamp` and `EB_PIPELINE_LOG_STAMP` must be a UTC time as
+  `YYYYMMDD_HHMMSS`; anything else is refused with exit 2. `eb-keep-logs
+  rotate` never aged a run directory of another name, and a stamp with `..` or
+  `/` put the logs outside `log_root`.
+- The `logs` phase runs `eb-keep-logs rotate` with `TZ=UTC`. Run directories
+  are named in UTC and rotate counts ages from the local midnight of the
+  name's date, so away from UTC a run's age was a day off between the two
+  midnights.
 
 ## 0.3.0 - 2026-11-16
 
