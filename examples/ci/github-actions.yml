@@ -39,11 +39,15 @@ jobs:
     needs: targets
     runs-on: [self-hosted, eb-build]
     strategy:
-      # One target at a time. Every target gets the same EASYBUILD_BUILDPATH,
-      # and EasyBuild removes the build directory of an easyconfig when a
-      # build of it starts, so two targets building one easyconfig at once
-      # break each other's build. "One job per target" in the eb-pipeline
-      # README has the details.
+      # One target at a time. Without {target} in [filesystems] build_path
+      # every target gets the same EASYBUILD_BUILDPATH, and EasyBuild removes
+      # the build directory of an easyconfig when a build of it starts, so
+      # two targets building one easyconfig at once break each other's build.
+      # Raise max-parallel only when build_path has {target}, or sits on
+      # storage that no two targets' build nodes share, and each target also
+      # has its own first source path and, with staged rebuilds, its own
+      # state root. "One job per target" in the eb-pipeline README has the
+      # details.
       max-parallel: 1
       # A failed target leaves the others running.
       fail-fast: false

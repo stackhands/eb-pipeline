@@ -143,8 +143,9 @@ fn the_ci_example_runs_one_job_per_target() {
     assert!(denied.is_empty(), "{}: {denied:?}", path.display());
 }
 
-/// Every target gets one EASYBUILD_BUILDPATH, and EasyBuild removes the build
-/// directory of an easyconfig when a build of it starts.
+/// Without `{target}` in the build path every target gets one
+/// EASYBUILD_BUILDPATH, and EasyBuild removes the build directory of an
+/// easyconfig when a build of it starts.
 #[test]
 fn the_ci_example_builds_one_target_at_a_time() {
     let path = root().join("examples/ci/github-actions.yml");
@@ -154,4 +155,20 @@ fn the_ci_example_builds_one_target_at_a_time() {
         "{} lacks `max-parallel: 1`",
         path.display()
     );
+    let comment: String = wf
+        .lines()
+        .map(str::trim)
+        .filter_map(|l| l.strip_prefix("# "))
+        .collect::<Vec<_>>()
+        .join(" ");
+    for needed in [
+        "Raise max-parallel only when build_path has {target}",
+        "its own first source path and, with staged rebuilds, its own state root",
+    ] {
+        assert!(
+            comment.contains(needed),
+            "{} lacks `{needed}`",
+            path.display()
+        );
+    }
 }

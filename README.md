@@ -452,28 +452,41 @@ gets one `EASYBUILD_BUILDPATH`, and EasyBuild builds an easyconfig in
 `<build_path>/<name>/<version>/<toolchain>-<toolchain version><versionsuffix>`,
 with no target in the path. A build removes that directory when it starts and
 again after it installs, so two targets that build one easyconfig at once
-remove each other's build directory, and the build that loses it fails. Staged
-lines of targets that share `[rebuild] state_root`, as the targets of
-`eessi-site.toml` do, take one lock, and eb-staged-rebuild holds it for the
-whole of a staged build. A second staged build waits up to
-`[rebuild] lock_timeout` for it, 600 seconds unless set, and is `refused` when
-the first still holds it then, so the run ends with 78 instead of waiting with
-no deadline. eb-staged-rebuild has not measured that
+remove each other's build directory, and the build that loses it fails.
+EasyBuild downloads a missing source into the first `source_paths` entry and
+writes the file in place, so a target that looks for a source that another
+target is still downloading there finds the partial file and fails its
+checksum. Staged lines of targets that share `[rebuild] state_root` take one
+lock, and eb-staged-rebuild holds it for the whole of a staged build. A second
+staged build waits up to `[rebuild] lock_timeout` for it, 600 seconds unless
+set, and is `refused` when the first still holds it then, so the run ends with
+78 instead of waiting with no deadline. eb-staged-rebuild has not measured that
 lock between two build nodes. `EASYBUILD_TMPDIR` is safe to share: each `eb`
 makes its own `eb-*` directory under it.
 
 `targets --format json` prints the names as a JSON array on one line, the form
 a CI matrix reads. [examples/ci/github-actions.yml](examples/ci/github-actions.yml)
 is a GitHub Actions workflow with one job that prints the array and one build
-job per target. It sets `max-parallel: 1`, and a target that fails leaves the
-others running. Raise `max-parallel` only where no two targets that build at
-once can reach the same build directory. A `build_path` without `{target}` is
-one path for every target, so that needs a build path on storage that no two
-targets' build nodes share. Give each target its own state root as well, with
-`{target}` in `[rebuild] state_root`, or by leaving `state_root` unset so that
-eb-staged-rebuild keeps its state in `<parent of software>/.eb-staged-rebuild`,
-next to each target's software tree.
-Dependabot updates the action pins in `examples/ci/` along with those in
+job per target. It sets `max-parallel: 1`, the safe default, and a target that
+fails leaves the others running. Raise `max-parallel` only when no two targets
+that build at once share a build directory, a download directory or, with
+staged rebuilds, a state root:
+
+- `{target}` in `build_path` gives each target a build path of its own. A
+  `build_path` without it is one path for every target, so it needs storage
+  that no two targets' build nodes share.
+- `{target}` in the first `source_paths` entry gives each target a download
+  directory of its own.
+- `{target}` in `state_root` gives each target a state root, and so a lock, of
+  its own, and so does leaving `state_root` unset: eb-staged-rebuild then keeps
+  its state in `<parent of software>/.eb-staged-rebuild`, next to each target's
+  software tree. The staged lines of targets that share a state root take
+  turns, and one that waits longer than `lock_timeout` is refused.
+
+[Per-target paths](#per-target-paths) has examples of all three.
+`eessi-site.toml` has `{target}` in `build_path` and `state_root`; give its
+targets a first source path each before raising `max-parallel`. Dependabot
+updates the action pins in `examples/ci/` along with those in
 `.github/workflows/`.
 
 ## Development

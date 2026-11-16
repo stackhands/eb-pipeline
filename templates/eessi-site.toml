@@ -143,7 +143,11 @@ build = "-p <gpu-partition-b> -N 1 --ntasks-per-node=1 -c 32 --gpus-per-node=4 -
 [filesystems]
 scratch = "/scratch/<build-user>"
 tmp = "/scratch/<build-user>/tmp"
-build_path = "/scratch/<build-user>/build"
+# A build path per target, so that targets can build one easyconfig at once.
+build_path = "/scratch/<build-user>/build/{target}"
+# EasyBuild downloads a missing source into the first entry. Before targets
+# build at once, give them a first entry each, such as
+# "/scratch/<build-user>/sources/{target}".
 source_paths = ["/opt/eb/sources", "/srv/shared/sources"]
 install_root = "/opt/eb"
 log_root = "/opt/eb/logs"
@@ -215,7 +219,8 @@ delete_after_days = 365
 
 [rebuild]
 staged = true
-state_root = "/opt/eb/.eb-staged-rebuild"
+# A state root, and so a lock, per target, under its site prefix.
+state_root = "/opt/eb/{target}/.eb-staged-rebuild"
 backend = "auto"
 grace_hours = 24
 prepare = "/opt/eb-tools/bin/apply-group"

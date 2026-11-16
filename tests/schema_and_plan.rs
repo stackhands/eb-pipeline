@@ -1458,6 +1458,27 @@ fn eessi_template_roots_sit_under_the_eessi_extend_path() {
 }
 
 #[test]
+fn eessi_template_targets_have_a_build_path_and_a_state_root_each() {
+    let text = std::fs::read_to_string(example("eessi-site.toml")).unwrap();
+    let s = site::parse(&text).unwrap();
+    let v = resolve::explain(&s, None, None).unwrap();
+    let targets = v["targets"].as_array().unwrap();
+    assert_eq!(targets.len(), 4);
+    for t in targets {
+        let name = t["name"].as_str().unwrap();
+        assert_eq!(
+            t["env"]["EASYBUILD_BUILDPATH"],
+            format!("/scratch/<build-user>/build/{name}")
+        );
+        assert_eq!(t["site_prefix"], format!("/opt/eb/{name}"));
+        assert_eq!(
+            t["state_root"],
+            format!("/opt/eb/{name}/.eb-staged-rebuild")
+        );
+    }
+}
+
+#[test]
 fn plan_notes_a_rebuild_line_that_runs_in_place() {
     let site = format!("{MINIMAL}\n[rebuild]\nstaged = true\n");
     let v = plan_of(&site, "Foo-1.0.eb --rebuild\nBar-1.0.eb\n", "other");
