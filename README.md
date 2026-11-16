@@ -202,9 +202,14 @@ allocated task, so give each role a task count; the templates use
   staged line runs again under a new `--run-id`. eb-staged-rebuild holds
   `<state root>/.lock` for the whole of a staged build and publish, and each
   staged line passes `--lock-timeout` from `[rebuild] lock_timeout` (default
-  600 seconds; 0 refuses at once). A line whose wait runs out is `refused`, and
-  its note and the ERROR line name the lock that another eb-staged-rebuild
-  holds. A failed line triggers
+  600 seconds; 0 refuses at once). A line whose wait runs out is `refused`; its
+  note and the ERROR line name the lock that another eb-staged-rebuild holds
+  and, when that is the state root's, say that `lock_timeout` ran out. Without
+  `[rebuild] state_root`, a module that the line loads can set the state root
+  in `EB_STAGED_REBUILD_STATE_ROOT`, where eb-pipeline cannot see it, so for a
+  lock away from the state root eb-pipeline expects, the note says that
+  `lock_timeout` ran out if that is the state root's lock, and why eb-pipeline
+  cannot tell. A failed line triggers
   `eb-keep-logs failed` when `[logs].keep_failed` is set.
   That step runs with `EASYBUILD_OUTPUT_STYLE=basic`, whatever `[scheduler.env]`
   sets, so that `eb --last-log` prints the log path on one line.
@@ -212,7 +217,18 @@ allocated task, so give each role a task count; the templates use
   build, with `EB_PIPELINE_CACHE_*` in the environment.
 - `logs`: `eb-keep-logs rotate` on `filesystems.log_root`. `[logs.rotate]` needs
   `compress_after_days`, passed as `--compress-after`; `delete_after_days`,
-  passed as `--delete-after`, must be greater.
+  passed as `--delete-after`, must be greater. eb-keep-logs takes no lock
+  and passes over at most the run that it writes into itself: two
+  rotations at once lose each other's updates to a run's `.licensed-logs`,
+  and a rotation compresses the logs of a run that is still writing them once
+  that run's log stamp is a day old in UTC, as it is for a target that
+  started before midnight. So a run holds `<log_root>/.eb-pipeline-rotate.lock`
+  shared from its start and rotates only when it can take that lock alone.
+  While another run under the log root is live or rotating, `logs` is
+  `skipped` and the rotation is left to a run that ends alone; a run that
+  starts while another rotates waits for it. The lock is a `flock`, so it
+  holds between nodes only where the log root's filesystem carries `flock`
+  between them.
 
 ### Per-target line selection
 
@@ -462,7 +478,10 @@ staged build waits up to `[rebuild] lock_timeout` for it, 600 seconds unless
 set, and is `refused` when the first still holds it then, so the run ends with
 78 instead of waiting with no deadline. eb-staged-rebuild has not measured that
 lock between two build nodes. `EASYBUILD_TMPDIR` is safe to share: each `eb`
-makes its own `eb-*` directory under it.
+makes its own `eb-*` directory under it. So is `log_root`: each run writes
+under its own `<log-stamp>/<target>`, and with `[logs.rotate]` a run rotates
+only when no other run under the log root is live (`logs` under
+[Phases](#phases)).
 
 `targets --format json` prints the names as a JSON array on one line, the form
 a CI matrix reads. [examples/ci/github-actions.yml](examples/ci/github-actions.yml)
@@ -485,8 +504,23 @@ staged rebuilds, a state root:
 
 [Per-target paths](#per-target-paths) has examples of all three.
 `eessi-site.toml` has `{target}` in `build_path` and `state_root`; give its
-targets a first source path each before raising `max-parallel`. Dependabot
-updates the action pins in `examples/ci/` along with those in
+targets a first source path each before raising `max-parallel`.
+
+`max-parallel` holds within one run of the workflow, and each dispatch is a
+run of its own. The build job's `concurrency` group, `eb-pipeline-<target>`,
+lets one dispatch at a time build a target: another dispatch's job for that
+target waits until the running one has finished, and
+`cancel-in-progress: false` leaves the running build alone. GitHub keeps only
+one pending job per group, so a third dispatch replaces the waiting one, which
+is cancelled. The group belongs to the repository and has no workflow name in
+it, so another workflow in the repository that uses the same group waits as
+well. It keeps two dispatches off one target, not off one path: one dispatch
+can build a target while another builds a different one. Targets that share a
+build directory, a download directory or a state root therefore need one group
+for the whole build job, `eb-pipeline` with no target in it, so that one build
+job in the repository runs at a time.
+
+Dependabot updates the action pins in `examples/ci/` along with those in
 `.github/workflows/`.
 
 ## Development

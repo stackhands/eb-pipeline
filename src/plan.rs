@@ -652,6 +652,15 @@ impl<'a> Planner<'a> {
         }))
     }
 
+    /// `<log_root>/.eb-pipeline-rotate.lock`, with `[logs.rotate]` set. A
+    /// run holds it shared while it writes logs and rotates only when it can
+    /// take it alone: eb-keep-logs takes no lock, and passes over at most
+    /// the run that it writes into itself.
+    pub fn rotate_lock(&self) -> Option<PathBuf> {
+        self.site().logs_on()?.rotate.as_ref()?;
+        Some(PathBuf::from(&self.site().filesystems.log_root).join(".eb-pipeline-rotate.lock"))
+    }
+
     pub fn cache_cmd(&self) -> Result<Option<Cmd>, Fail> {
         let Some(c) = self.site().caches_on() else {
             return Ok(None);

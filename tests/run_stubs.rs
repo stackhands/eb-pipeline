@@ -713,6 +713,11 @@ fn lock_timeout_zero_refuses_at_once_at_the_tool_default_state_root() {
 fn a_held_lock_other_than_the_state_roots_is_named_alone() {
     let env = setup("[rebuild]\nstaged = true\n");
     let r = env.dir.path().display().to_string();
+    let text = std::fs::read_to_string(&env.site).unwrap().replace(
+        "staged = true",
+        &format!("staged = true\nstate_root = \"{r}/state\""),
+    );
+    std::fs::write(&env.site, text).unwrap();
     install_module(&env, "Foo/1.0-foss-2025a.lua");
     std::fs::create_dir(env.dir.path().join("ledger")).unwrap();
     let ledger = format!("{r}/ledger/.lock");
@@ -723,12 +728,60 @@ fn a_held_lock_other_than_the_state_roots_is_named_alone() {
         &[("STUB_STAGED_LOCKS", "1"), ("STUB_STAGED_LOCK", &ledger)],
     );
     assert_eq!(o.code, 78, "{}", o.stderr);
-    assert!(calls(&env, "staged.calls")[0].contains(" --lock-timeout 600 "));
+    assert!(calls(&env, "staged.calls")[0]
+        .contains(&format!(" --state-root {r}/state --lock-timeout 600 ")));
     assert_eq!(
         o.result.unwrap()["lines"][0]["note"],
         format!(
             "eb-staged-rebuild exit 2: another eb-staged-rebuild holds the lock at {ledger}; translated to refused (78)"
         )
+    );
+}
+
+/// Without `rebuild.state_root`, a module that the line loads can set
+/// EB_STAGED_REBUILD_STATE_ROOT in the line's shell, where eb-pipeline does
+/// not see it.
+#[test]
+fn a_held_lock_at_a_state_root_a_module_sets_names_lock_timeout() {
+    let env = setup("[rebuild]\nstaged = true\nlock_timeout = 0\n");
+    let r = env.dir.path().display().to_string();
+    install_module(&env, "Foo/1.0-foss-2025a.lua");
+    let root = format!("{r}/module-state");
+    let init = format!(
+        "module() {{\n    echo \"$*\" >> \"$STUB_DIR/module.calls\"\n    \
+         [ \"$*\" != \"load StateRoot/1.0\" ] || export EB_STAGED_REBUILD_STATE_ROOT=\"{root}\"\n}}\n"
+    );
+    with_modules(&env, &init, &["StateRoot/1.0"]);
+    std::fs::create_dir(&root).unwrap();
+    let lock = format!("{root}/.lock");
+    let _held = hold_lock(Path::new(&lock), false);
+    let o = go(
+        &env,
+        "Foo-1.0-foss-2025a.eb --rebuild\n",
+        &[("STUB_STAGED_LOCKS", "1")],
+    );
+    assert_eq!(o.code, 78, "{}", o.stderr);
+    assert!(calls(&env, "module.calls").contains(&"load StateRoot/1.0".to_string()));
+    let c = calls(&env, "staged.calls");
+    assert!(
+        !c[0].contains("--state-root") && c[0].contains(" --lock-timeout 0 "),
+        "{c:?}"
+    );
+    let why = format!(
+        "another eb-staged-rebuild holds the lock at {lock}, and rebuild.lock_timeout (0 s) ran out if that is the state root's lock: rebuild.state_root is unset, and eb-pipeline cannot see a state root that a module sets in EB_STAGED_REBUILD_STATE_ROOT"
+    );
+    let l = &o.result.unwrap()["lines"][0];
+    assert_eq!(l["status"], "refused");
+    assert_eq!(
+        l["note"],
+        format!("eb-staged-rebuild exit 2: {why}; translated to refused (78)")
+    );
+    assert!(
+        o.stderr.contains(&format!(
+            "cpu: Foo-1.0-foss-2025a: refused (exit 2): {why}\n"
+        )),
+        "{}",
+        o.stderr
     );
 }
 
@@ -1329,6 +1382,201 @@ echo "$1 ${TZ:-unset}" >> "$STUB_DIR/keeplogs.tz"
     let o = go(&env, LIST, &[("TZ", "America/Los_Angeles")]);
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert_eq!(calls(&env, "keeplogs.tz"), ["rotate UTC"]);
+}
+
+const ROTATE: &str = "[logs.rotate]\ncompress_after_days = 3\n";
+
+fn rotations(env: &Env) -> Vec<String> {
+    calls(env, "keeplogs.calls")
+        .into_iter()
+        .filter(|c| c.starts_with("rotate "))
+        .collect()
+}
+
+/// eb-keep-logs passes over at most the run that it writes into itself, and
+/// a run that began on an earlier day in UTC is old enough to compress.
+#[test]
+fn a_run_skips_its_rotation_while_another_run_holds_the_log_root() {
+    let env = setup(ROTATE);
+    let r = env.dir.path().display().to_string();
+    let lock = format!("{r}/logs/.eb-pipeline-rotate.lock");
+    std::fs::create_dir(env.dir.path().join("logs")).unwrap();
+    let live = std::fs::File::create(&lock).unwrap();
+    live.try_lock_shared().unwrap();
+    let o = go(&env, LIST, &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(rotations(&env).is_empty());
+    let why = format!(
+        "another run under {r}/logs holds {lock}, live or rotating; the rotation is left to a run that ends alone"
+    );
+    let logs = result_phase(o.result.as_ref().unwrap(), "logs");
+    assert_eq!(logs["status"], "skipped");
+    assert_eq!(logs["note"], why);
+    assert!(
+        o.stderr
+            .contains(&format!("INFO [logs] cpu: rotation skipped: {why}\n")),
+        "{}",
+        o.stderr
+    );
+
+    drop(live);
+    let o = go(&env, LIST, &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(result_phase(&o.result.unwrap(), "logs")["status"], "ok");
+    assert_eq!(
+        rotations(&env),
+        [format!("rotate {r}/logs --compress-after 3")]
+    );
+}
+
+#[test]
+fn a_run_waits_to_start_while_another_run_rotates() {
+    let env = setup(ROTATE);
+    let r = env.dir.path().display().to_string();
+    let lock = format!("{r}/logs/.eb-pipeline-rotate.lock");
+    std::fs::create_dir(env.dir.path().join("logs")).unwrap();
+    let rotating = hold_lock(Path::new(&lock), false);
+    let mut child = driver(&env, LIST, &[], &[]);
+    std::thread::sleep(Duration::from_millis(1500));
+    assert!(child.try_wait().unwrap().is_none(), "the run ended");
+    assert!(calls(&env, "eb.calls").is_empty(), "a line started");
+    drop(rotating);
+    let o = finish(&env, child);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(calls(&env, "eb.calls").len(), 2);
+    assert_eq!(result_phase(&o.result.unwrap(), "logs")["status"], "ok");
+    assert!(
+        o.stderr.contains(&format!(
+            "INFO [logs] cpu: waiting: another run rotates and holds {lock}\n"
+        )),
+        "{}",
+        o.stderr
+    );
+}
+
+#[test]
+fn a_signal_stops_a_run_that_waits_for_a_rotation() {
+    let env = setup(ROTATE);
+    std::fs::create_dir(env.dir.path().join("logs")).unwrap();
+    let lock = env.dir.path().join("logs/.eb-pipeline-rotate.lock");
+    let _rotating = hold_lock(&lock, false);
+    let lock = std::fs::canonicalize(&lock).unwrap();
+    let mut child = driver(&env, LIST, &[], &[]);
+    let fds = format!("/proc/{}/fd", child.id());
+    let opened = || {
+        std::fs::read_dir(&fds)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|e| std::fs::read_link(e.path()).is_ok_and(|l| l == lock))
+    };
+    let t0 = Instant::now();
+    while !opened() {
+        assert!(child.try_wait().unwrap().is_none(), "the run ended");
+        assert!(
+            t0.elapsed() < Duration::from_secs(20),
+            "the lock never opened"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // SAFETY: the pid is the driver child this test started.
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+    }
+    let o = finish(&env, child);
+    assert_eq!(o.code, 143, "{}", o.stderr);
+    assert!(calls(&env, "eb.calls").is_empty(), "a line started");
+    let r = o.result.unwrap();
+    assert_eq!(r["interrupted_by"], "SIGTERM");
+    assert_eq!(result_phase(&r, "logs")["status"], "interrupted");
+}
+
+/// eb-keep-logs rewrites a `.licensed-logs` from what it read before, so
+/// two rotations at once lose each other's renames.
+#[test]
+fn two_targets_that_end_together_rotate_once() {
+    let env = setup(ROTATE);
+    let text = std::fs::read_to_string(&env.site).unwrap().replace(
+        "[[targets]]\nname = \"cpu\"",
+        "[[targets]]\nname = \"cpu\"\n[[targets]]\nname = \"gpu\"",
+    );
+    std::fs::write(&env.site, text).unwrap();
+    // Each target's first line waits until both targets build, so both runs
+    // are live before either ends.
+    write_exec(
+        &env.stubs.join("eb"),
+        r#"#!/bin/sh
+D="${STUB_DIR:?}"
+echo "$*" >> "$D/eb.calls"
+echo "$EB_PIPELINE_TARGET" >> "$D/eb.targets"
+i=0
+while [ "$(sort -u "$D/eb.targets" | wc -l)" -lt 2 ] && [ $i -lt 200 ]; do sleep 0.1; i=$((i + 1)); done
+exit 0
+"#,
+    );
+    write_exec(
+        &env.stubs.join("eb-keep-logs"),
+        r#"#!/bin/sh
+D="${STUB_DIR:?}"
+case "$1" in --version) echo "eb-keep-logs 0.2.0"; exit 0;; esac
+[ -e "$D/rotating" ] && echo "$EB_PIPELINE_TARGET" >> "$D/keeplogs.overlap"
+: > "$D/rotating"
+echo "$*" >> "$D/keeplogs.calls"
+sleep 0.5
+rm -f "$D/rotating"
+"#,
+    );
+    let root = env.dir.path();
+    std::fs::write(root.join("list.txt"), LIST).unwrap();
+    let path = format!(
+        "{}:{}",
+        env.stubs.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let kids: Vec<_> = ["cpu", "gpu"]
+        .into_iter()
+        .map(|t| {
+            let mut c = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"));
+            c.args(["run", "--site"])
+                .arg(&env.site)
+                .args(["--target", t, "--build-type", "production"])
+                .args([
+                    "--run-id",
+                    &format!("r-{t}"),
+                    "--log-stamp",
+                    "20260101_000000",
+                ])
+                .arg("--list")
+                .arg(root.join("list.txt"))
+                .arg("--result")
+                .arg(root.join(format!("result-{t}.json")))
+                .env("PATH", &path)
+                .env("STUB_DIR", root)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let _g = SPAWN.lock().unwrap();
+            (t, c.spawn().unwrap())
+        })
+        .collect();
+    let mut status = Vec::new();
+    for (t, kid) in kids {
+        let o = kid.wait_with_output().unwrap();
+        let stderr = String::from_utf8_lossy(&o.stderr);
+        assert_eq!(o.status.code(), Some(0), "{t}: {stderr}");
+        let text = std::fs::read_to_string(root.join(format!("result-{t}.json"))).unwrap();
+        let r: Value = serde_json::from_str(&text).unwrap();
+        status.push(
+            result_phase(&r, "logs")["status"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+        );
+    }
+    status.sort();
+    assert_eq!(status, ["ok", "skipped"]);
+    assert_eq!(rotations(&env).len(), 1, "{:?}", rotations(&env));
+    assert!(calls(&env, "keeplogs.overlap").is_empty());
 }
 
 /// Put `frag` straight after the `cpu` target's name.

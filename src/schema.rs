@@ -473,7 +473,7 @@ doc_struct! {
         keep_failed: bool => ("boolean", "true", false,
             "Run `eb-keep-logs failed` after a failed line, with EASYBUILD_OUTPUT_STYLE=basic so that `eb --last-log` prints the log path on one line."),
         rotate: Option<Rotate> => ("table", "none", false,
-            "Run `eb-keep-logs rotate <log_root>` at the end of the run, with TZ=UTC: run directories are named in UTC."),
+            "Run `eb-keep-logs rotate <log_root>` at the end of the run, with TZ=UTC: run directories are named in UTC. Only a run that ends with no other run under log_root live rotates: each run holds `<log_root>/.eb-pipeline-rotate.lock` shared, and rotates when it can take it alone."),
     }
 }
 
@@ -486,7 +486,7 @@ doc_struct! {
         staged: bool => ("boolean", "true", false,
             "Route a line through `eb-staged-rebuild run` when it carries `--rebuild`, `-f` or `--force` as a whole option and its module is already installed. A target can override this with `staged`."),
         state_root: Option<String> => ("string", "tool default", false,
-            "`--state-root`. `{target}` expands to the target name, which gives each target a state root and a lock of its own; `check` refuses it when two staged targets share a software root, and any other placeholder."),
+            "`--state-root`. `{target}` expands to the target name, which gives each target a state root and a lock of its own; `check` refuses it when two staged targets share a software root, and any other placeholder. Unset, eb-staged-rebuild takes EB_STAGED_REBUILD_STATE_ROOT, which a module can set where eb-pipeline cannot see it, else `.eb-staged-rebuild` next to the software tree."),
         #[serde(default = "d_lock_timeout")]
         lock_timeout: u64 => ("integer", "600", false,
             "`--lock-timeout`: seconds a staged line waits for the state root's lock, which another eb-staged-rebuild holds for the whole of its build and publish; 0 refuses at once. A line whose wait runs out is `refused`."),

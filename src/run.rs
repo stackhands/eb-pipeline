@@ -233,6 +233,9 @@ fn held_lock(path: &Path) -> Option<String> {
 
 /// Why a staged line was refused, when eb-staged-rebuild found a lock held:
 /// the lock, and whether `rebuild.lock_timeout` ran out waiting for it.
+/// Without `rebuild.state_root`, a module the line loads can set the state
+/// root in EB_STAGED_REBUILD_STATE_ROOT, out of eb-pipeline's sight, so a
+/// lock away from the expected state root may still be the state root's.
 fn lock_refusal(
     p: &Planner,
     cmd: &Cmd,
@@ -248,14 +251,19 @@ fn lock_refusal(
         .cloned()
         .or_else(|| std::env::var(ROOT).ok());
     let ours = p.state_root_lock(env_root.as_deref());
-    if !Path::new(&lock).components().eq(ours.components()) {
+    let n = p.scope.site.rebuild_on().map_or(0, |r| r.lock_timeout);
+    if Path::new(&lock).components().eq(ours.components()) {
+        return Some(format!(
+            "another eb-staged-rebuild holds the lock at {lock}, and rebuild.lock_timeout ({n} s) ran out"
+        ));
+    }
+    if p.scope.state_root().is_some() {
         return Some(format!(
             "another eb-staged-rebuild holds the lock at {lock}"
         ));
     }
-    let n = p.scope.site.rebuild_on().map_or(0, |r| r.lock_timeout);
     Some(format!(
-        "another eb-staged-rebuild holds the lock at {lock}, and rebuild.lock_timeout ({n} s) ran out"
+        "another eb-staged-rebuild holds the lock at {lock}, and rebuild.lock_timeout ({n} s) ran out if that is the state root's lock: rebuild.state_root is unset, and eb-pipeline cannot see a state root that a module sets in {ROOT}"
     ))
 }
 
@@ -294,6 +302,72 @@ fn admission_lock(path: &Path, posix: bool) -> std::io::Result<File> {
         Ok(f)
     } else {
         Err(std::io::Error::last_os_error())
+    }
+}
+
+/// Hold the rotation lock shared for the whole run, so that another run's
+/// rotation does not compress this run's logs while they are written: a run
+/// that began on an earlier day in UTC is old enough. Waits while another
+/// run rotates; `Ok(None)` when the lock cannot be had, and the rotation then
+/// goes ahead without it, as it did before there was one.
+fn hold_rotate_lock(st: &mut State, path: &Path) -> Result<Option<File>, i32> {
+    let target = st.res.target.clone();
+    let without = |e: std::io::Error| {
+        log(
+            "WARN",
+            "logs",
+            &target,
+            &format!(
+                "cannot lock {}: {e}; the rotation does not wait for other runs",
+                path.display()
+            ),
+        );
+        Ok(None)
+    };
+    let opened = path
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(path)
+        });
+    let f = match opened {
+        Ok(f) => f,
+        Err(e) => return without(e),
+    };
+    let mut waiting = false;
+    loop {
+        match f.try_lock_shared() {
+            Ok(()) => return Ok(Some(f)),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                if !waiting {
+                    let msg = format!("waiting: another run rotates and holds {}", path.display());
+                    log("INFO", "logs", &target, &msg);
+                    waiting = true;
+                }
+                if sleep_interruptible(1) {
+                    if let Some(c) = stop_if_signalled(st, "logs") {
+                        return Err(c);
+                    }
+                }
+            }
+            Err(std::fs::TryLockError::Error(e)) => return without(e),
+        }
+    }
+}
+
+/// The rotation lock taken alone in place of this run's shared hold;
+/// `Ok(None)` while another run holds it, live or rotating.
+fn rotate_alone(f: File) -> std::io::Result<Option<File>> {
+    f.unlock()?;
+    match f.try_lock() {
+        Ok(()) => Ok(Some(f)),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(e)) => Err(e),
     }
 }
 
@@ -491,6 +565,11 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
     if site.licences_on().is_some() {
         st.phase("licences", "ok", None, None);
     }
+    let rotate_lock = match p.rotate_lock().map(|l| hold_rotate_lock(&mut st, &l)) {
+        Some(Err(c)) => return finish(st, Some(c)),
+        Some(Ok(f)) => f,
+        None => None,
+    };
 
     // selection: lines the target's selector leaves out are recorded, not built;
     // the kept lines go to a file that the shard planner reads
@@ -1030,23 +1109,44 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
         );
     }
 
-    // rotation
+    // rotation, by a run that holds the rotation lock alone
     if let Ok(Some(cmd)) = p.rotate_cmd() {
-        match exec(&cmd, &env, &log_dir.join("rotate.log")) {
-            Ok(ex) if ex.code == 0 => st.phase("logs", "ok", Some(0), None),
-            Ok(ex) => {
-                let msg = format!("eb-keep-logs rotate exited {}", ex.code);
-                log("ERROR", "logs", &target, &msg);
-                st.phase("logs", "failed", Some(ex.code), Some(msg));
-                st.failed = true;
+        let lock = p.rotate_lock().unwrap_or_default();
+        match rotate_lock.map(rotate_alone) {
+            Some(Ok(None)) => {
+                let msg = format!(
+                    "another run under {} holds {}, live or rotating; the rotation is left to a run that ends alone",
+                    site.filesystems.log_root,
+                    lock.display()
+                );
+                log("INFO", "logs", &target, &format!("rotation skipped: {msg}"));
+                st.phase("logs", "skipped", None, Some(msg));
             }
-            Err(f) => {
-                st.res.message = Some(f.msg);
-                return finish(st, Some(f.code));
+            alone => {
+                if let Some(Err(e)) = &alone {
+                    let msg = format!(
+                        "cannot take {} alone: {e}; rotating without it",
+                        lock.display()
+                    );
+                    log("WARN", "logs", &target, &msg);
+                }
+                match exec(&cmd, &env, &log_dir.join("rotate.log")) {
+                    Ok(ex) if ex.code == 0 => st.phase("logs", "ok", Some(0), None),
+                    Ok(ex) => {
+                        let msg = format!("eb-keep-logs rotate exited {}", ex.code);
+                        log("ERROR", "logs", &target, &msg);
+                        st.phase("logs", "failed", Some(ex.code), Some(msg));
+                        st.failed = true;
+                    }
+                    Err(f) => {
+                        st.res.message = Some(f.msg);
+                        return finish(st, Some(f.code));
+                    }
+                }
+                if let Some(c) = stop_if_signalled(&mut st, "logs") {
+                    return finish(st, Some(c));
+                }
             }
-        }
-        if let Some(c) = stop_if_signalled(&mut st, "logs") {
-            return finish(st, Some(c));
         }
     }
 
