@@ -146,6 +146,9 @@ enum Cmd {
         /// Write the result JSON here.
         #[arg(long)]
         result: Option<PathBuf>,
+        /// Directory written by `stack shard`; reuse its units without replanning.
+        #[arg(long)]
+        shard_plan: Option<PathBuf>,
         /// Print the commands that would run and start nothing.
         #[arg(long)]
         dry_run: bool,
@@ -509,7 +512,18 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
     }
     install_handlers();
     let before = (!dry && s.watch_on().is_some()).then(|| watch::listings(&planner, &lines));
-    let res = run(&planner, &lines, &Options { dry_run: dry });
+    let saved_units = match shard_plan {
+        Some(d) => Some(read_units(d)?),
+        None => None,
+    };
+    let res = run(
+        &planner,
+        &lines,
+        &Options {
+            dry_run: dry,
+            shard_units: saved_units.as_deref(),
+        },
+    );
     if let Some(m) = &res.message {
         log("ERROR", "run", &c.target, m);
     }
@@ -819,7 +833,14 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     let lines = util::parse_list(&(doc.rebuild.join("\n") + "\n"))?;
     tools::check_versions(&s, false)?;
     let before = watch::listings(&planner, &lines);
-    let res = run(&planner, &lines, &Options { dry_run: false });
+    let res = run(
+        &planner,
+        &lines,
+        &Options {
+            dry_run: false,
+            shard_units: None,
+        },
+    );
     if let Some(m) = &res.message {
         log("ERROR", "run", name, m);
     }
@@ -898,13 +919,14 @@ fn main() {
         Cmd::Run {
             common,
             result,
+            shard_plan,
             dry_run,
         } => cmd_plan_or_run(
             common,
             Mode {
                 out: None,
                 result: result.as_deref(),
-                shard_plan: None,
+                shard_plan: shard_plan.as_deref(),
                 dry: *dry_run,
                 is_run: true,
             },
