@@ -716,6 +716,7 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
         let paths = w.state_dir.iter().map(|p| ("state_dir", p));
         let paths = paths.chain(w.repository.iter().map(|p| ("repository", p)));
         let paths = paths.chain(w.modules_dirs.iter().map(|p| ("modules_dirs", p)));
+        let paths = paths.chain(w.easyconfigs.iter().map(|p| ("easyconfigs", p)));
         for (key, p) in paths {
             if !p.starts_with('/') {
                 e.push(format!("watch.{key}: `{p}` is not an absolute path"));

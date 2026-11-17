@@ -47,7 +47,7 @@ pub struct Summary {
 pub struct TargetSummary {
     /// The target's name.
     pub name: String,
-    /// The subcommand that ran the target: `run`.
+    /// `run`, or `watch` for a targeted rebuild.
     pub command: String,
     /// The build type, `default` without one.
     pub build_type: String,
@@ -85,6 +85,9 @@ pub struct TargetSummary {
     /// The easyconfigs the target's selector left out.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deselected: Vec<String>,
+    /// The plan of the watch that ran this rebuild.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watch: Option<serde_json::Value>,
 }
 
 /// What one phase of a target's run came to.
@@ -163,7 +166,12 @@ pub fn combined_code(codes: &[i32]) -> i32 {
 }
 
 /// A target's entry, from its run result.
-pub fn entry(res: &RunResult, command: &str, result: Option<&Path>) -> TargetSummary {
+pub fn entry(
+    res: &RunResult,
+    command: &str,
+    result: Option<&Path>,
+    watch: Option<serde_json::Value>,
+) -> TargetSummary {
     let mut phases: Vec<PhaseSummary> = res
         .phases
         .iter()
@@ -229,6 +237,7 @@ pub fn entry(res: &RunResult, command: &str, result: Option<&Path>) -> TargetSum
             .iter()
             .map(|d| d.easyconfig.clone())
             .collect(),
+        watch,
     }
 }
 
@@ -639,6 +648,14 @@ pub fn html(s: &Summary, run_dir: &Path) -> String {
                     .join(", ")
             );
         }
+        if let Some(w) = &t.watch {
+            let text = serde_json::to_string_pretty(w).unwrap_or_default();
+            let _ = writeln!(
+                h,
+                "<details><summary>The plan of <code>watch</code></summary>\n<pre>{}</pre>\n</details>",
+                esc(&text)
+            );
+        }
     }
     h.push_str("</body>\n</html>\n");
     h
@@ -687,6 +704,7 @@ mod tests {
                     reason: Some(reason.into()),
                 }],
                 deselected: vec![],
+                watch: None,
             }],
         }
     }

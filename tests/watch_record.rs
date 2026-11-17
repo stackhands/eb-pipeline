@@ -191,7 +191,7 @@ fn without_eb_stack_or_eessi_the_run_succeeds_and_warns_that_nothing_was_recorde
         "{err}"
     );
     assert!(
-        err.contains("no EESSI change under them is seen until a record of them is written"),
+        err.contains("no EESSI change under them is seen until watch --adopt records them"),
         "{err}"
     );
     assert!(!t

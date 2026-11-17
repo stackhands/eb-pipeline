@@ -3,7 +3,7 @@ use eb_pipeline::exit::{self, Fail};
 use eb_pipeline::plan::{build_plan, read_units, Planner};
 use eb_pipeline::resolve::{explain, Scope};
 use eb_pipeline::run::{install_handlers, log, run, Options, RunResult};
-use eb_pipeline::{easystack, notify, schema, site, summary, templates, tools, util, watch};
+use eb_pipeline::{easystack, eessi, notify, schema, site, summary, templates, tools, util, watch};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -14,6 +14,7 @@ Examples:
   eb-pipeline targets --site site.toml --format json
   eb-pipeline plan --site site.toml --list list.txt --target cpu --build-type production --out plan.json
   eb-pipeline run --site site.toml --list list.txt --target cpu --build-type production --result result.json
+  eb-pipeline watch --site site.toml --target cpu --build-type production --dry-run
 
 Configuration: every flag above falls back to an EB_PIPELINE_<FLAG> variable
 (EB_PIPELINE_SITE, EB_PIPELINE_LIST, EB_PIPELINE_TARGET, EB_PIPELINE_BUILD_TYPE,
@@ -23,10 +24,27 @@ example EB_PIPELINE__FILESYSTEMS__SCRATCH=/scratch/eb; the result is validated
 like the file.
 
 Output streams: stdout carries plan, explain, schema, init, status, targets and run
---dry-run output only. Events go to stderr as `LEVEL [phase] target: message`. The
-result JSON goes to --result, and each run's summary to summary.json and
-summary.html in its run directory, <log_root>/<log-stamp>/.
+--dry-run or watch --dry-run output only. Events go to stderr as `LEVEL [phase]
+target: message`. The result JSON goes to --result, and each run's summary to
+summary.json and summary.html in its run directory, <log_root>/<log-stamp>/.
 
+";
+
+const WATCH_EXIT: &str = "\
+Exit codes of watch:
+  0    nothing to rebuild: no install is recorded, EESSI is as recorded, or no
+       recorded install needs a rebuild; --dry-run printed the plan; --adopt
+       recorded the installs; or the rebuild succeeded
+  1    the rebuild failed, or an eb-stack call, the record or the state file did
+  2    invalid arguments or site file, or eb-stack below its min_version
+  75   another watch of the target holds its lock, the module environment did
+       not load, or the EESSI repository or a module tree cannot be read
+  78   [watch] is off, the module environment loads no EESSI, recorded installs
+       were built against another EESSI version or CPU subdirectory, eb-stack is
+       missing, or no easyconfig tree has the easyconfig of a vanished module
+  130  SIGINT
+  143  SIGTERM
+The rebuild's exit code is watch's, so its phases' 75 and 78 pass through.
 ";
 
 #[derive(Parser)]
@@ -131,6 +149,39 @@ enum Cmd {
         /// Print the commands that would run and start nothing.
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Rebuild the recorded installs an EESSI change reaches, in dependency order.
+    #[command(after_long_help = WATCH_EXIT)]
+    Watch {
+        /// Site file.
+        #[arg(long, env = "EB_PIPELINE_SITE")]
+        site: PathBuf,
+        /// Target name.
+        #[arg(long, env = "EB_PIPELINE_TARGET")]
+        target: String,
+        /// Build type of the rebuild (selects per-build-type overrides).
+        #[arg(long, env = "EB_PIPELINE_BUILD_TYPE")]
+        build_type: String,
+        /// Run label of the rebuild. Default: the log stamp.
+        #[arg(long, env = "EB_PIPELINE_RUN_ID")]
+        run_id: Option<String>,
+        /// Timestamp directory of the rebuild under the log root, as for
+        /// `run`. Default: the current UTC time.
+        #[arg(long, env = "EB_PIPELINE_LOG_STAMP")]
+        log_stamp: Option<String>,
+        /// Print the plan and rebuild nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Record every install in the target's module tree against the EESSI
+        /// loaded now, in place of the record, and rebuild nothing.
+        #[arg(long)]
+        adopt: bool,
+        /// Write the plan JSON here.
+        #[arg(long)]
+        plan_out: Option<PathBuf>,
+        /// Write the rebuild's result JSON here.
+        #[arg(long)]
+        result: Option<PathBuf>,
     },
 }
 
@@ -464,9 +515,9 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
     }
     if !dry {
         if let Some(before) = &before {
-            watch::record_run(&planner, &res, before);
+            watch::record_run(&planner, &lines, &res, before);
         }
-        write_summary(&s, &res, "run", result);
+        write_summary(&s, &res, "run", result, None);
         if let Some(p) = result {
             write_json(&to_sorted(&res), Some(p))?;
         }
@@ -476,9 +527,15 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
 
 /// Merge a target's run into its run directory's summary; a problem is a
 /// warning and leaves the run's exit code as it is.
-fn write_summary(s: &schema::Site, res: &RunResult, command: &str, result: Option<&Path>) {
+fn write_summary(
+    s: &schema::Site,
+    res: &RunResult,
+    command: &str,
+    result: Option<&Path>,
+    watch: Option<serde_json::Value>,
+) {
     let dir = summary::run_dir(res);
-    let entry = summary::entry(res, command, result);
+    let entry = summary::entry(res, command, result, watch);
     match summary::record(&s.site.name, entry, &dir) {
         Ok(_) => {
             log(
@@ -501,6 +558,297 @@ fn write_summary(s: &schema::Site, res: &RunResult, command: &str, result: Optio
             &format!("no summary written: {e}"),
         ),
     }
+}
+
+struct WatchArgs<'a> {
+    site: &'a Path,
+    target: &'a str,
+    build_type: &'a str,
+    run_id: Option<&'a str>,
+    log_stamp: Option<&'a str>,
+    dry_run: bool,
+    adopt: bool,
+    plan_out: Option<&'a Path>,
+    result: Option<&'a Path>,
+}
+
+fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
+    if let Some(stamp) = w.log_stamp.filter(|s| !util::is_log_stamp(s)) {
+        return Err(Fail::usage(format!(
+            "--log-stamp `{stamp}` is not a UTC time as YYYYMMDD_HHMMSS"
+        )));
+    }
+    let s = load_valid(w.site, None)?;
+    let target = s.target(w.target)?;
+    let Some(conf) = s.watch_on() else {
+        return Err(Fail::new(
+            exit::REFUSED,
+            "the site has no [watch] table, or it is disabled, so no install is recorded to watch",
+        ));
+    };
+    let log_stamp = w.log_stamp.map_or_else(timestamp_id, str::to_string);
+    // The selector chose the lines that built the recorded installs, and the
+    // rebuild list holds lines without its option, such as a vanished EESSI
+    // module's, which it would leave out.
+    let target = &schema::Target {
+        select: None,
+        ..target.clone()
+    };
+    let scope = Scope {
+        site: &s,
+        site_file: site_file(w.site),
+        target,
+        build_type: Some(w.build_type),
+        run_id: w.run_id.map_or_else(|| log_stamp.clone(), str::to_string),
+        log_stamp,
+    };
+    let list = format!("{}/watch.list", scope.log_dir());
+    let planner = Planner::new(scope, list.clone());
+    let name = target.name.as_str();
+    let say = |m: &str| log("INFO", "watch", name, m);
+    let state_dir = planner.scope.watch_state_dir().expect("[watch] is on");
+    install_handlers();
+    let _lock = watch::hold(&state_dir, name)?;
+    let work = watch::work_dir(&planner, "plan")?;
+    let drop_work = || {
+        let _ = std::fs::remove_dir_all(&work);
+    };
+    let (probe, env) = watch::probe(&planner, &work)?;
+    let revision = watch::revision_of(&probe)?;
+    watch::check_dirs(&probe)?;
+    let at = revision
+        .map(|r| format!(" at revision {r}"))
+        .unwrap_or_default();
+    let eessi_now = format!("EESSI {} {}{at}", probe.version, probe.software_subdir);
+    let local_dir = watch::local_modules_dir(&planner);
+    if w.adopt {
+        let found = eessi::scan(std::slice::from_ref(&local_dir));
+        let installs: Vec<watch::ToRecord> = found
+            .values()
+            .filter_map(|m| {
+                let ec = m.easyconfig.as_deref()?;
+                Some(watch::ToRecord {
+                    module: m.name.clone(),
+                    easyconfig: ec.rsplit('/').next().unwrap_or(ec).to_string(),
+                    args: Vec::new(),
+                    how: "adopted",
+                })
+            })
+            .collect();
+        if found.len() > installs.len() {
+            say(&format!(
+                "{} module(s) in {local_dir} have no easyconfig in their install and are not adopted",
+                found.len() - installs.len()
+            ));
+        }
+        if w.dry_run {
+            for i in &installs {
+                println!("{}", i.module);
+            }
+            drop_work();
+            say(&format!(
+                "dry run: would adopt {} against {eessi_now}",
+                installs.len()
+            ));
+            return Ok(exit::OK);
+        }
+        watch::need_eb_stack(&s)?;
+        let names = watch::record(&planner, &work, &probe, revision, &installs, true)?;
+        drop_work();
+        say(&format!(
+            "adopted {} against {eessi_now}: {}",
+            names.len(),
+            names.join(", ")
+        ));
+        return Ok(exit::OK);
+    }
+    let state = watch::load(&state_dir, name).map_err(|e| Fail::new(exit::FAILED, e))?;
+    if state.installs.is_empty() {
+        drop_work();
+        log(
+            "WARN",
+            "watch",
+            name,
+            &format!(
+                "no install is recorded in {}: a run with [watch] records what it builds, and watch --adopt what is installed",
+                watch::state_path(&state_dir, name).display()
+            ),
+        );
+        return Ok(exit::OK);
+    }
+    let other = watch::other_eessi(&state, &probe);
+    if let Some((_, first)) = other.first() {
+        if w.dry_run {
+            let width = other.iter().map(|(m, _)| m.len()).max().unwrap_or(0);
+            for (m, i) in &other {
+                println!(
+                    "{m:<width$}  built against EESSI {} {}",
+                    i.eessi_version, i.software_subdir
+                );
+            }
+        }
+        drop_work();
+        return Err(Fail::new(
+            exit::REFUSED,
+            format!(
+                "the module environment of target {name} loads EESSI {} {}, and {} of {} recorded installs were built against EESSI {} {}; a rebuild in place would mix the two: build the stack for the new EESSI (eb-stack stack gap lists what it lacks), then record it with watch --adopt",
+                probe.version,
+                probe.software_subdir,
+                other.len(),
+                state.installs.len(),
+                first.eessi_version,
+                first.software_subdir
+            ),
+        ));
+    }
+    let print = |doc: &watch::PlanDoc| {
+        if w.dry_run {
+            print!("{}", doc.text());
+        } else {
+            doc.text().lines().for_each(say);
+        }
+    };
+    if watch::unchanged_at(&state, &probe, revision) {
+        drop_work();
+        let doc = watch::PlanDoc::unchanged(name, &probe, revision, &state);
+        if let Some(p) = w.plan_out {
+            write_json(&to_sorted(&doc), Some(p))?;
+        }
+        print(&doc);
+        return Ok(exit::OK);
+    }
+    let mut verdicts = watch::assess(&state, &probe.modules_dirs, &local_dir, conf.rebuild_review);
+    let mut doc;
+    if verdicts.iter().any(|v| v.action == "rebuild") {
+        if let Err(f) = watch::need_eb_stack(&s) {
+            print(&watch::PlanDoc::new(name, &probe, revision, verdicts));
+            return Err(Fail::new(
+                f.code,
+                format!(
+                    "{}; without it neither the order of the rebuild nor the installs that depend on it are known, and nothing is rebuilt",
+                    f.msg
+                ),
+            ));
+        }
+        let u = watch::stage(
+            &work,
+            &eessi::scan(&probe.modules_dirs),
+            &eessi::scan(std::slice::from_ref(&local_dir)),
+        )?;
+        watch::cascade(
+            &planner,
+            &work,
+            &u,
+            &mut verdicts,
+            conf.rebuild_review,
+            &probe.software_subdir,
+        )?;
+        let vanished = verdicts
+            .iter()
+            .any(|v| v.action == "rebuild" && v.changes.iter().any(|c| c.change == "vanished"));
+        let robot = if vanished {
+            watch::robot_trees(conf, &env)
+        } else {
+            Vec::new()
+        };
+        if vanished && robot.is_empty() {
+            print(&watch::PlanDoc::new(name, &probe, revision, verdicts));
+            return Err(Fail::new(
+                exit::REFUSED,
+                "a dependency vanished from EESSI, and eb-stack has no easyconfig tree to plan its local build from: set [watch] easyconfigs, or load EasyBuild in [modules] init",
+            ));
+        }
+        let ordered = watch::order(&planner, &work, &u, &verdicts, &robot)?;
+        doc = watch::PlanDoc::new(name, &probe, revision, verdicts);
+        doc.rebuild = ordered;
+    } else {
+        doc = watch::PlanDoc::new(name, &probe, revision, verdicts);
+    }
+    if let Some(p) = w.plan_out {
+        write_json(&to_sorted(&doc), Some(p))?;
+    }
+    if !conf.rebuild_review {
+        for v in doc.installs.iter().filter(|v| v.action == "keep") {
+            if let Some(c) = v.changes.iter().find(|c| c.class == "review") {
+                log(
+                    "WARN",
+                    "watch",
+                    name,
+                    &format!(
+                        "{} kept although {} {} ({}), as rebuild_review = false",
+                        v.module, c.module, c.change, c.class
+                    ),
+                );
+            }
+        }
+    }
+    print(&doc);
+    if w.dry_run {
+        if doc.rebuild.is_empty() {
+            drop_work();
+        } else {
+            say(&format!(
+                "dry run: nothing rebuilt; eb-stack's files are in {}",
+                work.display()
+            ));
+        }
+        return Ok(exit::OK);
+    }
+    if doc.rebuild.is_empty() {
+        if let Err(f) = watch::settle(&planner, &probe, revision, &doc.installs, None) {
+            log(
+                "WARN",
+                "watch",
+                name,
+                &format!("record not updated: {}", f.msg),
+            );
+        }
+        drop_work();
+        return Ok(exit::OK);
+    }
+    let log_dir = PathBuf::from(planner.scope.log_dir());
+    std::fs::create_dir_all(&log_dir).map_err(|e| {
+        Fail::new(
+            exit::FAILED,
+            format!("cannot create {}: {e}", log_dir.display()),
+        )
+    })?;
+    std::fs::write(&list, doc.rebuild.join("\n") + "\n")
+        .map_err(|e| Fail::new(exit::FAILED, format!("cannot write {list}: {e}")))?;
+    write_json(&to_sorted(&doc), Some(&log_dir.join("watch-plan.json")))?;
+    let lines = util::parse_list(&(doc.rebuild.join("\n") + "\n"))?;
+    tools::check_versions(&s, false)?;
+    let before = watch::listings(&planner, &lines);
+    let res = run(&planner, &lines, &Options { dry_run: false });
+    if let Some(m) = &res.message {
+        log("ERROR", "run", name, m);
+    }
+    if res.interrupted_by.is_none() {
+        let rebuild = Some((lines.as_slice(), &res, &before));
+        match watch::settle(&planner, &probe, revision, &doc.installs, rebuild) {
+            Ok(names) if !names.is_empty() => say(&format!(
+                "recorded {} against {eessi_now}: {}",
+                names.len(),
+                names.join(", ")
+            )),
+            Ok(_) => {}
+            Err(f) => log(
+                "WARN",
+                "watch",
+                name,
+                &format!(
+                    "record not updated: {}; the next watch plans from the record as it was",
+                    f.msg
+                ),
+            ),
+        }
+        drop_work();
+    }
+    write_summary(&s, &res, "watch", w.result, Some(to_sorted(&doc)));
+    if let Some(p) = w.result {
+        write_json(&to_sorted(&res), Some(p))?;
+    }
+    Ok(res.exit_code)
 }
 
 fn main() {
@@ -561,6 +909,27 @@ fn main() {
                 is_run: true,
             },
         ),
+        Cmd::Watch {
+            site,
+            target,
+            build_type,
+            run_id,
+            log_stamp,
+            dry_run,
+            adopt,
+            plan_out,
+            result,
+        } => cmd_watch(&WatchArgs {
+            site,
+            target,
+            build_type,
+            run_id: run_id.as_deref(),
+            log_stamp: log_stamp.as_deref(),
+            dry_run: *dry_run,
+            adopt: *adopt,
+            plan_out: plan_out.as_deref(),
+            result: result.as_deref(),
+        }),
     };
     let code = match r {
         Ok(c) => c,

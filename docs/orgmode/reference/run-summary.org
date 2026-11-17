@@ -5,6 +5,7 @@
 * The run summary
 
 =eb-pipeline run= adds its target to the summary of its run directory, =LOG_ROOT/LOG_STAMP=, after its last phase, with or without =--result=: =summary.json= for programs and =summary.html= for people.
+The rebuild of =eb-pipeline watch= adds its target in the same way.
 =summary.json= is an object in JavaScript Object Notation (JSON), with the keys of every object in sorted order and =schema_version= 1.
 =run --dry-run= writes no summary, and neither does a run that an error in its input stops before it starts, which writes no result file either.
 The examples on this page come from =docs/examples/summary.sh=, which runs both targets of the site file of [[file:../howto/build-from-ci.org][Build a list on every target from continuous integration]] with the =local= scheduler, no modules, its paths under a work directory, and the stand-in for =eb= of the tutorial, which fails the lines whose easyconfig starts with =Broken-=.
@@ -177,14 +178,14 @@ cat site/logs/20261117_090000/summary.json
 | Key                | Type    | Meaning                                                                                                                       |
 |--------------------+---------+-------------------------------------------------------------------------------------------------------------------------------|
 | =build_type=       | string  | The build type.                                                                                                               |
-| =command=          | string  | =run=.                                                                                                                        |
+| =command=          | string  | =run=, or =watch= for the rebuild of =eb-pipeline watch=.                                                                     |
 | =counts=           | object  | The number of packages with each status, for the statuses that some package has.                                              |
 | =deselected=       | array   | The easyconfigs of the lines that the target's =[targets.select]= left out; only when there are some.                         |
 | =duration_seconds= | number  | How long the run took, as in the result file.                                                                                 |
 | =ended_at=         | string  | When the run ended, as in the result file.                                                                                    |
 | =exit_code=        | integer | The exit status of the run.                                                                                                   |
 | =interrupted_by=   | string  | =SIGINT= or =SIGTERM=, when a signal stopped the run.                                                                         |
-| =list=             | string  | The build list, as =--list= names it.                                                                                         |
+| =list=             | string  | The build list, as =--list= names it; =LOG_DIR/watch.list= for the rebuild of a watch.                                        |
 | =log_dir=          | string  | =LOG_ROOT/LOG_STAMP/TARGET=, where the run wrote its logs.                                                                    |
 | =message=          | string  | The error that stopped the run, when one did.                                                                                 |
 | =name=             | string  | The name of the target.                                                                                                       |
@@ -194,6 +195,7 @@ cat site/logs/20261117_090000/summary.json
 | =run_id=           | string  | The run id.                                                                                                                   |
 | =started_at=       | string  | When the run started, as in the result file.                                                                                  |
 | =status=           | string  | What =exit_code= stands for.                                                                                                  |
+| =watch=            | object  | The plan of the watch, as [[file:watch.org][The watch state and plan]] gives it; only for the rebuild of a watch.             |
 
 | Status        |                                    Exit status |
 |---------------+------------------------------------------------|
@@ -232,7 +234,7 @@ A reader ignores the keys that it does not know: a later version 1 may add keys,
 
 ** summary.html
 
-The page shows the same summary: a table of the targets, then the phases and the packages of each target.
+The page shows the same summary: a table of the targets, then the phases and the packages of each target, and for the rebuild of a watch its plan, folded.
 Each status is written out as well as coloured, and the colours follow the reader's light or dark preference.
 The page has no script and fetches nothing, and every value on it is escaped.
 Its links are relative: to =summary.json=, to the entry of each target, and to the log of each package under the run directory, so that the page keeps working when the run directory is copied or served elsewhere.

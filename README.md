@@ -39,7 +39,7 @@ looks site-specific.
   [the site file](docs/orgmode/reference/site-file.org),
   [the plan and result files](docs/orgmode/reference/plan-and-result.org),
   [the run summary](docs/orgmode/reference/run-summary.org),
-  [the watch state](docs/orgmode/reference/watch.org),
+  [the watch state and plan](docs/orgmode/reference/watch.org),
   [the log tree and its locks](docs/orgmode/reference/log-tree.org),
   [the site file templates](docs/orgmode/reference/templates.org),
   [environment variables](docs/orgmode/reference/environment.org),

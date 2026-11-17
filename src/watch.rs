@@ -1,16 +1,19 @@
-//! What each local install of a target was built against in EESSI, for
-//! `[watch]`. `eb-stack rebuild-set` says which EESSI modules an install
-//! depends on and how; eb-pipeline records each one's identity beside it.
+//! What each local install of a target was built against in EESSI, and the
+//! targeted rebuild of the installs an EESSI change reaches. `eb-stack
+//! rebuild-set` says which EESSI modules an install depends on and how, and
+//! `eb-stack stack shard` orders the rebuild; eb-pipeline records each
+//! dependency's identity, compares it with EESSI now, and drives the run.
 
 use crate::eessi::{self, Module, Probe};
 use crate::exit::{self, Fail};
-use crate::plan::{module_rel, Planner};
+use crate::plan::{module_rel, read_units, Planner};
 use crate::run::{exec_logged, log, RunResult};
-use crate::schema::Site;
+use crate::schema::{Site, Watch};
 use crate::tools::{self, Tool};
-use crate::util::{cmp_version, parse_version, ListLine};
+use crate::util::{cmp_version, parse_version, quote, ListLine};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 
 /// The `schema_version` of the state file.
@@ -37,7 +40,12 @@ pub struct State {
 pub struct Install {
     /// The easyconfig as the build list named it.
     pub easyconfig: String,
-    /// `built` by a run of eb-pipeline.
+    /// The options that its build list line gave `eb`, without a rebuild
+    /// option; a rebuild passes them again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    /// `built` by a run of eb-pipeline or by `watch`, or `adopted` by
+    /// `watch --adopt`.
     pub how: String,
     /// Log stamp of the run that recorded it.
     pub run: String,
@@ -55,6 +63,10 @@ pub struct Install {
     pub revision: Option<u64>,
     /// EESSI modules it depends on, by module name.
     pub deps: BTreeMap<String, Dep>,
+    /// The changes a watch rebuilt it for, kept while no rebuild of it has
+    /// succeeded, so that the next watch rebuilds it again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending: Vec<Change>,
 }
 
 /// An EESSI module an install depends on, as `eb-stack rebuild-set` found.
@@ -428,20 +440,23 @@ pub fn deps_of(
     out
 }
 
-/// An install to record: its module, and its easyconfig as the build list
-/// named it.
+/// An install to record: its module, and its easyconfig and options as its
+/// build list line gave them.
 pub struct ToRecord {
     /// `Name/version`.
     pub module: String,
     /// The easyconfig as the build list named it.
     pub easyconfig: String,
+    /// [`Install::args`].
+    pub args: Vec<String>,
     /// [`Install::how`].
     pub how: &'static str,
 }
 
 /// Record `installs` against the EESSI `probe` describes, each with the
 /// dependencies `eb-stack rebuild-set` finds for it when every EESSI
-/// easyconfig counts as changed. Returns the modules recorded; an install
+/// easyconfig counts as changed, beside the recorded ones or, with
+/// `replace`, in their place. Returns the modules recorded; an install
 /// without a module file is left out.
 pub fn record(
     p: &Planner,
@@ -449,6 +464,7 @@ pub fn record(
     probe: &Probe,
     revision: Option<u64>,
     installs: &[ToRecord],
+    replace: bool,
 ) -> Result<Vec<String>, Fail> {
     let eessi = eessi::scan(&probe.modules_dirs);
     let local = eessi::scan(&[local_modules_dir(p)]);
@@ -467,6 +483,7 @@ pub fn record(
         .map(|i| {
             let install = Install {
                 easyconfig: i.easyconfig.clone(),
+                args: i.args.clone(),
                 how: i.how.into(),
                 run: p.scope.log_stamp.clone(),
                 recorded_at: now.clone(),
@@ -475,14 +492,20 @@ pub fn record(
                 modules_dirs: probe.modules_dirs.clone(),
                 revision,
                 deps: deps_of(&rows, &i.module, &u.eessi_files, &eessi),
+                pending: Vec::new(),
             };
             (i.module.clone(), install)
         })
         .collect();
     let names: Vec<String> = entries.iter().map(|(m, _)| m.clone()).collect();
     let dir = p.scope.watch_state_dir().expect("[watch] is on");
-    update(&dir, &p.scope.target.name, |s| s.installs.extend(entries))
-        .map_err(|e| Fail::new(exit::FAILED, e))?;
+    update(&dir, &p.scope.target.name, |s| {
+        if replace {
+            s.installs.clear();
+        }
+        s.installs.extend(entries)
+    })
+    .map_err(|e| Fail::new(exit::FAILED, e))?;
     Ok(names)
 }
 
@@ -518,12 +541,18 @@ fn listing(p: &Planner, rel: &str) -> Vec<String> {
     v
 }
 
-/// After a run, record the installs it built. A problem is a warning; the
-/// run's exit code stays as it was.
-pub fn record_run(p: &Planner, res: &RunResult, before: &Listings) {
-    let target = &p.scope.target.name;
+/// The installs the successful lines of a run of `lines` built, whose
+/// `easybuild` listing is not the one `before` holds, and the number of
+/// successful lines that left their install as it was.
+fn built_by(
+    p: &Planner,
+    lines: &[ListLine],
+    res: &RunResult,
+    before: &Listings,
+) -> (Vec<ToRecord>, usize) {
     let mut built = Vec::new();
     let mut unchanged = 0;
+    let (kept, _) = p.select_lines(lines);
     for l in res.lines.iter().filter(|l| l.status == "success") {
         let Some(rel) = module_rel(&l.easyconfig) else {
             continue;
@@ -532,12 +561,32 @@ pub fn record_run(p: &Planner, res: &RunResult, before: &Listings) {
             unchanged += 1;
             continue;
         }
+        let args = kept
+            .iter()
+            .find(|x| x.easyconfig == l.easyconfig)
+            .map(|x| {
+                x.args
+                    .iter()
+                    .filter(|a| !matches!(a.as_str(), "--rebuild" | "-f" | "--force"))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
         built.push(ToRecord {
             module: rel,
             easyconfig: l.easyconfig.clone(),
+            args,
             how: "built",
         });
     }
+    (built, unchanged)
+}
+
+/// After a run of `lines`, record the installs it built. A problem is a
+/// warning; the run's exit code stays as it was.
+pub fn record_run(p: &Planner, lines: &[ListLine], res: &RunResult, before: &Listings) {
+    let target = &p.scope.target.name;
+    let (built, unchanged) = built_by(p, lines, res, before);
     if unchanged > 0 {
         log(
             "INFO",
@@ -583,7 +632,7 @@ pub fn record_run(p: &Planner, res: &RunResult, before: &Listings) {
             "watch",
             target,
             &format!(
-                "{what} not recorded: {}; no EESSI change under them is seen until a record of them is written",
+                "{what} not recorded: {}; no EESSI change under them is seen until watch --adopt records them",
                 f.msg
             ),
         ),
@@ -600,9 +649,583 @@ fn record_now(
     let work = work_dir(p, "record")?;
     let (probe, _) = probe(p, &work)?;
     let revision = revision_of(&probe)?;
-    let names = record(p, &work, &probe, revision, installs)?;
+    let names = record(p, &work, &probe, revision, installs, false)?;
     let _ = std::fs::remove_dir_all(&work);
     Ok((probe, revision, names))
+}
+
+/// Hold `<target>.watch.lock` for the whole of a watch; one that another
+/// watch holds is temporary.
+pub fn hold(dir: &str, target: &str) -> Result<File, Fail> {
+    std::fs::create_dir_all(dir)
+        .map_err(|e| Fail::new(exit::FAILED, format!("cannot create {dir}: {e}")))?;
+    let p = Path::new(dir).join(format!("{target}.watch.lock"));
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&p)
+        .map_err(|e| Fail::new(exit::FAILED, format!("cannot open {}: {e}", p.display())))?;
+    match f.try_lock() {
+        Ok(()) => Ok(f),
+        Err(std::fs::TryLockError::WouldBlock) => Err(Fail::new(
+            exit::TEMPFAIL,
+            format!("another watch of target {target} holds {}", p.display()),
+        )),
+        Err(std::fs::TryLockError::Error(e)) => Err(Fail::new(
+            exit::FAILED,
+            format!("cannot lock {}: {e}", p.display()),
+        )),
+    }
+}
+
+/// A module tree that cannot be read is temporary, as when CVMFS is not
+/// mounted; every dependency in it would otherwise look vanished.
+pub fn check_dirs(probe: &Probe) -> Result<(), Fail> {
+    for d in &probe.modules_dirs {
+        std::fs::read_dir(d).map_err(|e| {
+            Fail::new(
+                exit::TEMPFAIL,
+                format!("cannot read the EESSI module tree {d}: {e}"),
+            )
+        })?;
+    }
+    Ok(())
+}
+
+/// Recorded installs built against another EESSI version or CPU
+/// subdirectory than the module environment loads now.
+pub fn other_eessi<'a>(state: &'a State, probe: &Probe) -> Vec<(&'a String, &'a Install)> {
+    state
+        .installs
+        .iter()
+        .filter(|(_, i)| {
+            i.eessi_version != probe.version || i.software_subdir != probe.software_subdir
+        })
+        .collect()
+}
+
+/// Whether every install was last found at the repository's revision now,
+/// over the same module trees, all inside the repository: then no module
+/// can have changed under them.
+pub fn unchanged_at(state: &State, probe: &Probe, revision: Option<u64>) -> bool {
+    let (Some(rev), Some(repo)) = (revision, &probe.repository) else {
+        return false;
+    };
+    probe
+        .modules_dirs
+        .iter()
+        .all(|d| Path::new(d).starts_with(repo))
+        && state.installs.values().all(|i| {
+            i.revision == Some(rev) && i.modules_dirs == probe.modules_dirs && i.pending.is_empty()
+        })
+}
+
+/// What a watch found for one recorded install.
+#[derive(Debug, Clone, Serialize)]
+pub struct Verdict {
+    /// `Name/version`.
+    pub module: String,
+    /// [`Install::easyconfig`].
+    pub easyconfig: String,
+    /// [`Install::args`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    /// `rebuild`, `keep`, `unaffected`, or `gone` when its module file is.
+    pub action: String,
+    /// The dependencies that are not as recorded.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub changes: Vec<Change>,
+}
+
+/// A dependency of an install that is not as recorded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Change {
+    /// `Name/version` of the dependency.
+    pub module: String,
+    /// `changed` or `vanished` in EESSI, or `rebuilt` for a local install
+    /// this watch rebuilds.
+    pub change: String,
+    /// [`Dep::class`].
+    pub class: String,
+    /// [`Dep::edge_kind`].
+    pub edge_kind: String,
+}
+
+fn rebuilds(c: &Change, review: bool) -> bool {
+    match c.class.as_str() {
+        "must-rebuild" => true,
+        "review" => review,
+        _ => c.change == "vanished",
+    }
+}
+
+/// Each recorded install against the EESSI modules `dirs` holds now, with
+/// the changes a failed rebuild left pending. A dependency eb-stack classed
+/// `must-rebuild` rebuilds its install, and one it classed `review`, which
+/// the install's build alone may have used, does so with `review`. One
+/// classed `no-rebuild` rebuilds it only when it vanished, as the install's
+/// module then fails to load.
+pub fn assess(state: &State, dirs: &[String], local_dir: &str, review: bool) -> Vec<Verdict> {
+    let mut now: BTreeMap<&str, Option<Module>> = BTreeMap::new();
+    let local = [local_dir.to_string()];
+    state
+        .installs
+        .iter()
+        .map(|(m, i)| {
+            let mut v = Verdict {
+                module: m.clone(),
+                easyconfig: i.easyconfig.clone(),
+                args: i.args.clone(),
+                action: "gone".into(),
+                changes: Vec::new(),
+            };
+            if eessi::find(&local, m).is_none() {
+                return v;
+            }
+            v.changes.clone_from(&i.pending);
+            for (name, d) in &i.deps {
+                if v.changes.iter().any(|c| c.module == *name) {
+                    continue;
+                }
+                let found = now
+                    .entry(name.as_str())
+                    .or_insert_with(|| eessi::find(dirs, name));
+                let change = match found {
+                    None => "vanished",
+                    Some(f) if f.identity != d.identity => "changed",
+                    Some(_) => continue,
+                };
+                v.changes.push(Change {
+                    module: name.clone(),
+                    change: change.into(),
+                    class: d.class.clone(),
+                    edge_kind: d.edge_kind.clone(),
+                });
+            }
+            v.action = if v.changes.iter().any(|c| rebuilds(c, review)) {
+                "rebuild"
+            } else if v.changes.is_empty() {
+                "unaffected"
+            } else {
+                "keep"
+            }
+            .into();
+            v
+        })
+        .collect()
+}
+
+fn file_name(easyconfig: &str) -> &str {
+    easyconfig.rsplit('/').next().unwrap_or(easyconfig)
+}
+
+/// Add the recorded installs that depend on one this watch rebuilds, from
+/// `eb-stack rebuild-set` of the rebuilt easyconfigs over the installed
+/// modules: one that eb-stack classes as for `assess` is rebuilt too.
+pub fn cascade(
+    p: &Planner,
+    work: &Path,
+    u: &Universe,
+    verdicts: &mut [Verdict],
+    review: bool,
+    label: &str,
+) -> Result<(), Fail> {
+    let changed: Vec<String> = verdicts
+        .iter()
+        .filter(|v| v.action == "rebuild")
+        .map(|v| file_name(&v.easyconfig).to_string())
+        .filter(|f| u.local_files.contains_key(f))
+        .collect();
+    let rows = rebuild_set(p, work, u, &changed, "cascade", label)?;
+    for v in verdicts
+        .iter_mut()
+        .filter(|v| v.action == "keep" || v.action == "unaffected")
+    {
+        for r in rows.iter().filter(|r| r.dependent == v.module) {
+            for file in r.changed.split(", ") {
+                let Some(m) = u.local_files.get(file).filter(|m| **m != v.module) else {
+                    continue;
+                };
+                v.changes.push(Change {
+                    module: m.clone(),
+                    change: "rebuilt".into(),
+                    class: r.class.clone(),
+                    edge_kind: r.edge_kind.clone(),
+                });
+            }
+        }
+        if v.changes.iter().any(|c| rebuilds(c, review)) {
+            v.action = "rebuild".into();
+        } else if !v.changes.is_empty() {
+            v.action = "keep".into();
+        }
+    }
+    Ok(())
+}
+
+/// Easyconfig trees under EESSI's and the target's for `stack shard`, so it
+/// can plan the local build of a vanished EESSI module: `[watch]
+/// easyconfigs`, or the tree of the EasyBuild the module environment loads.
+pub fn robot_trees(w: &Watch, env: &BTreeMap<String, String>) -> Vec<String> {
+    if !w.easyconfigs.is_empty() {
+        return w.easyconfigs.clone();
+    }
+    env.get("EBROOTEASYBUILD")
+        .map(|r| format!("{}/easybuild/easyconfigs", r.trim_end_matches('/')))
+        .filter(|d| Path::new(d).is_dir())
+        .into_iter()
+        .collect()
+}
+
+/// The closures `plan.json` of `eb-stack stack shard` records: per line,
+/// the modules its build needs that the plan builds, dependencies first.
+#[derive(Deserialize)]
+struct ShardPlan {
+    #[serde(default)]
+    lines: Vec<ShardPlanLine>,
+}
+
+#[derive(Deserialize)]
+struct ShardPlanLine {
+    easyconfig: String,
+    module: String,
+    #[serde(default)]
+    closure: Option<Vec<String>>,
+}
+
+/// The rebuild list, each install with its recorded options and
+/// `--rebuild`, in the order `eb-stack stack shard` gives it: a dependency
+/// before what needs it. eb-stack orders the easyconfigs alone, which the
+/// staged tree holds as they were installed. A module a line's closure
+/// needs that no line builds, such as a vanished EESSI one, goes before
+/// that line as `Name-version.eb`, since a build of the list has no robot.
+pub fn order(
+    p: &Planner,
+    work: &Path,
+    u: &Universe,
+    verdicts: &[Verdict],
+    robot: &[String],
+) -> Result<Vec<String>, Fail> {
+    let rebuild: BTreeMap<&str, String> = verdicts
+        .iter()
+        .filter(|v| v.action == "rebuild")
+        .map(|v| {
+            let words: Vec<String> = std::iter::once(&v.easyconfig)
+                .chain(&v.args)
+                .map(|a| quote(a))
+                .chain(["--rebuild".to_string()])
+                .collect();
+            (file_name(&v.easyconfig), words.join(" "))
+        })
+        .collect();
+    let list = work.join("rebuild.list");
+    let text: String = verdicts
+        .iter()
+        .filter(|v| v.action == "rebuild")
+        .map(|v| format!("{} --rebuild\n", file_name(&v.easyconfig)))
+        .collect();
+    std::fs::write(&list, text).map_err(|e| {
+        Fail::new(
+            exit::FAILED,
+            format!("cannot write {}: {e}", list.display()),
+        )
+    })?;
+    let out = work.join("order");
+    let path = |p: &Path| p.display().to_string();
+    let mut argv = vec![
+        Tool::EbStack.bin(p.scope.site),
+        "stack".into(),
+        "shard".into(),
+        "--build-list".into(),
+        path(&list),
+        "--shards".into(),
+        "1".into(),
+    ];
+    for d in robot.iter().map(String::as_str).chain([
+        u.eessi_dir.to_str().unwrap_or(""),
+        u.local_dir.to_str().unwrap_or(""),
+    ]) {
+        argv.push("--easyconfigs".into());
+        argv.push(d.into());
+    }
+    argv.extend([
+        "--installed".into(),
+        path(&u.installed),
+        "--out-dir".into(),
+        path(&out),
+    ]);
+    let cmd = p.plan_role_cmd("watch", argv)?;
+    let log_path = work.join("order.log");
+    let code = exec_logged(&cmd, &p.scope.env(), &log_path)?;
+    if code != 0 {
+        return Err(Fail::new(
+            exit::FAILED,
+            format!(
+                "eb-stack stack shard exited {code}; its output is in {}",
+                log_path.display()
+            ),
+        ));
+    }
+    let plan_path = out.join("plan.json");
+    let plan: ShardPlan = std::fs::read_to_string(&plan_path)
+        .map_err(|e| e.to_string())
+        .and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))
+        .map_err(|e| {
+            Fail::new(
+                exit::FAILED,
+                format!("cannot read {}: {e}", plan_path.display()),
+            )
+        })?;
+    let listed: Vec<&str> = plan.lines.iter().map(|l| l.module.as_str()).collect();
+    let closure_of: BTreeMap<&str, &[String]> = plan
+        .lines
+        .iter()
+        .map(|l| {
+            (
+                file_name(&l.easyconfig),
+                l.closure.as_deref().unwrap_or_default(),
+            )
+        })
+        .collect();
+    let mut ordered = Vec::new();
+    let mut added: Vec<&str> = Vec::new();
+    for l in read_units(&out)?.iter().flat_map(|unit| &unit.lines) {
+        let file = file_name(&l.easyconfig);
+        for m in closure_of.get(file).copied().unwrap_or_default() {
+            if !listed.contains(&m.as_str()) && !added.contains(&m.as_str()) {
+                added.push(m);
+                ordered.push(format!("{}.eb", m.replacen('/', "-", 1)));
+            }
+        }
+        ordered.push(rebuild.get(file).cloned().unwrap_or_else(|| l.raw.clone()));
+    }
+    Ok(ordered)
+}
+
+/// What a watch found and planned, as `--plan-out` and the summary's
+/// `watch` entry carry it.
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanDoc {
+    /// [`SCHEMA_VERSION`].
+    pub schema_version: u32,
+    /// `watch-plan`.
+    pub kind: String,
+    /// The name of the target.
+    pub target: String,
+    /// The EESSI the module environment loads.
+    pub eessi: Probe,
+    /// The CVMFS revision of the repository; none outside CVMFS.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<u64>,
+    /// `unchanged` when the revision is the recorded one, or `unaffected`,
+    /// `kept` or `rebuild`.
+    pub outcome: String,
+    /// What the watch found for each recorded install, in the order of
+    /// their module names.
+    pub installs: Vec<Verdict>,
+    /// The rebuild list, in order.
+    pub rebuild: Vec<String>,
+}
+
+impl PlanDoc {
+    /// The plan for `verdicts`, with the outcome their actions give and no
+    /// rebuild list yet.
+    pub fn new(target: &str, probe: &Probe, revision: Option<u64>, verdicts: Vec<Verdict>) -> Self {
+        let any = |a: &str| verdicts.iter().any(|v| v.action == a);
+        let outcome = if any("rebuild") {
+            "rebuild"
+        } else if any("keep") {
+            "kept"
+        } else {
+            "unaffected"
+        };
+        PlanDoc {
+            schema_version: SCHEMA_VERSION,
+            kind: "watch-plan".into(),
+            target: target.into(),
+            eessi: probe.clone(),
+            revision,
+            outcome: outcome.into(),
+            installs: verdicts,
+            rebuild: Vec::new(),
+        }
+    }
+
+    /// The plan when the revision is the one every install was recorded
+    /// at: each install unaffected, with no module compared.
+    pub fn unchanged(target: &str, probe: &Probe, revision: Option<u64>, state: &State) -> Self {
+        let verdicts = state
+            .installs
+            .iter()
+            .map(|(m, i)| Verdict {
+                module: m.clone(),
+                easyconfig: i.easyconfig.clone(),
+                args: i.args.clone(),
+                action: "unaffected".into(),
+                changes: Vec::new(),
+            })
+            .collect();
+        PlanDoc {
+            outcome: "unchanged".into(),
+            ..PlanDoc::new(target, probe, revision, verdicts)
+        }
+    }
+
+    /// The plan as `watch --dry-run` prints it.
+    pub fn text(&self) -> String {
+        let rev = self
+            .revision
+            .map(|r| format!(" at revision {r}"))
+            .unwrap_or_default();
+        let recorded = if self.outcome == "unchanged" {
+            ", as recorded"
+        } else {
+            ""
+        };
+        let count = |a: &str| self.installs.iter().filter(|v| v.action == a).count();
+        let n = self.installs.len();
+        let mut out = format!(
+            "EESSI {} {}{rev}{recorded}: {n} recorded install{}, {} to rebuild, {} kept, {} unaffected, {} gone\n",
+            self.eessi.version,
+            self.eessi.software_subdir,
+            if n == 1 { "" } else { "s" },
+            count("rebuild"),
+            count("keep"),
+            count("unaffected"),
+            count("gone"),
+        );
+        let w = self
+            .installs
+            .iter()
+            .map(|v| v.module.len())
+            .chain(
+                self.rebuild
+                    .iter()
+                    .filter_map(|l| Some(module_rel(l.split_whitespace().next()?)?.len())),
+            )
+            .max()
+            .unwrap_or(0);
+        let why = |v: &Verdict| {
+            v.changes
+                .iter()
+                .map(|c| format!("{} {} ({}, {})", c.module, c.change, c.class, c.edge_kind))
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+        let by_file: BTreeMap<&str, &Verdict> = self
+            .installs
+            .iter()
+            .map(|v| (file_name(&v.easyconfig), v))
+            .collect();
+        if !self.rebuild.is_empty() {
+            out.push_str("rebuild, in this order:\n");
+            for (i, line) in self.rebuild.iter().enumerate() {
+                let first = line.split_whitespace().next().unwrap_or(line);
+                match (by_file.get(file_name(first)), module_rel(first)) {
+                    (Some(v), _) => out.push_str(&format!("  {:>2}. {:<w$}  {}\n", i + 1, v.module, why(v))),
+                    (None, Some(m)) => out.push_str(&format!(
+                        "  {:>2}. {m:<w$}  not installed: a dependency eb-stack plans for the rebuild\n",
+                        i + 1
+                    )),
+                    (None, None) => out.push_str(&format!("  {:>2}. {line}\n", i + 1)),
+                }
+            }
+        }
+        let unordered = if self.rebuild.is_empty() {
+            ("rebuild", "rebuild, in an order not known without eb-stack")
+        } else {
+            ("", "")
+        };
+        for (action, title) in [
+            unordered,
+            ("keep", "kept"),
+            ("unaffected", "unaffected"),
+            ("gone", "gone, dropped from the record"),
+        ] {
+            let vs: Vec<&Verdict> = self
+                .installs
+                .iter()
+                .filter(|v| v.action == action)
+                .collect();
+            if vs.is_empty() {
+                continue;
+            }
+            out.push_str(&format!("{title}:\n"));
+            for v in vs {
+                let line = format!("      {:<w$}  {}", v.module, why(v));
+                out.push_str(line.trim_end());
+                out.push('\n');
+            }
+        }
+        out
+    }
+}
+
+/// The rebuild a watch ran: its lines, its result, and the listings taken
+/// before it.
+pub type Rebuild<'a> = (&'a [ListLine], &'a RunResult, &'a Listings);
+
+/// Bring the record up to date after a watch: what the rebuild built is
+/// recorded, with a dependency eb-stack added to it, kept and unaffected
+/// installs take the EESSI now as their baseline, gone ones are dropped,
+/// and one whose rebuild did not succeed keeps its baseline and the
+/// changes it was rebuilt for, so that the next watch rebuilds it again.
+pub fn settle(
+    p: &Planner,
+    probe: &Probe,
+    revision: Option<u64>,
+    verdicts: &[Verdict],
+    rebuild: Option<Rebuild>,
+) -> Result<Vec<String>, Fail> {
+    let dir = p.scope.watch_state_dir().expect("[watch] is on");
+    let target = &p.scope.target.name;
+    let rebuilt = rebuild
+        .map(|(lines, res, before)| built_by(p, lines, res, before).0)
+        .unwrap_or_default();
+    let mut recorded = Vec::new();
+    if !rebuilt.is_empty() {
+        let work = work_dir(p, "record")?;
+        recorded = record(p, &work, probe, revision, &rebuilt, false)?;
+        let _ = std::fs::remove_dir_all(&work);
+    }
+    update(&dir, target, |s| {
+        for v in verdicts {
+            match v.action.as_str() {
+                "gone" => {
+                    s.installs.remove(&v.module);
+                }
+                "keep" | "unaffected" => {
+                    let Some(i) = s.installs.get_mut(&v.module) else {
+                        continue;
+                    };
+                    for c in &v.changes {
+                        match eessi::find(&probe.modules_dirs, &c.module) {
+                            Some(m) => {
+                                if let Some(d) = i.deps.get_mut(&c.module) {
+                                    d.identity = m.identity;
+                                }
+                            }
+                            None if c.change == "vanished" => {
+                                i.deps.remove(&c.module);
+                            }
+                            None => {}
+                        }
+                    }
+                    i.revision = revision;
+                    i.modules_dirs = probe.modules_dirs.clone();
+                }
+                "rebuild" if !recorded.contains(&v.module) => {
+                    if let Some(i) = s.installs.get_mut(&v.module) {
+                        i.pending.clone_from(&v.changes);
+                    }
+                }
+                _ => {}
+            }
+        }
+    })
+    .map_err(|e| Fail::new(exit::FAILED, e))?;
+    Ok(recorded)
 }
 
 #[cfg(test)]
@@ -654,6 +1277,28 @@ mod tests {
     }
 
     #[test]
+    fn the_plan_counts_a_single_recorded_install_in_the_singular() {
+        let probe = Probe {
+            version: "2023.06".into(),
+            software_subdir: "x86_64/generic".into(),
+            repository: None,
+            modules_dirs: Vec::new(),
+        };
+        let foo = Verdict {
+            module: "Foo/1.0".into(),
+            easyconfig: "Foo-1.0.eb".into(),
+            args: Vec::new(),
+            action: "unaffected".into(),
+            changes: Vec::new(),
+        };
+        let text = PlanDoc::new("cpu", &probe, None, vec![foo]).text();
+        assert!(
+            text.starts_with("EESSI 2023.06 x86_64/generic: 1 recorded install, 0 to rebuild, 0 kept, 1 unaffected, 0 gone\n"),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn a_state_file_of_another_target_or_schema_is_refused() {
         let d = tempfile::tempdir().unwrap();
         let dir = d.path().display().to_string();
@@ -670,5 +1315,31 @@ mod tests {
         )
         .unwrap();
         assert!(load(&dir, "cpu").unwrap_err().contains("schema_version 2"));
+    }
+
+    #[test]
+    fn a_vanished_dependency_the_install_only_built_with_follows_the_review_policy() {
+        let c = |change: &str, class: &str| Change {
+            module: "M/1".into(),
+            change: change.into(),
+            class: class.into(),
+            edge_kind: "e".into(),
+        };
+        for (change, class, review, rebuild) in [
+            ("changed", "must-rebuild", false, true),
+            ("changed", "review", true, true),
+            ("changed", "review", false, false),
+            ("changed", "no-rebuild", true, false),
+            ("vanished", "no-rebuild", false, true),
+            ("vanished", "review", false, false),
+            ("vanished", "review", true, true),
+            ("rebuilt", "no-rebuild", true, false),
+        ] {
+            assert_eq!(
+                rebuilds(&c(change, class), review),
+                rebuild,
+                "{change} {class} {review}"
+            );
+        }
     }
 }

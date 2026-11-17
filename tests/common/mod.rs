@@ -37,7 +37,9 @@ exit 0
 /// `rebuild-set` answers from `$STUB_DIR/deps.tsv`, one `dependent changed
 /// class edge_kind` row per line: the rows whose changed easyconfig is in
 /// `--changed`. `stack shard` writes the build list in the order of the
-/// easyconfigs in `$STUB_DIR/order.txt`, then the rest as given.
+/// easyconfigs in `$STUB_DIR/order.txt`, then the rest as given, and in
+/// `plan.json` each line's closure: the modules `$STUB_DIR/missing.txt`
+/// gives it, one `easyconfig module` pair per line, then its own.
 const EB_STACK: &str = r#"#!/bin/sh
 D="${STUB_DIR:?}"
 case "$1" in --version) echo "eb-stack 0.7.4"; exit 0;; esac
@@ -54,7 +56,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "${STUB_EB_STACK_FAIL:-}" ] && { echo "error: stub failure"; exit 1; }
 mkdir -p "$out"
-touch "$D/deps.tsv" "$D/order.txt"
+touch "$D/deps.tsv" "$D/order.txt" "$D/missing.txt"
 case "$cmd" in
   rebuild-set)
     rows=$(awk -F'\t' 'NR == FNR { c[$1] = 1; next }
@@ -63,7 +65,11 @@ case "$cmd" in
   stack-shard)
     awk 'NR == FNR { o[$1] = NR; next } { print (($1 in o) ? o[$1] : 100000 + FNR) "\t" $0 }' "$D/order.txt" "$list" \
       | sort -n | cut -f2- > "$out/shard-01.list"
-    printf '{"prelude":null,"shards":[{"name":"shard-01","file":"shard-01.list"}]}\n' > "$out/plan.json";;
+    lines=$(awk 'FILENAME == ARGV[1] { need[$1] = need[$1] "\"" $2 "\","; next }
+      { m = $1; sub(/\.eb$/, "", m); sub(/-/, "/", m)
+        printf "%s{\"easyconfig\":\"%s\",\"module\":\"%s\",\"closure\":[%s\"%s\"]}", (n++ ? "," : ""), $1, m, need[$1], m }' \
+      "$D/missing.txt" "$out/shard-01.list")
+    printf '{"prelude":null,"shards":[{"name":"shard-01","file":"shard-01.list"}],"lines":[%s]}\n' "$lines" > "$out/plan.json";;
 esac
 exit 0
 "#;

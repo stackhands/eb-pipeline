@@ -21,6 +21,7 @@ synopsis=(
     'status [OPTIONS] --site <SITE>'
     'plan [OPTIONS] --site <SITE> --list <LIST> --target <TARGET> --build-type <BUILD_TYPE>'
     'run [OPTIONS] --site <SITE> --list <LIST> --target <TARGET> --build-type <BUILD_TYPE>'
+    'watch [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>'
 )
 for usage in "${synopsis[@]}"; do
     run "eb-pipeline ${usage%% *} --help"

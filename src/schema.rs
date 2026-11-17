@@ -592,6 +592,12 @@ doc_struct! {
         #[serde(default)]
         modules_dirs: Vec<String> => ("array of string", "EESSI_MODULEPATH, EESSI_MODULEPATH_ACCEL", false,
             "EESSI module trees, in order, in place of the ones the module environment sets, as for a fixture tree."),
+        #[serde(default)]
+        easyconfigs: Vec<String> => ("array of string", "$EBROOTEASYBUILD/easybuild/easyconfigs", false,
+            "Easyconfig trees `watch` gives `eb-stack stack shard` under EESSI's and the target's, where it finds the easyconfig of a vanished EESSI module, as EasyBuild's robot does."),
+        #[serde(default = "yes")]
+        rebuild_review: bool => ("boolean", "true", false,
+            "Rebuild an install when a dependency `eb-stack rebuild-set` classes `review`, such as one only its build used, changed or vanished; false keeps it and warns."),
     }
 }
 
