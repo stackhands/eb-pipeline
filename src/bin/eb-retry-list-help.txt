@@ -1,7 +1,7 @@
 eb-retry-list: extract the unfinished lines of a build list from a run result or summary.
 
   eb-retry-list (--result FILE | --summary FILE --target NAME) --list FILE
-                [--status STATUS,...] [--out FILE]
+                [--status STATUS,...] [--classify] [--out FILE]
 
 Reads the result file of `eb-pipeline run --result` or one target of a run
 summary (`summary.json`), matches each line of `--list` (a build list or an
@@ -11,3 +11,9 @@ succeed in their original order with their original `eb` options.
 Without `--status`, every unfinished status (`failed`, `refused`, `pending`,
 `skipped`, and lines not yet reached before a non-zero exit) is included.
 Deselected lines and lines recorded as `success` are left out.
+
+With `--classify`, each unfinished line's recorded log is passed to
+`eb-stack stack bot-classify --json`, and only the `interrupted`, `resource`
+and `timeout` sub-classes are written. A missing or failed eb-stack, a missing
+log, or invalid classifier output is an error; no unclassified fallback is
+used.

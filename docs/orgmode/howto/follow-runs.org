@@ -159,6 +159,16 @@ fi
 Lines recorded as =success= and lines deselected by =[targets.select]= are left out, so =--rebuild= lines that already succeeded are not rebuilt.
 Use =--result result.json= in place of =--summary= and =--target=, and =--status failed= to narrow to specific line statuses.
 
+To retry only failures that =eb-stack= identifies as transient, add =--classify=:
+
+#+begin_src bash
+eb-retry-list --result result.json --list build.list --classify --out retry.list
+#+end_src
+
+This starts =eb-stack stack bot-classify --json= once for each unfinished line's recorded log and keeps only =interrupted=, =resource= and =timeout=.
+Install =eb-stack= on =PATH= before using the option.
+If a line has no recorded log, =eb-stack= is missing or fails, or its output cannot be read, =eb-retry-list= exits 2 and writes no retry list instead of treating every line as retryable.
+
 ** If it fails
 
 | Message                                                                                                                      | Cause                                                                                                          | What to do                                                                           |
