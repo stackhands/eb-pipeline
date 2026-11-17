@@ -1,0 +1,96 @@
+#+TITLE: The JUnit report
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* The JUnit report
+
+=eb-junit= reads result files written by =eb-pipeline run --result= and writes one JUnit XML document.
+It copies each line's recorded status into a test case.
+It does not decide why a line failed, it does not read a build list, and it does not start =eb=, =eb-stack=, =eb-keep-logs=, or =eb-staged-rebuild=.
+
+#+begin_example
+eb-junit --result FILE... [--out FILE]
+#+end_example
+
+| Option | Meaning |
+|--------+---------|
+| =--result FILE= | One result file. Repeat the option for another file. Required. |
+| =--out FILE= | Write the document to =FILE=. =-= or absent prints it on stdout. An existing file is overwritten. |
+
+Exit 0 means the document was written, including when =exit_code= in a result is not 0.
+Exit 2 means an argument is missing, a file cannot be read or parsed, a result is not schema version 1, a required field has the wrong type, or the document cannot be written.
+
+[[file:../howto/publish-a-junit-report.org][Publish a JUnit report of a pipeline run]] puts the document in a CI job.
+
+* The document
+
+The document is UTF-8 XML 1.0.
+=& < > " '= are escaped.
+A character XML 1.0 does not allow is dropped.
+A newline in an attribute is written as a space.
+
+| Element | What it holds |
+|---------+---------------|
+| =testsuites= | The document. =name= is =eb-pipeline=. =tests=, =failures=, =errors= and =skipped= count the cases. =errors= is =0=. =time= is the sum of the suite times, in seconds to the millisecond. |
+| =testsuite= | One result file, in the order given. =name= and =hostname= are =SITE/TARGET= and =TARGET=. =timestamp= is =started_at= when the result has it. =time= is the result's =duration_seconds= when it has one, otherwise the sum of the line times it does have. |
+| =property= | One recorded field, for a reader that keeps properties. GitLab does not display these. |
+| =testcase= | One recorded line, then a =TARGET/run= case when the rules below add one. |
+
+A property is present when the result has that field.
+
+| Property | Source |
+|----------+--------|
+| =schema_version= | =1= |
+| =site= | =site= |
+| =target= | =target= |
+| =build_type= | =build_type= |
+| =run_id= | =run_id= |
+| =list= | =list=, when present |
+| =log_dir= | =log_dir=, when present |
+| =sharded= | =true= or =false=, when present |
+| =exit_code= | =exit_code= |
+| =interrupted_by= | =interrupted_by=, when present |
+| =message= | =message=, when present |
+
+* A case
+
+Lines come out in the order of the result's =lines= array.
+Deselected lines are not cases.
+Phases are not cases.
+=admission= is not copied.
+
+| Attribute | Value |
+|-----------+-------|
+| =name= | =TARGET/EASYCONFIG=. A later line with the same easyconfig in that result is =TARGET/EASYCONFIG #2=, then =#3=, and so on. GitLab keeps the first case of a repeated name and drops the rest, including across the reports of one pipeline, so the target is part of the name and a repeated line is numbered. The name does not include the run id, so the same line has the same name on the next run. |
+| =classname= | =SITE/TARGET=. GitLab shows this as the suite. |
+| =file= | The easyconfig, as recorded. |
+| =time= | =duration_seconds=, to the millisecond. Absent when the line did not start. |
+
+| Recorded =status= | Child element |
+|-------------------+---------------|
+| =success= | None. The log path is not repeated. |
+| =skipped= | =skipped=, with =message="skipped"=. |
+| any other status, including =failed=, =refused=, =pending=, and a status this table does not name | =failure=, with =type= and =message= set to that status string. |
+
+The text of =failure= and =skipped= is one field per line, in this order, and only the fields the line has: =easyconfig=, =status=, =phase=, =unit=, =exit_code=, =translated_from=, =note=, =log=.
+
+When =exit_code= is not 0 and no line became a =failure=, one more case is added.
+Its =name= is =TARGET/run=, it has no =file= and no =time=, and its child is =failure= with =type="exit"= and =message= set to the exit code.
+The text holds =exit_code= and, when the result has them, =interrupted_by= and =message=.
+=type="exit"= is not a line status.
+A run that already has a failed line does not add this case; that run's =exit_code= stays on the =exit_code= property.
+
+* What stays in the result file
+
+The result file is not modified.
+These stay there, and in =eb-pipeline metrics= for the counts and the phases: the phase list, the admission records, the =counts= object, and the log path of a line whose status is =success=.
+
+A =schema_version= other than =1=, a =kind= other than =result=, or a missing =lines= array is refused.
+Unknown keys are ignored.
+
+* See also
+
+- [[file:cli.org][The eb-pipeline command]], for =run --result= and =metrics=
+- [[file:plan-and-result.org][The plan and result files]], for every key of the result
+- [[file:../howto/publish-a-junit-report.org][Publish a JUnit report of a pipeline run]]
+- [[https://docs.gitlab.com/ci/testing/unit_test_reports/][GitLab unit test reports]], for which elements a GitLab pipeline page shows

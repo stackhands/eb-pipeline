@@ -1,0 +1,107 @@
+#+TITLE: Publish a JUnit report of a pipeline run
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Publish a JUnit report of a pipeline run
+
+A continuous integration (CI) job that runs =eb-pipeline= already keeps a result file per target.
+That file is JavaScript Object Notation (JSON).
+GitLab shows a test report from JUnit XML, and a Jacamar runner starts ordinary GitLab jobs on a cluster, so the same report is what the pipeline page lists.
+=eb-junit= writes that XML from the result files.
+=eb-pipeline run= is unchanged, and it does not write the report unless this command runs.
+
+* Before you start
+
+- One result file per target, from =eb-pipeline run --result=, as in [[file:build-from-ci.org][Build a list on every target from continuous integration]].
+- =eb-junit= on =PATH=, from the same build as =eb-pipeline=.
+
+* Steps
+
+1. After the run, write the report.
+   Keep the run's exit status: =eb-junit= exits 0 when it can write the file, including when the run failed.
+
+   #+begin_src bash
+   set +e
+   eb-pipeline run --site site.toml --list build.list --target cpu --build-type production --result result-cpu.json
+   code=$?
+   set -e
+   eb-junit --result result-cpu.json --out junit-cpu.xml
+   exit "$code"
+   #+end_src
+
+   A successful line is one case, with no child element.
+   For a result that recorded =Ok-1.0.eb= as a success of 0.5 seconds on target =cpu= of site =example=, that case is:
+
+   #+begin_example
+   <testcase name="cpu/Ok-1.0.eb" classname="example/cpu" file="Ok-1.0.eb" time="0.500"/>
+   #+end_example
+
+2. Several targets go in one report, in the order of the files:
+
+   #+begin_src bash
+   eb-junit --result result-zen2.json --result result-zen4.json --out junit.xml
+   #+end_src
+
+3. On GitHub Actions, add the report next to the result upload.
+   =if: always()= runs it when the build step failed.
+   This is the same upload action as =examples/ci/github-actions.yml=:
+
+   #+begin_src yaml
+   - if: always()
+     run: eb-junit --result "result-$EB_PIPELINE_TARGET.json" --out "junit-$EB_PIPELINE_TARGET.xml"
+   - if: always()
+     uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+     with:
+       name: junit-${{ matrix.target }}
+       path: junit-${{ matrix.target }}.xml
+   #+end_src
+
+4. On GitLab, including a job a Jacamar runner starts, publish the XML as a JUnit report and keep the job's exit status as the run's.
+   =artifacts:when: always= uploads it when the run failed.
+
+   #+begin_src yaml
+   script:
+     - set +e
+     - eb-pipeline run --result "result-${EB_PIPELINE_TARGET}.json"
+     - code=$?
+     - set -e
+     - eb-junit --result "result-${EB_PIPELINE_TARGET}.json" --out "junit-${EB_PIPELINE_TARGET}.xml"
+     - exit "$code"
+   artifacts:
+     when: always
+     paths:
+       - result-*.json
+       - junit-*.xml
+     reports:
+       junit: junit-*.xml
+   #+end_src
+
+   GitLab lists each case by its name and shows the text of a failure or a skip.
+   [[https://docs.gitlab.com/ci/testing/unit_test_reports/][Unit test reports]] describes that page, and [[https://docs.gitlab.com/ci/yaml/artifacts_reports/#artifactsreportsjunit][artifacts:reports:junit]] is the key.
+   [[https://ecp-ci.gitlab.io/docs/admin.html][Jacamar CI]] is the runner that starts such a job on a cluster.
+
+* Check that it worked
+
+=eb-junit --result result-cpu.json= prints the report on stdout and exits 0.
+The case of a success names the target and the easyconfig, and does not repeat that line's log path.
+A line recorded as =failed=, =refused=, =pending=, or any other status except =success= and =skipped=, is a failure whose =type= is that status.
+A line recorded as =skipped= is a skipped case.
+=docs/examples/junit.sh= writes a result for =Ok-1.0.eb= and checks the case line above.
+
+* If it fails
+
+| Message | Cause | What to do |
+|---------+-------+------------|
+| =eb-junit: --result is required= | No result file was given. | Pass each =run --result= file. |
+| =eb-junit: PATH: expected kind `result`, found `plan`= | The file is a plan, a summary, or another JSON document. | Pass the file =run --result= wrote. =summary.json= is not a result file; =metrics= and =status= read the other views. |
+| =eb-junit: cannot read PATH: No such file or directory= | The run stopped before it wrote a result, or the path is wrong. | An input error exits 2 and leaves no result file. Read the run's =ERROR= lines. |
+| =eb-junit: PATH: schema_version must be 1= | The file is a newer or older result than this =eb-junit=. | Use the =eb-junit= from the same release as the =eb-pipeline= that wrote the file. |
+
+* Related
+
+- [[file:build-from-ci.org][Build a list on every target from continuous integration]]
+- [[file:follow-runs.org][Follow runs through their summaries]]
+- [[file:../reference/junit.org][The JUnit report]]
+- [[file:../reference/plan-and-result.org][The plan and result files]]
+- [[https://docs.gitlab.com/ci/testing/unit_test_reports/][GitLab unit test reports]]
+- [[https://ecp-ci.gitlab.io/docs/admin.html][Jacamar CI]]

@@ -328,6 +328,24 @@ eb-shard-weights (--result FILE... | --summary FILE... | --log-root DIR [--last 
 
 Exit 0 means the table was written. Exit 2 is a missing or invalid input.
 
+*** eb-junit
+
+=eb-junit= reads one or more result files and writes a JUnit XML report, one suite per file and one case per recorded line.
+[[file:junit.org][The JUnit report]] lists the elements.
+=run= does not write this report.
+
+#+begin_example
+eb-junit --result FILE... [--out FILE]
+#+end_example
+
+| Option | Meaning |
+|--------+---------|
+| =--result FILE= | A result file written by =eb-pipeline run --result=. Repeat for each file. Required. |
+| =--out FILE= | Write the report to =FILE=. =-= or absent prints it on stdout. |
+
+Exit 0 means the report was written, including when a run's own exit code is not 0.
+Exit 2 is a missing file, a file that is not a result of schema version 1, or a report that could not be written.
+
 ** See also
 
 - [[file:../tutorials/first-build-list.org][Run your first build list]]
