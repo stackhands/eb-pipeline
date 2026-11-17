@@ -1581,6 +1581,53 @@ fn check_refuses_a_job_dir_that_is_not_the_jobs_own() {
 }
 
 #[test]
+fn check_refuses_a_job_directory_reached_through_another_placeholder() {
+    let errs = |text: String| site::validate(&site::parse(&text).unwrap(), None);
+    let msg = "targets.other.route: {work_dir} is filesystems.build_path, whose {job_dir} is resolved inside the job, after the route has started";
+    let routed = |extra: &str| {
+        with_job_dir("/scratch/x/tmp").replace(
+            "name = \"other\"",
+            &format!(
+                "name = \"other\"\n[targets.route]\nkind = \"command\"\ncommand = \"route\"\n{extra}"
+            ),
+        )
+    };
+    assert_eq!(
+        errs(routed(
+            "runtime_root = \"{work_dir}\"\nargs = [\"--bind={runtime_root}\"]\n"
+        )),
+        [msg]
+    );
+    assert_eq!(errs(routed("runtime_root = \"{work_dir}\"\n")), [msg]);
+    assert_eq!(
+        errs(routed(
+            "runtime_root = \"{work_dir}\"\n[targets.route.env]\nBIND = \"{runtime_root}\"\n"
+        )),
+        [msg]
+    );
+    assert_eq!(errs(routed("shares_ro = [\"{work_dir}\"]\n")), [msg]);
+    assert!(errs(routed(
+        "runtime_root = \"/opt/rt\"\nargs = [\"--bind={runtime_root}\"]\n"
+    ))
+    .is_empty());
+    assert!(errs(routed("args = [\"--bind=/local\"]\n")).is_empty());
+    // tmp is per job and build_path is not, so the route may name the build path.
+    let tmp_only = with_job_dir("{job_dir}/tmp")
+        .replace("\"{job_dir}/build/{target}\"", "\"/scratch/x/build\"")
+        .replace(
+            "name = \"other\"",
+            "name = \"other\"\n[targets.route]\nkind = \"command\"\ncommand = \"route\"\nargs = [\"--bind={work_dir}\"]\n",
+        );
+    let tmp_errs = errs(tmp_only);
+    assert!(tmp_errs.is_empty(), "{tmp_errs:?}");
+    let command = with_job_dir("/scratch/x/tmp").replace(
+        "name = \"other\"",
+        "name = \"other\"\n[targets.route]\nkind = \"command\"\ncommand = \"route --bind={work_dir}\"\n",
+    );
+    assert_eq!(errs(command), [msg]);
+}
+
+#[test]
 fn a_target_state_root_cannot_split_one_live_tree() {
     // Both targets of MINIMAL install into /opt/eb.
     let site =
