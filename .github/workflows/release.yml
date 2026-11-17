@@ -79,6 +79,12 @@ jobs:
           echo "paths<<EOF" >> "$GITHUB_ENV"
           dist print-upload-files-from-manifest --manifest dist-manifest.json >> "$GITHUB_ENV"
           echo "EOF" >> "$GITHUB_ENV"
+      - name: archive has every declared workspace binary
+        shell: bash
+        run: |
+          python3 .github/scripts/check-release-archive.py \
+            --declared .github/release-binaries.txt \
+            --archive "target/distrib/eb-pipeline-${{ matrix.target }}.tar.xz"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: artifacts-build-local-${{ matrix.target }}
