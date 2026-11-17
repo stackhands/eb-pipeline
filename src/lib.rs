@@ -4,6 +4,7 @@ pub mod easystack;
 pub mod eessi;
 pub mod exit;
 pub mod lint;
+pub mod metrics;
 pub mod notify;
 pub mod plan;
 pub mod resolve;

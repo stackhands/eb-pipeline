@@ -17,6 +17,7 @@ eb-pipeline init [OPTIONS]
 eb-pipeline explain [OPTIONS] --site <SITE>
 eb-pipeline targets [OPTIONS] --site <SITE>
 eb-pipeline status [OPTIONS] --site <SITE>
+eb-pipeline metrics [OPTIONS] --result <RESULT>
 eb-pipeline plan [OPTIONS] --site <SITE> --list <LIST> --target <TARGET> --build-type <BUILD_TYPE>
 eb-pipeline run [OPTIONS] --site <SITE> --list <LIST> --target <TARGET> --build-type <BUILD_TYPE>
 eb-pipeline watch [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>
@@ -36,6 +37,7 @@ Commands:
   explain  Print the resolved configuration of one or all targets
   targets  Print the target names in file order, for a CI matrix or a shell loop
   status   Print the last runs under the log root, newest first, from their summaries
+  metrics  Print Prometheus text, or a short JSON status, for one result file
   plan     Compute phases, launch lines, environments and tool calls without executing
   run      Execute the plan's phases as subprocesses
   watch    Rebuild the recorded installs an EESSI change reaches, in dependency order
@@ -55,18 +57,22 @@ Examples:
   eb-pipeline plan --site site.toml --list list.txt --target cpu --build-type production --out plan.json
   eb-pipeline run --site site.toml --list list.txt --target cpu --build-type production --result result.json
   eb-pipeline watch --site site.toml --target cpu --build-type production --dry-run
+  eb-pipeline metrics --result result.json
 
 Configuration: every flag above falls back to an EB_PIPELINE_<FLAG> variable
 (EB_PIPELINE_SITE, EB_PIPELINE_LIST, EB_PIPELINE_TARGET, EB_PIPELINE_BUILD_TYPE,
-EB_PIPELINE_RUN_ID, EB_PIPELINE_LOG_STAMP, EB_PIPELINE_LISTS_DIR); a flag on the
-command line wins. EB_PIPELINE__SECTION__KEY=value sets one site file value, for
-example EB_PIPELINE__FILESYSTEMS__SCRATCH=/scratch/eb; the result is validated
-like the file.
+EB_PIPELINE_RUN_ID, EB_PIPELINE_LOG_STAMP, EB_PIPELINE_LISTS_DIR,
+EB_PIPELINE_RESULT); a flag on the command line wins.
+EB_PIPELINE__SECTION__KEY=value sets one site file value, for example
+EB_PIPELINE__FILESYSTEMS__SCRATCH=/scratch/eb; the result is validated like the
+file.
 
-Output streams: stdout carries plan, explain, schema, init, status, targets and run
---dry-run or watch --dry-run output only. Events go to stderr as `LEVEL [phase]
-target: message`. The result JSON goes to --result, and each run's summary to
-summary.json and summary.html in its run directory, <log_root>/<log-stamp>/.
+Output streams: stdout carries plan, explain, schema, init, status, targets and
+metrics, and run --dry-run or watch --dry-run output only. Events go to stderr
+as `LEVEL [phase] target: message`. The result JSON goes to --result, and each
+run's summary to summary.json and summary.html in its run directory,
+<log_root>/<log-stamp>/. `metrics` exits 0 when it can read the file, including
+when the run itself failed.
 
 Exit codes:
    0  all requested work completed
@@ -183,6 +189,19 @@ It shows =<run-id>= and =<log-stamp>= where a run puts its own.
 
 =status= reads the directories under =filesystems.log_root= whose names are log stamps, newest first, and leaves out every other entry.
 [[file:run-summary.org][The run summary]] shows what it prints.
+
+*** metrics
+
+| Option            | Variable               | Meaning                                                                                                                          |
+|-------------------+------------------------+----------------------------------------------------------------------------------------------------------------------------------|
+| =--result FILE=   | =EB_PIPELINE_RESULT=   | The result file of one run; required.                                                                                            |
+| =--format FORMAT= |                        | =prometheus=, the default, prints Prometheus text; =json= prints one JSON status document.                                       |
+
+=metrics= reads that file and prints gauges =eb_pipeline_info=, =eb_pipeline_exit_code=, =eb_pipeline_lines= and =eb_pipeline_phase=.
+A status the run did not use is 0.
+Log paths stay in the result file.
+Exit 0 means the file was read, including when the run's own exit code is not 0.
+Exit 2 means the file is missing, is not JSON, or its =kind= is not =result=.
 
 *** plan
 

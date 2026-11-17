@@ -3,7 +3,9 @@ use eb_pipeline::exit::{self, Fail};
 use eb_pipeline::plan::{build_plan, read_units, Planner};
 use eb_pipeline::resolve::{explain, Scope};
 use eb_pipeline::run::{install_handlers, log, run, Options, RunResult};
-use eb_pipeline::{easystack, eessi, notify, schema, site, summary, templates, tools, util, watch};
+use eb_pipeline::{
+    easystack, eessi, metrics, notify, schema, site, summary, templates, tools, util, watch,
+};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -15,18 +17,22 @@ Examples:
   eb-pipeline plan --site site.toml --list list.txt --target cpu --build-type production --out plan.json
   eb-pipeline run --site site.toml --list list.txt --target cpu --build-type production --result result.json
   eb-pipeline watch --site site.toml --target cpu --build-type production --dry-run
+  eb-pipeline metrics --result result.json
 
 Configuration: every flag above falls back to an EB_PIPELINE_<FLAG> variable
 (EB_PIPELINE_SITE, EB_PIPELINE_LIST, EB_PIPELINE_TARGET, EB_PIPELINE_BUILD_TYPE,
-EB_PIPELINE_RUN_ID, EB_PIPELINE_LOG_STAMP, EB_PIPELINE_LISTS_DIR); a flag on the
-command line wins. EB_PIPELINE__SECTION__KEY=value sets one site file value, for
-example EB_PIPELINE__FILESYSTEMS__SCRATCH=/scratch/eb; the result is validated
-like the file.
+EB_PIPELINE_RUN_ID, EB_PIPELINE_LOG_STAMP, EB_PIPELINE_LISTS_DIR,
+EB_PIPELINE_RESULT); a flag on the command line wins.
+EB_PIPELINE__SECTION__KEY=value sets one site file value, for example
+EB_PIPELINE__FILESYSTEMS__SCRATCH=/scratch/eb; the result is validated like the
+file.
 
-Output streams: stdout carries plan, explain, schema, init, status, targets and run
---dry-run or watch --dry-run output only. Events go to stderr as `LEVEL [phase]
-target: message`. The result JSON goes to --result, and each run's summary to
-summary.json and summary.html in its run directory, <log_root>/<log-stamp>/.
+Output streams: stdout carries plan, explain, schema, init, status, targets and
+metrics, and run --dry-run or watch --dry-run output only. Events go to stderr
+as `LEVEL [phase] target: message`. The result JSON goes to --result, and each
+run's summary to summary.json and summary.html in its run directory,
+<log_root>/<log-stamp>/. `metrics` exits 0 when it can read the file, including
+when the run itself failed.
 
 ";
 
@@ -127,6 +133,15 @@ enum Cmd {
         #[arg(long, value_enum, default_value_t = TextOrJson::Text)]
         format: TextOrJson,
     },
+    /// Print Prometheus text, or a short JSON status, for one result file.
+    Metrics {
+        /// Result file written by `run --result`.
+        #[arg(long, env = "EB_PIPELINE_RESULT")]
+        result: PathBuf,
+        /// `prometheus`, the default, or `json`.
+        #[arg(long, value_enum, default_value_t = StatusFormat::Prometheus)]
+        format: StatusFormat,
+    },
     /// Compute phases, launch lines, environments and tool calls without executing.
     Plan {
         #[command(flatten)]
@@ -224,6 +239,13 @@ enum Format {
 #[derive(Clone, Copy, ValueEnum)]
 enum TextOrJson {
     Text,
+    Json,
+}
+
+/// What `metrics` prints.
+#[derive(Clone, Copy, ValueEnum)]
+enum StatusFormat {
+    Prometheus,
     Json,
 }
 
@@ -368,6 +390,19 @@ fn cmd_status(
     match format {
         TextOrJson::Text => print!("{}", summary::status_text(&runs)),
         TextOrJson::Json => write_json(&summary::status_json(root, &runs), None)?,
+    }
+    Ok(exit::OK)
+}
+
+fn cmd_metrics(path: &Path, format: StatusFormat) -> Result<i32, Fail> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| Fail::usage(format!("cannot read {}: {e}", path.display())))?;
+    let value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| Fail::usage(format!("cannot parse {}: {e}", path.display())))?;
+    let status = metrics::from_result(&value)?;
+    match format {
+        StatusFormat::Prometheus => print!("{}", metrics::prometheus(&status)),
+        StatusFormat::Json => print!("{}", metrics::status_json(&status)),
     }
     Ok(exit::OK)
 }
@@ -902,6 +937,7 @@ fn main() {
             last,
             format,
         } => cmd_status(site, target.as_deref(), *last, *format),
+        Cmd::Metrics { result, format } => cmd_metrics(result, *format),
         Cmd::Plan {
             common,
             out,

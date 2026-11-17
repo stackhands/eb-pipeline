@@ -1,0 +1,1 @@
+A result file can be read into Prometheus text and a short JSON status. The gauges are `eb_pipeline_info`, `eb_pipeline_exit_code`, `eb_pipeline_lines` and `eb_pipeline_phase`. Log paths stay in the result file.
