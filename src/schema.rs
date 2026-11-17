@@ -431,7 +431,7 @@ doc_struct! {
         unuse_path: bool => ("boolean", "false", false, "Clears MODULEPATH after `shell_init` and before loading `init`, so the first `init` module needs an absolute path."),
         #[serde(default = "d_shell")]
         shell: String => ("string", "bash", false,
-            "POSIX shell that runs the module wrapper, such as `bash` or `sh`."),
+            "POSIX shell that runs the module wrapper, by name or by path: `sh`, `bash`, `dash`, `ash`, `ksh`, `ksh93`, `mksh` or `yash`."),
         shell_init: Option<String> => ("string", "none", false,
             "File sourced before `module` is called, for shells that do not define it. It is sourced without `set -e` or `set -u`; a `module` call that fails still stops the step."),
         eessi: Option<Eessi> => ("table", "none", false, "EESSI site layer."),

@@ -55,6 +55,11 @@ run 'eb-pipeline check --site pbs.toml'
 expect_status 2
 expect_line 'ERROR [check] example: scheduler.kind: expected slurm or local, found `pbs`'
 
+sed '/^init = /a shell = "zsh"' site.toml >zsh.toml
+run 'eb-pipeline check --site zsh.toml'
+expect_status 2
+expect_line 'ERROR [check] example: modules.shell: expected a POSIX shell that runs the module wrapper, one of sh, bash, dash, ash, ksh, ksh93, mksh or yash, by name or by path, found `zsh`'
+
 sed 's/^compress_after_days = 30/compress_after_days = 400/' site.toml >rotate.toml
 run 'eb-pipeline check --site rotate.toml'
 expect_status 2

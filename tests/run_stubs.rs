@@ -2117,7 +2117,18 @@ fn a_command_that_runs_eb_pipeline_reads_the_site_file_of_the_run() {
 /// files it would name.
 #[test]
 fn the_module_wrapper_loads_each_name_as_written() {
-    for shell in ["bash", "sh"] {
+    // Each shell `modules.shell` may name, of those installed.
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let shells: Vec<&str> = eb_pipeline::resolve::MODULE_SHELLS
+        .iter()
+        .copied()
+        .filter(|s| std::env::split_paths(&path).any(|d| d.join(s).is_file()))
+        .collect();
+    assert!(
+        shells.contains(&"bash") && shells.contains(&"sh"),
+        "{shells:?}"
+    );
+    for shell in shells {
         let env = setup("");
         let root = env.dir.path();
         let r = root.display().to_string();

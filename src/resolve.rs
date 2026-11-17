@@ -510,6 +510,11 @@ for m in ${EB_PIPELINE_MODULES:-}; do set +f; module load \"$m\"; done
 set +f
 exec \"$@\"";
 
+/// Shells that `modules.shell` may name, by name or by path. The wrapper
+/// needs a POSIX shell, which splits an unquoted expansion at white space and
+/// takes `set -f`: zsh does neither, and csh, tcsh and fish cannot parse it.
+pub const MODULE_SHELLS: &[&str] = &["sh", "bash", "dash", "ash", "ksh", "ksh93", "mksh", "yash"];
+
 /// Group that applies to a package, if any. A version that does not parse
 /// gets the group (fail closed).
 pub fn licence_group(l: &Licences, name: &str, version: Option<&str>) -> Option<String> {
