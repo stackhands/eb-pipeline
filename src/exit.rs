@@ -16,7 +16,7 @@ pub const SIGINT: i32 = 130;
 /// Interrupted by SIGTERM.
 pub const SIGTERM: i32 = 143;
 
-/// Table printed in `--help` and the README.
+/// Table printed in `--help`.
 pub const TABLE: &str = "\
 Exit codes:
    0  all requested work completed

@@ -105,20 +105,37 @@ fn targets_reads_the_site_file_from_the_environment() {
     assert_eq!(String::from_utf8_lossy(&o.stdout), want);
 }
 
+/// The command reference shows `--help` as the binary prints it.
 #[test]
-fn the_readme_lists_targets_among_the_subcommands_and_streams() {
-    let readme = std::fs::read_to_string(root().join("README.md")).unwrap();
+fn the_cli_reference_lists_targets_among_the_commands_and_streams() {
+    let path = root().join("docs/orgmode/reference/cli.org");
+    let page = std::fs::read_to_string(&path).unwrap();
     assert!(
-        readme
-            .lines()
-            .any(|l| l.starts_with("| `targets --site FILE [--format text\\|json]` |")),
-        "README.md has no `targets` row in its subcommand table"
+        page.lines().any(|l| l.starts_with("| =targets= |")),
+        "{} has no `targets` row in its table of commands",
+        path.display()
     );
-    let streams = readme
+    let help: String = page
         .lines()
-        .find(|l| l.starts_with("Streams: stdout carries "))
+        .skip_while(|l| *l != "=eb-pipeline --help= prints:")
+        .skip_while(|l| *l != "#+begin_example")
+        .skip(1)
+        .take_while(|l| *l != "#+end_example")
+        .map(|l| format!("{l}\n"))
+        .collect();
+    let o = bin().arg("--help").output().unwrap();
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    assert_eq!(
+        help,
+        String::from_utf8_lossy(&o.stdout),
+        "{}: the `eb-pipeline --help` block",
+        path.display()
+    );
+    let streams = help
+        .lines()
+        .find(|l| l.starts_with("Output streams: stdout carries "))
         .unwrap_or_default();
-    assert!(streams.contains("`targets`"), "{streams:?}");
+    assert!(streams.contains(" targets "), "{streams:?}");
 }
 
 #[test]
@@ -203,14 +220,19 @@ fn the_ci_example_builds_a_target_for_one_dispatch_at_a_time() {
         "{}: the build job's concurrency",
         path.display()
     );
-    let readme = std::fs::read_to_string(root().join("README.md")).unwrap();
-    let text = readme.split_whitespace().collect::<Vec<_>>().join(" ");
+    let guide = root().join("docs/orgmode/howto/build-from-ci.org");
+    let page = std::fs::read_to_string(&guide).unwrap();
+    let text = page.split_whitespace().collect::<Vec<_>>().join(" ");
     for needed in [
-        "The build job's `concurrency` group, `eb-pipeline-<target>`,",
-        "`cancel-in-progress: false` leaves the running build alone",
+        "The build job's =concurrency= group, =eb-pipeline-<target>=,",
+        "=cancel-in-progress: false= leaves the running build alone",
         "GitHub keeps only one pending job per group, so a third dispatch replaces the waiting one",
         "It keeps two dispatches off one target, not off one path",
     ] {
-        assert!(text.contains(needed), "README.md lacks `{needed}`");
+        assert!(
+            text.contains(needed),
+            "{} lacks `{needed}`",
+            guide.display()
+        );
     }
 }

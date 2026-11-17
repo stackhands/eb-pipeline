@@ -43,8 +43,9 @@ jobs:
     # cancelled. GitHub keeps only one pending job per group, so a third
     # dispatch replaces the waiting one, which is cancelled. The group
     # holds across dispatches and workflows of this repository, not across
-    # targets: two dispatches can still build two targets at once. "One
-    # job per target" in the eb-pipeline README has the details.
+    # targets: two dispatches can still build two targets at once. The
+    # eb-pipeline guide "Build a list on every target from continuous
+    # integration" has the details.
     concurrency:
       group: eb-pipeline-${{ matrix.target }}
       cancel-in-progress: false
@@ -56,8 +57,7 @@ jobs:
       # Raise max-parallel only when build_path has {target}, or sits on
       # storage that no two targets' build nodes share, and each target also
       # has its own first source path and, with staged rebuilds, its own
-      # state root. "One job per target" in the eb-pipeline README has the
-      # details.
+      # state root. The guide named above has the details.
       max-parallel: 1
       # A failed target leaves the others running.
       fail-fast: false
