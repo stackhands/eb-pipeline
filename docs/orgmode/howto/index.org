@@ -23,6 +23,7 @@ The title names the task.
    select-lines
    from-eb-stack
    check-oom-before-building
+   resume-a-run
    follow-runs
    run-tests-for-what-you-built
    rebuild-when-eessi-changes

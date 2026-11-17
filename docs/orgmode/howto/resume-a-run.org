@@ -1,0 +1,128 @@
+#+TITLE: Resume a run from a prior result
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Resume a run from a prior result
+
+Continue a run from a result file when the easyconfigs are still the ones that result recorded, and skip a unit whose module files are still present.
+
+Leave =[resume]= out, or set =enabled = false=, for a run that always builds the selected list.
+=--resume-result= is then refused, with exit 2, and no result file is written.
+
+** Before you start
+
+- A site file that passes =check=.
+- At least one absolute easyconfig tree, on =resume.easyconfigs= or, when that is empty, on =shards.easyconfigs=.
+- A result file from a run of that same site with =[resume]= enabled.
+  A result that has no =input_digest= cannot be resumed.
+
+Add the table:
+
+#+begin_src toml
+[resume]
+enabled = true
+easyconfigs = ["$WORK/easyconfigs"]
+#+end_src
+
+=shards= defaults to 1, so the list stays one unit.
+Set it to 2 or more when =[shards]= is not already planning, and =run= asks =eb-stack stack shard= for the prelude and shard boundaries.
+With =[shards]= already planning, that plan is the boundary and =resume.shards= is not used.
+
+The output on this page comes from =docs/examples/resume.sh=.
+A stand-in for =eb-stack= writes the hash file, and a stand-in for =eb= writes the module file.
+
+** Steps
+
+1. Check the site file, and see the identity command a dry run would start:
+
+   #+begin_src bash
+   eb-pipeline check --site site.toml
+   eb-pipeline run --site site.toml --list lists/build.list --target cpu --build-type production --run-id nightly --log-stamp 20261117_090000 --dry-run | grep hashes-out
+   #+end_src
+
+   #+begin_example
+   INFO [check] example: site file is valid
+   INFO [run] cpu: dry run: nothing executed
+   [shard] $WORK/bin/eb-stack stack order --out $WORK/logs/20261117_090000/cpu/input-order.txt --hashes-out $WORK/logs/20261117_090000/cpu/input-hashes.txt --easyconfigs $WORK/easyconfigs --root Foo==1.0
+   #+end_example
+
+   The digest is the SHA-256 of the file =--hashes-out= names.
+   eb-pipeline does not hash the easyconfigs itself.
+   The file covers the easyconfig bytes and their dependency hashes, so a change to those bytes changes the digest.
+   Options on the build list, such as =--rebuild=, are not in that file.
+
+2. Run the list and keep the result:
+
+   #+begin_src bash
+   eb-pipeline run --site site.toml --list lists/build.list --target cpu --build-type production --run-id nightly --log-stamp 20261117_090000 --result result.json
+   grep input_digest result.json
+   #+end_src
+
+   #+begin_example
+   INFO [licences] cpu: not configured
+   INFO [sources] cpu: not configured
+   INFO [admission] cpu: not configured
+   INFO [checks] cpu: not configured
+   INFO [caches] cpu: not configured
+   INFO [logs] cpu: not configured
+   INFO [shard] cpu: recorded the input identity
+   INFO [build] cpu: Foo-1.0-foss-2025a: start
+   INFO [build] cpu: Foo-1.0-foss-2025a: ok
+   INFO [summary] cpu: summary.json and summary.html written in $WORK/logs/20261117_090000
+     "input_digest": "eb79de43485649f152122db34e595fabf467f7ad689bd8743548d71f8163f65d",
+   #+end_example
+
+   A successful line also records =outputs=, the module files that exist under the target's modules root.
+
+3. Resume from that file:
+
+   #+begin_src bash
+   eb-pipeline run --site site.toml --list lists/build.list --target cpu --build-type production --run-id nightly-2 --log-stamp 20261117_100000 --result resumed.json --resume-result result.json
+   #+end_src
+
+   #+begin_example
+   INFO [licences] cpu: not configured
+   INFO [sources] cpu: not configured
+   INFO [admission] cpu: not configured
+   INFO [checks] cpu: not configured
+   INFO [caches] cpu: not configured
+   INFO [logs] cpu: not configured
+   INFO [shard] cpu: recorded the input identity
+   INFO [build] cpu: Foo-1.0-foss-2025a: resumed; outputs still present
+   INFO [summary] cpu: summary.json and summary.html written in $WORK/logs/20261117_100000
+   #+end_example
+
+   The unit is =skipped=, and =eb= is not started, when every line of it succeeded in the prior result and every path in =outputs= is still a file.
+   =cpu-prerequisites=, =prelude= and =all= are prefixes: a prefix that cannot be skipped blocks every later unit.
+   Shards do not block one another.
+   Delete a module file and the unit is built again.
+
+4. A different hash file refuses the run before any build:
+
+   #+begin_src bash
+   eb-pipeline run --site site.toml --list lists/build.list --target cpu --build-type production --run-id nightly-3 --log-stamp 20261117_110000 --result refused.json --resume-result result.json; echo "exit $?"
+   #+end_src
+
+   #+begin_example
+   INFO [licences] cpu: not configured
+   INFO [sources] cpu: not configured
+   INFO [admission] cpu: not configured
+   INFO [checks] cpu: not configured
+   INFO [caches] cpu: not configured
+   INFO [logs] cpu: not configured
+   ERROR [shard] cpu: input digest mismatch: prior result has eb79de43485649f152122db34e595fabf467f7ad689bd8743548d71f8163f65d, this plan has 17f012a2d6778fb28a20769cb1ef8998d7341f564a5f77e4767b24e0587ca150
+   ERROR [run] cpu: input digest mismatch: prior result has eb79de43485649f152122db34e595fabf467f7ad689bd8743548d71f8163f65d, this plan has 17f012a2d6778fb28a20769cb1ef8998d7341f564a5f77e4767b24e0587ca150
+   INFO [summary] cpu: summary.json and summary.html written in $WORK/logs/20261117_110000
+   exit 78
+   #+end_example
+
+   Here the stand-in wrote a different hash file, which is what =stack order= reports when an easyconfig changed.
+   =incomplete= other than 0, or an empty hash file, is also exit 78.
+   The result file is written and no line is built.
+
+** A requeued job
+
+When the site sets =filesystems.job_dir=, also set =filesystems.configs_repo= to the absolute path of the easyconfig repository.
+A Slurm job whose =SLURM_RESTART_COUNT= is not 0 then uses =JOB_DIR/REPO.rCOUNT= as its workspace, where =REPO= is that path with every character outside letters, digits, =.=, =_= and =-= replaced by =_=.
+A count of 0, or an empty one, keeps the directory =job_dir= names.
+=[resume]= off leaves the job directory as it was.

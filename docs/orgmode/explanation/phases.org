@@ -18,6 +18,7 @@ The caller reads one exit status, and has to know from it what to do next, witho
 
 A run goes through =preflight=, =licences=, =shard=, =sources=, =admission=, =build=, =checks=, =caches= and =logs=, in that order.
 A phase whose table is absent, or has =enabled = false=, is =not configured=, and the run passes over it.
+With =[resume]= enabled, the shard phase is planned even when =[shards]= is not.
 
 #+CAPTION: The phases of one run, and what each outcome does to the rest of it.
 #+ATTR_RST: :alt The run reads the site file and the build list and checks the licence gate and the versions of the tools; when they are invalid it exits 2, or 78 when only the licence gate fails, with no result file. preflight reads the variables that the site file names; when one is unset, the run writes the result file and exits 78. shard splits the list into units, and sources fetches the sources of each line. Then each unit is admitted and its lines built, one unit after the other; a refused admission skips that unit and the later ones. caches runs only after a clean build, logs rotates the log tree when no other run is live, and the run writes the result file and exits 1 if anything failed, else 78 if anything was refused, else 75 if anything is pending, else 0.
@@ -28,8 +29,8 @@ An error there exits 2, or 78 when only the licence gate fails, and writes no re
 The =licences= phase records the gate that passed.
 
 - =preflight= reads the variables that the site file names, such as the one that =[admission]= =job_id_env= names; one that is unset, or a job id that is not a number, refuses the run, with exit 78.
-- =shard= has =eb-stack stack shard= split the list into units, or builds the list as one unit when the planner exits with =shards.planner_exit_unsharded=.
-  Any other failure ends the run before the first build, with exit 1, or 2 when =stack shard= exits 2.
+- =shard= has =eb-stack stack order --hashes-out= record the input identity when =[resume]= is enabled, and =eb-stack stack shard= split the list into units, or builds the list as one unit when the planner exits with =shards.planner_exit_unsharded=.
+  Any other failure ends the run before the first build, with exit 1, or 2 when =stack order= or =stack shard= exits 2.
 - =sources= fetches the sources of each line; a line whose fetch fails is =failed= and is not built, and the other lines go on.
 - =admission= and =build= take one unit at a time.
   A refusal after the last attempt skips the lines of that unit and of every later one, and the run exits 78, or 1 when a line failed before; any other failure of =stack admit= ends the run at once.

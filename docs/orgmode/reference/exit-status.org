@@ -37,6 +37,7 @@ An error that ends a command is written to stderr as =ERROR [main] -: MESSAGE=.
 - =run=: the =eb= or =eb-staged-rebuild run= command of a line exited with a status that is not 0 and does not mean refused or pending; the line is =failed=.
 - =run=: the source prefetch of a line failed; the line is =failed= and is not built.
 - =run=: =eb-stack stack shard= exited with a status other than 0, 2 and =shards.planner_exit_unsharded=, or its plan could not be read; the run ends.
+- =run=: =eb-stack stack order= exited with a status other than 0 and 2, printed no single =incomplete== count, or the hash file could not be read; the run ends before a build.
 - =run=: =eb-stack stack admit= exited with a status other than 0, 2 and 78; the run ends.
 - =run=: =[caches].command= exited with a status other than 0.
 - =run=: =eb-stack stack sbom= could not be started, exited with a status other than 0, or wrote no =sbom.cdx.json=, after a clean build.
@@ -59,7 +60,7 @@ So does a run summary that cannot be written, or sent to the webhook of =[notify
 - =run=, and =check --probe-tools=: a tool that needs a =min_version= cannot be started, prints no version, or prints one below the minimum.
   =check --probe-tools= also checks the tools without a =min_version=.
 - =init=: the template is unknown, or the =--out= file cannot be created, as when it exists.
-- =run=: =eb-stack stack shard= or =eb-stack stack admit= exited 2.
+- =run=: =eb-stack stack order=, =eb-stack stack shard= or =eb-stack stack admit= exited 2.
 - =watch=: eb-stack prints a version below its =min_version=.
 
 *** 75
@@ -79,6 +80,8 @@ So does a run summary that cannot be written, or sent to the webhook of =[notify
 - =run=: =eb-stack stack admit= still refused after =admission.attempts= attempts.
   The lines of that unit are =skipped=, with the note =admission refused=, and those of every later unit with =an earlier unit was refused=.
 - =run=: =eb-staged-rebuild run= exited 2 for a line, such as when the lock of its state root was still held after =[rebuild] lock_timeout= seconds; the line is =refused=.
+- =run --resume-result=: the prior result has no =input_digest=, the digest of =eb-stack stack order --hashes-out= differs from it, =stack order= reports =incomplete= other than 0, or the hash file is empty.
+  No line is built.
 
 The refusals before the first build leave every line unbuilt.
 
