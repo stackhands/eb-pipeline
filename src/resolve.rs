@@ -240,8 +240,23 @@ impl<'a> Scope<'a> {
             if let Some(a) = a {
                 v.extend(split_args(&a)?);
             }
+            v.extend(self.job_wrap());
         }
         Ok(v)
+    }
+
+    /// Wrapper that resolves `{job_dir}` inside the job, before the module
+    /// wrapper and the command, when `filesystems.job_dir` is set.
+    pub fn job_wrap(&self) -> Vec<String> {
+        if self.site.filesystems.job_dir.is_none() {
+            return Vec::new();
+        }
+        vec![
+            self.site.modules.shell.clone(),
+            "-c".into(),
+            JOB_DIR_SCRIPT.into(),
+            "eb-pipeline".into(),
+        ]
     }
 
     /// The target's route when it applies to `phase`.
@@ -386,6 +401,9 @@ impl<'a> Scope<'a> {
         };
         put("EASYBUILD_TMPDIR", fs.tmp.clone());
         put("EASYBUILD_BUILDPATH", self.build_path());
+        if let Some(j) = &fs.job_dir {
+            put("EB_PIPELINE_JOB_DIR", j.clone());
+        }
         if !fs.source_paths.is_empty() {
             put("EASYBUILD_SOURCEPATH", self.source_paths().join(":"));
         }
@@ -508,6 +526,37 @@ module purge
 set -f
 for m in ${EB_PIPELINE_MODULES:-}; do set +f; module load \"$m\"; done
 set +f
+exec \"$@\"";
+
+/// Fixed script of the job directory wrapper. The job id and the user are
+/// known only inside the job, so `{job}` and `{user}` of
+/// EB_PIPELINE_JOB_DIR, then `{job_dir}` of EASYBUILD_BUILDPATH and
+/// EASYBUILD_TMPDIR, are replaced there, as text, by a function that a
+/// POSIX shell runs.
+pub const JOB_DIR_SCRIPT: &str = "sub() {
+  r= t=$1
+  while :; do
+    case $t in
+      *\"$2\"*) r=$r${t%%\"$2\"*}$3; t=${t#*\"$2\"} ;;
+      *) break ;;
+    esac
+  done
+  printf '%s\\n' \"$r$t\"
+}
+if [ -z \"${SLURM_JOB_ID:-}\" ]; then
+  echo \"eb-pipeline: SLURM_JOB_ID is not set, so filesystems.job_dir names no directory\" >&2
+  exit 1
+fi
+d=$(sub \"$EB_PIPELINE_JOB_DIR\" '{job}' \"$SLURM_JOB_ID\")
+d=$(sub \"$d\" '{user}' \"${SLURM_JOB_USER:-$(id -un)}\")
+if [ ! -d \"$d\" ] || [ ! -w \"$d\" ]; then
+  echo \"eb-pipeline: job $SLURM_JOB_ID has no directory $d that it can write to, which filesystems.job_dir names\" >&2
+  exit 1
+fi
+EB_PIPELINE_JOB_DIR=$d
+EASYBUILD_BUILDPATH=$(sub \"$EASYBUILD_BUILDPATH\" '{job_dir}' \"$d\")
+EASYBUILD_TMPDIR=$(sub \"$EASYBUILD_TMPDIR\" '{job_dir}' \"$d\")
+export EB_PIPELINE_JOB_DIR EASYBUILD_BUILDPATH EASYBUILD_TMPDIR
 exec \"$@\"";
 
 /// Shells that `modules.shell` may name, by name or by path. The wrapper

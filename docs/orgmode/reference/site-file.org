@@ -24,12 +24,15 @@ It is one file in Tom's Obvious Minimal Language (TOML), named by =--site=.
 
 =eb-pipeline= replaces a placeholder in braces in these keys, and =check= refuses any other placeholder in them.
 
-| Keys                                                                                      | Placeholders                                                                                                    |
-|-------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------------------------------|
-| =scheduler.job_name_template=                                                             | ={project}=, ={build}=, ={phase}=, ={target}=                                                                   |
-| =filesystems.build_path=, the entries of =filesystems.source_paths=, =rebuild.state_root= | ={target}=                                                                                                      |
-| =targets.route.args=, the values of =targets.route.env=                                   | ={phase_dir}=, ={log_dir}=, ={work_dir}=, ={target}=, ={phase}=, ={runtime_root}=, ={shares_ro}=, ={shares_rw}= |
-| the entries of =targets.route.shares_ro= and =targets.route.shares_rw=                    | ={phase_dir}=, ={log_dir}=, ={work_dir}=, ={target}=, ={phase}=                                                 |
+| Keys                                                                   | Placeholders                                                                                                    |
+|------------------------------------------------------------------------+-----------------------------------------------------------------------------------------------------------------|
+| =scheduler.job_name_template=                                          | ={project}=, ={build}=, ={phase}=, ={target}=                                                                   |
+| =filesystems.build_path=                                               | ={target}=, ={job_dir}=                                                                                         |
+| =filesystems.tmp=                                                      | ={job_dir}=                                                                                                     |
+| =filesystems.job_dir=                                                  | ={job}=, ={user}=                                                                                               |
+| the entries of =filesystems.source_paths=, =rebuild.state_root=        | ={target}=                                                                                                      |
+| =targets.route.args=, the values of =targets.route.env=                | ={phase_dir}=, ={log_dir}=, ={work_dir}=, ={target}=, ={phase}=, ={runtime_root}=, ={shares_ro}=, ={shares_rw}= |
+| the entries of =targets.route.shares_ro= and =targets.route.shares_rw= | ={phase_dir}=, ={log_dir}=, ={work_dir}=, ={target}=, ={phase}=                                                 |
 
 | Placeholder      | Value                                                                                                 |
 |------------------+-------------------------------------------------------------------------------------------------------|
@@ -43,6 +46,9 @@ It is one file in Tom's Obvious Minimal Language (TOML), named by =--site=.
 | ={runtime_root}= | =targets.route.runtime_root=, empty when it is unset                                                  |
 | ={shares_ro}=    | the entries of =targets.route.shares_ro=, with their placeholders replaced, joined with =:=           |
 | ={shares_rw}=    | the same for =targets.route.shares_rw=                                                                |
+| ={job_dir}=      | =filesystems.job_dir=, with ={job}= and ={user}= replaced inside each job                             |
+| ={job}=          | the Slurm job id, =SLURM_JOB_ID= inside the job                                                       |
+| ={user}=         | the job's user, =SLURM_JOB_USER= inside the job, else =id -un=                                        |
 
 *** {target} in paths
 
@@ -54,6 +60,22 @@ It is one file in Tom's Obvious Minimal Language (TOML), named by =--site=.
 - =state_root = "/opt/site/{target}/.eb-staged-rebuild"= gives each target an eb-staged-rebuild state root, and so a lock, of its own.
 
 =check= refuses ={target}= in the other paths of =[filesystems]=, and a =state_root= with ={target}= when two targets that take staged rebuilds share a =software_root=: eb-staged-rebuild locks a live tree through its state root, so one tree takes one state root.
+
+*** {job_dir} in paths
+
+={job_dir}= in =filesystems.build_path= and =filesystems.tmp= puts them in a directory that each Slurm job has to itself on its node, which =filesystems.job_dir= names, such as the node-local mount that a prolog makes for each job:
+
+#+begin_src toml
+[filesystems]
+job_dir = "/local/{user}.{job}"
+build_path = "{job_dir}/build"
+#+end_src
+
+The job id and the user are known only inside the job.
+=plan= and =explain= show =EASYBUILD_BUILDPATH= with ={job_dir}= in it, and =EB_PIPELINE_JOB_DIR= with ={job}= and ={user}=.
+Each command that a job starts first runs a wrapper that replaces them, then checks that the directory exists and that the job can write to it, and otherwise exits 1 before the command starts.
+So every job that a run starts needs the directory, whatever its phase.
+=check= refuses a =job_dir= without ={job}=, a =job_dir= with a scheduler other than =slurm=, ={job_dir}= in the other paths, and ={work_dir}= in a route when =build_path= has ={job_dir}=, as the route starts before the job.
 
 ** Top level
 
@@ -235,8 +257,9 @@ The plan and the result list the lines left out under =deselected=, and no statu
 | Key                          | Type            | Default            | Meaning                                                                                                                                                                                      |
 |------------------------------+-----------------+--------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | =scratch=                    | string          | required           | The scratch root; not empty.                                                                                                                                                                 |
-| =tmp=                        | string          | required           | =EASYBUILD_TMPDIR=; not empty. Each =eb= makes a directory of its own in it, so targets can share it.                                                                                        |
-| =build_path=                 | string          | required           | =EASYBUILD_BUILDPATH=; not empty. ={target}= expands to the name of the target.                                                                                                              |
+| =tmp=                        | string          | required           | =EASYBUILD_TMPDIR=; not empty. Each =eb= makes a directory of its own in it, so targets can share it. ={job_dir}= stands for =job_dir=.                                                      |
+| =build_path=                 | string          | required           | =EASYBUILD_BUILDPATH=; not empty. ={target}= expands to the name of the target, and ={job_dir}= stands for =job_dir=.                                                                        |
+| =job_dir=                    | string          | none               | A directory that each Slurm job has to itself on its node, with ={job}=, the job id, and ={user}=, the job's user; =Placeholders= above says how ={job_dir}= resolves.                       |
 | =source_paths=               | array of string | =[]=               | The entries of =EASYBUILD_SOURCEPATH=, joined with =:=. EasyBuild looks for a source in each entry and downloads a missing one into the first. ={target}= expands to the name of the target. |
 | =install_root=               | string          | required           | The install prefix of a target that sets no =site_prefix=; not empty.                                                                                                                        |
 | =export_install_vars=        | string          | =single=           | =single= exports =EASYBUILD_INSTALLPATH=; =split= exports =EASYBUILD_INSTALLPATH_SOFTWARE= and =EASYBUILD_INSTALLPATH_MODULES= from the target's =software_root= and =modules_root= instead. |

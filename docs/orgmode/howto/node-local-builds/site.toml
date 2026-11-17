@@ -1,0 +1,40 @@
+# Example University: the zen4 nodes of the cpu partition, whose prolog
+# mounts a directory for each job at /local/USER.JOB, and EasyBuild from a
+# module.
+schema_version = 1
+kind = "site"
+
+[site]
+name = "example"
+build_account = "alice"
+default_group = "alice"
+
+[scheduler]
+kind = "slurm"
+launch = "srun"
+job_name_template = "{project}-{build}-{phase}-{target}"
+
+[phase_defaults]
+plan = "-p cpu -N 1 --ntasks-per-node=1 -c 1 -t 15:00"
+short = "-p cpu -N 1 --ntasks-per-node=1 -c 1 -t 15:00"
+build = "-p cpu -C zen4 -N 1 --ntasks-per-node=1 -c 16 -t 1-00:00:00"
+cpu = "-p cpu -C zen4 -N 1 --ntasks-per-node=1 -c 16 -t 1-00:00:00"
+cache = "-p cpu -N 1 --ntasks-per-node=1 -c 1 -t 15:00"
+
+[[targets]]
+name = "zen4"
+build_lists = ["zen4.list"]
+site_prefix = "/opt/site/zen4"
+
+[filesystems]
+scratch = "/scratch/alice"
+tmp = "/scratch/alice/tmp"
+# The directory that the prolog mounts for each job, and the build
+# directory in it.
+job_dir = "/local/{user}.{job}"
+build_path = "{job_dir}/build"
+install_root = "/opt/site"
+log_root = "/opt/site/logs"
+
+[modules]
+init = ["EasyBuild"]
