@@ -3,7 +3,7 @@
 use crate::exit::Fail;
 use crate::resolve::{Scope, MODULE_SHELLS};
 use crate::schema::*;
-use crate::util::parse_version;
+use crate::util::{parse_version, split_args};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -686,6 +686,23 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
             }
         }
     }
+    if let Some(c) = &site.checks {
+        if c.when != "clean" && c.when != "staged" {
+            e.push(format!(
+                "checks.when: expected clean or staged, found `{}`",
+                c.when
+            ));
+        }
+        if let Some(cmd) = &c.command {
+            match split_args(cmd) {
+                Err(err) => e.push(format!("checks.command: {}", err.msg)),
+                Ok(args) if c.enabled && args.is_empty() => {
+                    e.push("checks.command: must not be empty when checks are enabled".into());
+                }
+                Ok(_) => {}
+            }
+        }
+    }
     if let Some(l) = &site.licences {
         if l.enabled && l.enforce {
             if l.groups.is_empty() && l.below_version.is_empty() && l.exempt.is_empty() {
@@ -778,6 +795,10 @@ impl Site {
     /// Caches section when active.
     pub fn caches_on(&self) -> Option<&Caches> {
         self.caches.as_ref().filter(|c| c.enabled)
+    }
+    /// Checks section when active.
+    pub fn checks_on(&self) -> Option<&Checks> {
+        self.checks.as_ref().filter(|c| c.enabled)
     }
     /// Logs section when active.
     pub fn logs_on(&self) -> Option<&Logs> {

@@ -94,6 +94,7 @@ So every job that a run or =watch= starts needs the directory, whatever its phas
 | =sources=        | table          | none     | Fetching the sources of every line before the first build.                      |
 | =modules=        | table          | required | The environment modules each command loads.                                     |
 | =caches=         | table          | none     | The command that writes module caches after a clean build.                      |
+| =checks=         | table          | none     | A test command run after a clean build and before caches.                       |
 | =logs=           | table          | none     | Keeping the logs of a failed line, and rotating the log tree.                   |
 | =rebuild=        | table          | none     | Rebuilding installed software in a staged tree, with eb-staged-rebuild.         |
 | =licences=       | table          | none     | The licence gate.                                                               |
@@ -368,6 +369,19 @@ With the table on, every command also gets =EESSI_SITE_SOFTWARE_PREFIX=, the tar
 | =targets=     | array of table | =[]=    | One =[[caches.targets]]= table per target that has caches.                                                                                                              |
 
 A build is clean when no line failed, was refused or is pending; otherwise the =caches= phase is =skipped=.
+
+** =[checks]=
+
+| Key       | Type    | Default | Meaning                                                                                                                                                                                                 |
+|-----------+---------+---------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =enabled= | boolean | =true=  | =false= turns the phase off.                                                                                                                                                                            |
+| =command= | string  | =none=  | The test command, split on whitespace with quotes honoured, run once on the short launch line after a clean build. Without it, the phase is not configured.                                            |
+| =when=    | string  | =clean= | =clean= runs after every clean build. =staged= runs only when the list rebuilds an installed module; otherwise the phase is not configured, with the reason =no staged rebuild in this list=.         |
+
+The command's environment is =EB_PIPELINE_CHECK_SOFTWARE=, =EB_PIPELINE_CHECK_MODULES=, =EB_PIPELINE_CHECK_RUN_ID=, =EB_PIPELINE_CHECK_LOG_DIR= and =EB_PIPELINE_CHECK_STAGED= (=1= when a line was a staged rebuild, =0= otherwise).
+A non-zero status fails the run and the cache phase is skipped.
+A build that did not finish cleanly does not start the command.
+The swapped tree stays where the rebuild left it; =eb-staged-rebuild rollback= puts the previous generation back.
 
 *** =[[caches.targets]]=
 
