@@ -265,7 +265,8 @@ fn a_record_that_fails_keeps_its_work_directory_but_not_the_environment() {
 
 /// A stand-in for srun, and for the prolog and epilog of its node: each job
 /// is the next job of alice, in a directory under `local/` that goes when
-/// the job ends. A job of the phase that STUB_NO_JOB_DIR names gets none.
+/// the job ends. A job of the phase that STUB_NO_JOB_DIR names gets none;
+/// the job of `eb-stack rebuild-set` counts as phase `rebuild-set`.
 const SRUN: &str = r#"#!/bin/sh
 D="${STUB_DIR:?}"
 job=$(( $(cat "$D/srun.jobs" 2>/dev/null || echo 0) + 1 ))
@@ -279,6 +280,7 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+for a; do [ "$a" = rebuild-set ] && phase=rebuild-set; done
 dir="$D/local/alice.$job"
 [ -n "${STUB_NO_JOB_DIR:-}" ] && [ "$phase" = "$STUB_NO_JOB_DIR" ] || mkdir -p "$dir"
 SLURM_JOB_ID=$job SLURM_JOB_USER=alice "$@"
@@ -345,6 +347,38 @@ fn a_record_that_its_job_directory_stops_quotes_why_and_fails_as_any_record_does
     assert_eq!(files, ["eessi-probe.log"]);
     let calls = t.calls("ebstack");
     assert!(!calls.contains(later), "{calls}");
+}
+
+#[test]
+fn a_rebuild_set_that_its_job_directory_stops_quotes_why() {
+    let t = setup(WATCH);
+    eessi(&t);
+    let local = with_job_dirs(&t, SRUN);
+    let vars = eessi_vars(&t, "2023.06");
+    // The probe's job has a directory; the next job, that of rebuild-set,
+    // has none.
+    let mut no_dir = with(&vars);
+    no_dir.push(("STUB_NO_JOB_DIR", "rebuild-set"));
+    let o = run(&t, "cpu", STAMP, "Foo-1.0-GCCcore-13.2.0.eb\n", &no_dir);
+    let err = stderr(&o);
+    assert_eq!(code(&o), 0, "{err}");
+    let job = std::fs::read_to_string(t.root().join("srun.jobs")).unwrap();
+    let job = job.trim();
+    let work = t
+        .root()
+        .join("scratch/eb-pipeline-watch/cpu")
+        .join(STAMP)
+        .join("record");
+    let want = format!(
+        "WARN [watch] cpu: Foo/1.0-GCCcore-13.2.0 not recorded: eb-stack rebuild-set exited 1; its output is in {}: \"eb-pipeline: job {job} has no directory {}/alice.{job} that it can write to, which filesystems.job_dir names\"; no EESSI change under them is seen until watch --adopt records them\nINFO [summary] cpu: summary.json and summary.html written in {}\n",
+        work.join("rebuild-set.log").display(),
+        local.display(),
+        t.run_dir(STAMP).display()
+    );
+    assert!(err.ends_with(&want), "{want} does not end\n{err}");
+    let state = t.root().join("install/.eb-pipeline-watch/cpu.json");
+    assert!(!state.exists(), "{}", state.display());
+    assert_eq!(t.calls("ebstack"), "");
 }
 
 #[test]

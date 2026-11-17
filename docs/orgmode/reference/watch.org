@@ -113,14 +113,14 @@ find scratch/eb-pipeline-watch -type f
 scratch/eb-pipeline-watch/zen4/20261117_110000/record/eessi-probe.log
 #+end_example
 
-| Reason                                                                                  | Cause                                                                                          |
-|-----------------------------------------------------------------------------------------+------------------------------------------------------------------------------------------------|
-| =eb-stack tells what an install depends on, and cannot run `eb-stack --version`: ERROR= | eb-stack is not on =PATH=, or not where =[site.tools.eb_stack]= names it.                      |
-| =the module environment of target TARGET did not load (exit N); its output is in PATH=  | The module wrapper or the job directory wrapper failed, or =env -0= wrote nothing.             |
-| =no EESSI in the module environment of target TARGET: NAME is unset=                    | The module environment sets no =EESSI_VERSION=, =EESSI_SOFTWARE_SUBDIR= or =EESSI_MODULEPATH=. |
-| =cannot read the revision of REPOSITORY: ERROR=                                         | The repository is not there, as when CVMFS is not mounted.                                     |
-| =eb-stack rebuild-set exited N; its output is in PATH=                                  | eb-stack failed; =PATH= is =rebuild-set.log= in the work directory.                            |
-| =the run was stopped by SIGNAL=                                                         | The run was stopped by =SIGINT= or =SIGTERM=, which ends it before the record.                 |
+| Reason                                                                                  | Cause                                                                                            |
+|-----------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------|
+| =eb-stack tells what an install depends on, and cannot run `eb-stack --version`: ERROR= | eb-stack is not on =PATH=, or not where =[site.tools.eb_stack]= names it.                        |
+| =the module environment of target TARGET did not load (exit N); its output is in PATH=  | The module wrapper or the job directory wrapper failed, or =env -0= wrote nothing.               |
+| =no EESSI in the module environment of target TARGET: NAME is unset=                    | The module environment sets no =EESSI_VERSION=, =EESSI_SOFTWARE_SUBDIR= or =EESSI_MODULEPATH=.   |
+| =cannot read the revision of REPOSITORY: ERROR=                                         | The repository is not there, as when CVMFS is not mounted.                                       |
+| =eb-stack rebuild-set exited N; its output is in PATH=                                  | eb-stack or the job directory wrapper failed; =PATH= is =rebuild-set.log= in the work directory. |
+| =the run was stopped by SIGNAL=                                                         | The run was stopped by =SIGINT= or =SIGTERM=, which ends it before the record.                   |
 
 When the job directory wrapper of =filesystems.job_dir= failed, =PATH= is followed by the first line in which it says why, in quotes, such as =PATH: "eb-pipeline: job N has no directory DIR that it can write to, which filesystems.job_dir names"=.
 
