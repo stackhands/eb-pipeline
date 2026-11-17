@@ -198,6 +198,15 @@ pub fn need_eb_stack(site: &Site) -> Result<(), Fail> {
     Ok(())
 }
 
+/// `: "LINE"`, where LINE is the line of `log` in which the job directory
+/// wrapper says why it started no command; nothing when no line says so.
+fn refusal_quote(log: &Path) -> String {
+    let output = std::fs::read(log).unwrap_or_default();
+    job_dir_refusal(&String::from_utf8_lossy(&output))
+        .map(|l| format!(": \"{l}\""))
+        .unwrap_or_default()
+}
+
 /// EESSI as the target's module environment loads it, from `env -0` run
 /// inside the module wrapper, as `stack shard` runs; and that environment.
 pub fn probe(p: &Planner, work: &Path) -> Result<(Probe, BTreeMap<String, String>), Fail> {
@@ -217,15 +226,12 @@ pub fn probe(p: &Planner, work: &Path) -> Result<(Probe, BTreeMap<String, String
     // the work directory can outlive the run.
     let _ = std::fs::remove_file(&out);
     if code != 0 || bytes.is_empty() {
-        let output = std::fs::read(&log_path).unwrap_or_default();
-        let why = job_dir_refusal(&String::from_utf8_lossy(&output))
-            .map(|l| format!(": \"{l}\""))
-            .unwrap_or_default();
         return Err(Fail::new(
             exit::TEMPFAIL,
             format!(
-                "the module environment of target {target} did not load (exit {code}); its output is in {}{why}",
-                log_path.display()
+                "the module environment of target {target} did not load (exit {code}); its output is in {}{}",
+                log_path.display(),
+                refusal_quote(&log_path)
             ),
         ));
     }
@@ -384,8 +390,9 @@ pub fn rebuild_set(
         return Err(Fail::new(
             exit::FAILED,
             format!(
-                "eb-stack rebuild-set exited {code}; its output is in {}",
-                log_path.display()
+                "eb-stack rebuild-set exited {code}; its output is in {}{}",
+                log_path.display(),
+                refusal_quote(&log_path)
             ),
         ));
     }
@@ -980,8 +987,9 @@ pub fn order(
         return Err(Fail::new(
             exit::FAILED,
             format!(
-                "eb-stack stack shard exited {code}; its output is in {}",
-                log_path.display()
+                "eb-stack stack shard exited {code}; its output is in {}{}",
+                log_path.display(),
+                refusal_quote(&log_path)
             ),
         ));
     }
