@@ -87,6 +87,13 @@ if [ -n "${STUB_EB_SLEEP:-}" ]; then
   exit 0
 fi
 case ",${STUB_EB_FAIL:-}," in *",$stem,"*) echo "ERROR: $stem failed"; exit 1;; esac
+# STUB_EB_INSTALLS names the module file a build installs, under
+# install/modules/all; STUB_EB_CODE is the build's exit code.
+if [ "$kind" = build ] && [ -n "${STUB_EB_INSTALLS:-}" ]; then
+  mkdir -p "$(dirname "$D/install/modules/all/$STUB_EB_INSTALLS")"
+  echo '-- module' > "$D/install/modules/all/$STUB_EB_INSTALLS"
+fi
+[ "$kind" = build ] && exit "${STUB_EB_CODE:-0}"
 exit 0
 "#;
 
@@ -1205,6 +1212,31 @@ fn a_staged_line_records_that_it_ran_through_eb_staged_rebuild() {
         );
         assert_eq!(r["lines"][1]["status"], "success");
         assert!(r["lines"][1].get("note").is_none(), "{}", r["lines"][1]);
+    }
+}
+
+#[test]
+fn a_rebuild_that_installs_its_module_ran_as_plain_eb() {
+    // No module file before the build, so plain eb runs; the module file it
+    // installs does not make the line a staged rebuild after the fact.
+    for (code, status, exit) in [("0", "success", 0), ("2", "failed", 1)] {
+        let env = setup("[rebuild]\nstaged = true\n");
+        let o = go(
+            &env,
+            "Foo-1.0-foss-2025a.eb --rebuild\n",
+            &[
+                ("STUB_EB_INSTALLS", "Foo/1.0-foss-2025a.lua"),
+                ("STUB_EB_CODE", code),
+            ],
+        );
+        assert_eq!(o.code, exit, "{}", o.stderr);
+        let r = o.result.unwrap();
+        let line = &r["lines"][0];
+        assert_eq!(line["status"], status, "{line}");
+        assert_eq!(line["exit_code"], code.parse::<i64>().unwrap(), "{line}");
+        assert!(line.get("note").is_none(), "{line}");
+        assert!(calls(&env, "staged.calls").is_empty());
+        assert_eq!(calls(&env, "eb.calls").len(), 1);
     }
 }
 
