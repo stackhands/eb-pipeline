@@ -81,6 +81,7 @@ It checks the site file of [[file:build-from-ci.org][Build a list on every targe
    INFO [shard] zen4: not configured
    INFO [sources] zen4: not configured
    INFO [admission] zen4: not configured
+   INFO [checks] zen4: not configured
    INFO [caches] zen4: not configured
    INFO [logs] zen4: not configured
    INFO [build] zen4: Example-1.0-GCCcore-15.2.0: start

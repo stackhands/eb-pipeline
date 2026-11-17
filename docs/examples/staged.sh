@@ -9,6 +9,11 @@
 # With 2 it first prints, on stderr, the refusal of eb-staged-rebuild that
 # finds the lock of its state root held.
 # shellcheck disable=SC2016 # commands stay quoted as the pages show them
+page=$(dirname -- "$0")/../orgmode/howto/staged-rebuilds.org
+grep -F 'INFO [checks] zen4: not configured' "$page" >/dev/null || {
+    echo "the staged-rebuild run example has no checks event" >&2
+    exit 1
+}
 # shellcheck source-path=SCRIPTDIR source=lib.sh
 . "$(dirname -- "$0")/lib.sh"
 
