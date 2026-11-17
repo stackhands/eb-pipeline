@@ -1,1 +1,0 @@
-Keep-failed steps run with `EASYBUILD_OUTPUT_STYLE=basic`. Without a terminal, EasyBuild 5 wraps the log path that `eb --last-log` prints at 80 columns, and `eb-keep-logs failed` kept nothing unless the site had set the style itself.

@@ -1,1 +1,0 @@
-`stack shard` runs inside the module wrapper and sees what the `[modules]` init list sets. Without EESSI-extend's `EASYBUILD_FILTER_DEPS`, the planner put filtered tools such as M4, Bison and zlib into the prelude list.

@@ -1,1 +1,0 @@
-`list_word` writes one word of a build list so the list reader returns that word, and leaves a parenthesis or a star bare. `quote` stays the shell quoter: an apostrophe is written `'"'"'`, which a shell and the argument splitter both read back, and a parenthesis is quoted.

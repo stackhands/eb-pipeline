@@ -1,1 +1,0 @@
-A how-to guide builds some lines of a list on some targets only, with a `[targets.select]` table in each target, and shows what each target plans and runs of the list, `selected-TARGET.list` and the `deselected` lines of the plan and the result.

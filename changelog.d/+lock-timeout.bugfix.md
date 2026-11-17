@@ -1,1 +1,0 @@
-A staged line no longer waits with no deadline for another eb-staged-rebuild's lock on its state root: `run` passes `--lock-timeout` from the new `[rebuild] lock_timeout`, 600 seconds by default and 0 to refuse at once. A line whose wait runs out is recorded as `refused`, and its note and the ERROR line name the lock.

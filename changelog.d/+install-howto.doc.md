@@ -1,1 +1,0 @@
-A how-to guide installs eb-pipeline from the 0.3.0 release, checked against its checksum, or from source with `cargo install --locked`, and says what the release lacks of the code the documentation describes.

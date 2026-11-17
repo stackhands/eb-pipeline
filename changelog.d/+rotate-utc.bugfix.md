@@ -1,1 +1,0 @@
-The `logs` phase runs `eb-keep-logs rotate` with `TZ=UTC`. Run directories are named in UTC and rotate counts ages from the local midnight of the name's date, so away from UTC a run's age was a day off between the two midnights.

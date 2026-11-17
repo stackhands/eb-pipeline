@@ -1,1 +1,0 @@
-The reference has a page for the `eb-pipeline` command, with the usage line, options, variables and exit statuses of every subcommand, and a page for the environment variables it reads, the `EB_PIPELINE__SECTION__KEY` site file values and the variables a run sets for the commands it starts. `docs/examples/cli.sh` prints the help texts the page shows.

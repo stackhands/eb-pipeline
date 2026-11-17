@@ -1,1 +1,0 @@
-`[logs.rotate]` requires `compress_after_days`, and a `delete_after_days` that is not greater is refused. Both passed `check`, and `run` failed its logs phase after the builds with exit 2 from `eb-keep-logs rotate`.

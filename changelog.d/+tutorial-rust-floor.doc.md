@@ -1,1 +1,0 @@
-The tutorial and install how-to tell readers whose default `cargo` is older than 1.90 to run `rustup toolchain install 1.90` and `cargo +1.90 install`. `docs/examples/tutorial-rust-floor.sh` fails until both pages carry those lines.

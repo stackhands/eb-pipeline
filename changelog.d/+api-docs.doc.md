@@ -1,1 +1,0 @@
-Every public item of the `eb_pipeline` library has a doc comment, and `pixi run -e docs docbld` fails on one without. The field of a site file key in `eb_pipeline::schema` carries the text `eb-pipeline schema` prints for that key.
