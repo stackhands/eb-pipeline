@@ -4,7 +4,7 @@
 
 * Environment variables
 
-The variables =eb-pipeline= reads in place of an option or a site file value, the ones a run reads because the site file names them, and the ones it sets for the commands it starts.
+The variables =eb-pipeline= reads in place of an option or a site file value, the ones a run reads because the site file names them or from the module environment, and the ones it sets for the commands it starts.
 
 ** Options
 
@@ -53,6 +53,21 @@ The site file names these variables.
 | the one named by =targets.route.receipt_digest_env=                | A digest that the routed commands get as =EB_PIPELINE_ROUTE_RECEIPT_DIGEST=. =run= refuses with exit 78 when it is unset or empty.                                                                         |
 | each one named in =shards.installed_modules_dirs_from_env=         | Module trees, separated by =:=, added to =shards.installed_modules_dirs=. =run= refuses with exit 78 when one is unset; an empty one adds nothing.                                                         |
 | the one named by =notify.webhook_env=                              | The URL that =run= POSTs the summary to. When it is unset, empty, or a URL that =check= would refuse in =notify.webhook=, the run sends nothing and writes a =WARN= line; its exit status stays as it was. |
+
+** Read from the module environment
+
+With =[watch]= on, a run that records its installs runs =env -0= in the module environment of the target, as it runs its other commands, and reads these variables from what it writes, which EESSI sets as it loads:
+
+| Variable                 | Use                                                                                             |
+|--------------------------+-------------------------------------------------------------------------------------------------|
+| =EESSI_VERSION=          | The EESSI version, such as =2023.06=; required.                                                 |
+| =EESSI_SOFTWARE_SUBDIR=  | The CPU subdirectory, such as =x86_64/amd/zen4=; required.                                      |
+| =EESSI_CVMFS_REPO=       | The repository whose revision is read, unless =watch.repository= is set.                        |
+| =EESSI_MODULEPATH=       | The EESSI module tree, unless =watch.modules_dirs= is set.                                      |
+| =EESSI_MODULEPATH_ACCEL= | The EESSI module tree for the accelerator, after the other, unless =watch.modules_dirs= is set. |
+
+Without =watch.modules_dirs=, one of the last two is required.
+A record without a required one is a =WARN= line, and the run exits as it would have without =[watch]=; [[file:watch.org][The watch state]] gives the line.
 
 ** Set for the commands of a run
 
@@ -122,7 +137,7 @@ Some commands get more variables, set over those above.
 
 *** The module wrapper
 
-When =modules.init= is not empty, =modules.unuse_path= is =true= or =modules.shell_init= is set, the shard, prefetch, build, keep-failed and cache commands start through =modules.shell=, which reads three of the variables above:
+When =modules.init= is not empty, =modules.unuse_path= is =true= or =modules.shell_init= is set, the shard, prefetch, build, keep-failed and cache commands, and the commands of a record of =[watch]=, start through =modules.shell=, which reads three of the variables above:
 
 1. =EB_PIPELINE_SHELL_INIT=: the file it sources first, when set.
 2. =EB_PIPELINE_UNUSE_PATH=: when set, it empties =MODULEPATH=.

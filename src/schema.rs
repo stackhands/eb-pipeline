@@ -580,6 +580,22 @@ fn d_curl() -> String {
 }
 
 doc_struct! {
+    /// What each install was built against in EESSI, and the rebuild of the
+    /// installs an EESSI change reaches.
+    Watch {
+        #[serde(default = "yes")]
+        enabled: bool => ("boolean", "true", false, "Set false to record nothing and refuse `watch`."),
+        state_dir: Option<String> => ("string", "<install prefix>/.eb-pipeline-watch", false,
+            "Directory of `<target>.json`, which holds what each recorded install of the target was built against; `{target}` is the target's name."),
+        repository: Option<String> => ("string", "EESSI_CVMFS_REPO", false,
+            "Directory whose CVMFS `user.revision` attribute is read; while it stays at the recorded revision, `watch` compares no modules."),
+        #[serde(default)]
+        modules_dirs: Vec<String> => ("array of string", "EESSI_MODULEPATH, EESSI_MODULEPATH_ACCEL", false,
+            "EESSI module trees, in order, in place of the ones the module environment sets, as for a fixture tree."),
+    }
+}
+
+doc_struct! {
     /// A site file.
     Site {
         schema_version: u32 => ("integer", "", true, "Schema version; 1."),
@@ -598,6 +614,7 @@ doc_struct! {
         rebuild: Option<Rebuild> => ("table", "none", false, "Staged rebuild."),
         licences: Option<Licences> => ("table", "none", false, "Licence enforcement."),
         notify: Option<Notify> => ("table", "none", false, "Webhook POST of each run's summary; none without the table."),
+        watch: Option<Watch> => ("table", "none", false, "Records what each install was built against in EESSI, for `watch`; none without the table."),
     }
 }
 
@@ -630,6 +647,7 @@ pub const SECTIONS: &[(&str, &[FieldDoc])] = &[
     ("licences", Licences::FIELDS),
     ("licences.required", LicenceRequired::FIELDS),
     ("notify", Notify::FIELDS),
+    ("watch", Watch::FIELDS),
 ];
 
 /// Render the key reference as plain text.
@@ -736,6 +754,7 @@ mod tests {
             Licences,
             LicenceRequired,
             Notify,
+            Watch,
         );
         // Every documented table appears in the printed reference.
         for (_, fields) in SECTIONS {
@@ -770,6 +789,7 @@ mod tests {
             "licences",
             "phase_defaults",
             "notify",
+            "watch",
         ] {
             assert!(!req.contains(&k), "{k} must be optional");
         }

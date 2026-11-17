@@ -709,6 +709,19 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
             e.push("notify.curl: must not be empty".into());
         }
     }
+    if let Some(w) = &site.watch {
+        if let Some(s) = &w.state_dir {
+            check_placeholders("watch.state_dir", s, PER_TARGET, &mut e);
+        }
+        let paths = w.state_dir.iter().map(|p| ("state_dir", p));
+        let paths = paths.chain(w.repository.iter().map(|p| ("repository", p)));
+        let paths = paths.chain(w.modules_dirs.iter().map(|p| ("modules_dirs", p)));
+        for (key, p) in paths {
+            if !p.starts_with('/') {
+                e.push(format!("watch.{key}: `{p}` is not an absolute path"));
+            }
+        }
+    }
     e
 }
 
@@ -750,6 +763,10 @@ impl Site {
     /// `[notify]` when active.
     pub fn notify_on(&self) -> Option<&Notify> {
         self.notify.as_ref().filter(|n| n.enabled)
+    }
+    /// `[watch]` when active.
+    pub fn watch_on(&self) -> Option<&Watch> {
+        self.watch.as_ref().filter(|w| w.enabled)
     }
     /// The target called `name`.
     ///

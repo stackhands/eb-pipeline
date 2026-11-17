@@ -438,6 +438,17 @@ impl<'a> Planner<'a> {
         })
     }
 
+    /// A command eb-pipeline runs for `phase` as it runs `stack shard`: with
+    /// the plan role's launch, inside the module wrapper.
+    pub fn plan_role_cmd(&self, phase: &str, inner: Vec<String>) -> Result<Cmd, Fail> {
+        Ok(Cmd {
+            name: phase.into(),
+            argv: self.wrapped(Role::Plan, phase, inner, true)?,
+            env: BTreeMap::new(),
+            note: None,
+        })
+    }
+
     /// Route phase of a command of `role`; only CPU-role units are routed.
     fn route_phase(role: Role, phase: &'static str) -> Option<&'static str> {
         (role == Role::Cpu).then_some(phase)

@@ -43,6 +43,17 @@ fn interrupted() -> Option<i32> {
     }
 }
 
+/// The exit code of a SIGINT or SIGTERM received since `install_handlers`.
+pub fn signal_exit() -> Option<i32> {
+    interrupted().map(|s| {
+        if s == libc::SIGINT {
+            exit::SIGINT
+        } else {
+            exit::SIGTERM
+        }
+    })
+}
+
 /// The wait before the next admission attempt. It starts at `wait_seconds`
 /// and is never longer than `max_wait_seconds`, including when that maximum
 /// is the smaller of the two.
@@ -267,6 +278,16 @@ fn exec(cmd: &Cmd, base_env: &BTreeMap<String, String>, log: &Path) -> Result<Ex
         log: log.to_path_buf(),
         elapsed: started.elapsed(),
     })
+}
+
+/// Run `cmd` as a phase runs its commands, output in `log`, and return its
+/// exit code: 127 when it cannot start.
+pub fn exec_logged(
+    cmd: &Cmd,
+    base_env: &BTreeMap<String, String>,
+    log: &Path,
+) -> Result<i32, Fail> {
+    exec(cmd, base_env, log).map(|e| e.code)
 }
 
 fn last_json_line(path: &Path) -> Option<String> {

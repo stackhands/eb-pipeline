@@ -5,7 +5,7 @@
 * The log tree and its locks
 
 A run writes its logs under =filesystems.log_root=, =LOG_ROOT= on this page, in a directory of its own for each target.
-It takes locks in the log root, and in the state root of eb-staged-rebuild and the admission lock when the site file uses them.
+It takes locks in the log root, and in the state root of eb-staged-rebuild, the admission lock and the watch state when the site file uses them.
 
 ** The log directory
 
@@ -74,8 +74,10 @@ A command that cannot start leaves one line in its log, =cannot start PROGRAM: E
 | =STATE_ROOT/.lock=                   | =eb-staged-rebuild run=, for a staged line                                                         | Alone, for the whole of its build and publish                                                                   | It waits up to =rebuild.lock_timeout= seconds, then exits 2, and the line is =refused=.                                                                                    |
 | =admission.lock=                     | =stack admit=, and =run= when it removes the reservation of an admitted job                        | =flock=, or a POSIX record lock over the whole file, as =admission.lock_kind= says                              | =run= waits for it.                                                                                                                                                        |
 | =LOG_ROOT/LOG_STAMP/.summary.lock=   | =run=, after its last phase                                                                        | =flock=, alone, while it reads =summary.json= and writes both files, holding no other lock                      | It waits for it.                                                                                                                                                           |
+| =STATE_DIR/TARGET.lock=              | =run= with =[watch]=, after its last phase and before the summary                                  | =flock=, alone, while it reads =STATE_DIR/TARGET.json= and writes it, holding no other lock                     | It waits for it.                                                                                                                                                           |
 
 =STATE_ROOT= is =rebuild.state_root=, else the =EB_STAGED_REBUILD_STATE_ROOT= that eb-staged-rebuild sees, else =.eb-staged-rebuild= beside the software tree.
+=STATE_DIR= is =watch.state_dir=; [[file:watch.org][The watch state]] describes =STATE_DIR/TARGET.json=.
 =flock= locks hold between nodes only where the filesystem carries them between nodes.
 When a run cannot take its rotation lock at all, it logs =WARN [logs] TARGET: cannot lock PATH: ERROR; the rotation does not wait for other runs= and rotates without it.
 

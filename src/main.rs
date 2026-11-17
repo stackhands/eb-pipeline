@@ -3,7 +3,7 @@ use eb_pipeline::exit::{self, Fail};
 use eb_pipeline::plan::{build_plan, read_units, Planner};
 use eb_pipeline::resolve::{explain, Scope};
 use eb_pipeline::run::{install_handlers, log, run, Options, RunResult};
-use eb_pipeline::{easystack, notify, schema, site, summary, templates, tools, util};
+use eb_pipeline::{easystack, notify, schema, site, summary, templates, tools, util, watch};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -457,11 +457,15 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         tools::check_versions(&s, false)?;
     }
     install_handlers();
+    let before = (!dry && s.watch_on().is_some()).then(|| watch::listings(&planner, &lines));
     let res = run(&planner, &lines, &Options { dry_run: dry });
     if let Some(m) = &res.message {
         log("ERROR", "run", &c.target, m);
     }
     if !dry {
+        if let Some(before) = &before {
+            watch::record_run(&planner, &res, before);
+        }
         write_summary(&s, &res, "run", result);
         if let Some(p) = result {
             write_json(&to_sorted(&res), Some(p))?;

@@ -15,6 +15,7 @@ Each page states facts in the order the thing itself has them.
    site-file
    plan-and-result
    run-summary
+   watch
    log-tree
    templates
    environment

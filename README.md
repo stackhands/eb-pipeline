@@ -7,9 +7,10 @@ file and a build list into an ordered set of subprocesses, so a continuous
 integration (CI) system (Jenkins, GitLab CI, a cron job) becomes a thin caller
 that passes a list and a target and reads an exit code and a result file.
 
-It starts [eb-stack](https://github.com/stackhands/eb-stack) for `stack shard`
-and `stack admit`, [eb-keep-logs](https://github.com/stackhands/eb-keep-logs)
-for `failed` and `rotate`, and
+It starts [eb-stack](https://github.com/stackhands/eb-stack) for `stack shard`,
+`stack admit` and `rebuild-set`,
+[eb-keep-logs](https://github.com/stackhands/eb-keep-logs) for `failed` and
+`rotate`, and
 [eb-staged-rebuild](https://github.com/stackhands/eb-staged-rebuild) for `run`,
 and never links them in. Nothing about a site lives in this repository: the
 templates carry placeholders only, and a test rejects any template value that
@@ -38,6 +39,7 @@ looks site-specific.
   [the site file](docs/orgmode/reference/site-file.org),
   [the plan and result files](docs/orgmode/reference/plan-and-result.org),
   [the run summary](docs/orgmode/reference/run-summary.org),
+  [the watch state](docs/orgmode/reference/watch.org),
   [the log tree and its locks](docs/orgmode/reference/log-tree.org),
   [the site file templates](docs/orgmode/reference/templates.org),
   [environment variables](docs/orgmode/reference/environment.org),

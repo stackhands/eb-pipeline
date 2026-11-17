@@ -1,0 +1,208 @@
+#+TITLE: The watch state
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* The watch state
+
+With a =[watch]= table in the site file, =run= records what each install it builds was built against in the European Environment for Scientific Software Installations (EESSI): the EESSI version and CPU subdirectory, the CVMFS revision of the repository, and each EESSI module that the install depends on, with an identity that changes when that module changes.
+[[file:site-file.org][The site file]] lists the keys of the table.
+The examples on this page come from =docs/examples/watch.sh=, which stands in for the EESSI repository with a directory under =$WORK= that holds three modules, for EasyBuild with a script that installs what it builds, and for eb-stack with a script that answers from a table.
+
+** The dependencies of an install
+
+eb-stack answers which EESSI modules an install depends on, and how; eb-pipeline asks it, and keeps the answer.
+A record runs =eb-stack rebuild-set= with every easyconfig of EESSI counted as changed, and the rows whose dependent is the install name its EESSI dependencies, each with the strongest class that a row gives it:
+
+| Class          | When eb-stack gives it                                                                                                                                                   |
+|----------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =must-rebuild= | The install is a bundle whose =exts_list= names the package and version of the dependency, which it holds a copy of.                                                     |
+| =no-rebuild=   | A path of runtime dependencies leads from the install to the dependency: the install links it as a shared library, which a change in place keeps working.                |
+| =review=       | Every path from the install to the dependency goes through a build dependency: the install may have linked the dependency statically or embedded it, which nothing says. |
+
+=rebuild-set= follows no toolchain edge, so the compiler and the libraries it brings, such as =GCCcore=, are not recorded as dependencies.
+Nor are the dependencies that the EasyBuild of EESSI filters out because its compatibility layer provides them, such as =ncurses=, =bzip2= and =zlib=: they have no module, and a change to the compatibility layer is not seen.
+The [[https://eb-stack.rgoswami.me/][eb-stack documentation]] describes =rebuild-set= and its classes.
+
+** What a run records
+
+Here the module environment of the target loads EESSI 2023.06 through the Lmod init of the repository, and the site file has a =[watch]= table with no keys:
+
+#+begin_src bash
+sed -n "/^\[modules\]/,\$p" site.toml
+#+end_src
+
+#+begin_example
+[modules]
+shell_init = "$WORK/cvmfs/software.eessi.io/versions/2023.06/init/lmod/bash"
+init = ["EESSI/2023.06"]
+
+[watch]
+#+end_example
+
+After its phases, =run= records each line that ended =success= and changed its install:
+
+#+begin_src bash
+eb-pipeline run --site site.toml --list zen4.list --target zen4 --build-type production --log-stamp 20261117_090000
+#+end_src
+
+#+begin_example
+INFO [licences] zen4: not configured
+...
+INFO [build] zen4: hiredis-1.2.0-GCCcore-13.2.0: start
+INFO [build] zen4: hiredis-1.2.0-GCCcore-13.2.0: ok
+INFO [build] zen4: tmux-3.4-GCCcore-13.2.0: start
+INFO [build] zen4: tmux-3.4-GCCcore-13.2.0: ok
+INFO [watch] zen4: recorded 2 against EESSI 2023.06 x86_64/amd/zen4 at revision 32663: hiredis/1.2.0-GCCcore-13.2.0, tmux/3.4-GCCcore-13.2.0
+INFO [summary] zen4: summary.json and summary.html written in $WORK/site/logs/20261117_090000
+#+end_example
+
+To record, eb-pipeline:
+
+1. checks for eb-stack, as =[site.tools.eb_stack]= names it, and its =min_version=;
+2. runs =env -0= in the module environment of the target, as it runs =stack shard=: with the launch arguments of the =plan= role, through the module wrapper; it reads the variables that [[file:environment.org][Environment variables]] lists from what =env -0= writes, and deletes that file once it has read it, as it holds the whole environment, secrets among it;
+3. reads the revision of the repository, its =user.revision= attribute;
+4. scans the EESSI module trees and =MODULES_ROOT/all=: for each =NAME/VERSION= or =NAME/VERSION.lua=, the =root= that its module file sets, and the easyconfig in =ROOT/easybuild/=;
+5. links each easyconfig into =SCRATCH/eb-pipeline-watch/TARGET/LOG_STAMP/record/easyconfigs/=, the ones of EESSI under =eessi/= and the ones of the target under =local/=, and runs =eb-stack rebuild-set= over the two trees, the target's last, so that an easyconfig of the target wins over the one of EESSI with the same name;
+6. writes the installs into =STATE_DIR/TARGET.json= under =STATE_DIR/TARGET.lock=, and removes its work directory.
+
+=SCRATCH= is =filesystems.scratch=, =MODULES_ROOT= and =SOFTWARE_ROOT= are the =modules_root= and =software_root= of the target, and =STATE_DIR= is =watch.state_dir=.
+Outside CVMFS the repository has no revision, and the line names none.
+
+A line whose install was there before the run, and that EasyBuild left as it was, is not recorded again: the listing of =SOFTWARE_ROOT/NAME/VERSION/easybuild/=, taken before the run, is the same after it.
+EasyBuild leaves a new log there each time it installs or rebuilds a module.
+The same list again:
+
+#+begin_src bash
+eb-pipeline run --site site.toml --list zen4.list --target zen4 --build-type production --log-stamp 20261117_100000
+#+end_src
+
+#+begin_example
+INFO [licences] zen4: not configured
+...
+INFO [watch] zen4: 2 line(s) left their install as it was and are not recorded again
+INFO [summary] zen4: summary.json and summary.html written in $WORK/site/logs/20261117_100000
+#+end_example
+
+=run --dry-run= records nothing.
+
+** When a record fails
+
+A record that fails is a =WARN= line that names the installs it left out, and the run exits as it would have without =[watch]=.
+Here the module environment of =no-eessi.toml=, the same site file without =shell_init= and with no module in =init=, loads no EESSI:
+
+#+begin_src bash
+eb-pipeline run --site no-eessi.toml --list zip.list --target zen4 --build-type production --log-stamp 20261117_110000
+#+end_src
+
+#+begin_example
+INFO [licences] zen4: not configured
+...
+WARN [watch] zen4: Zip/3.0-GCCcore-13.2.0 not recorded: no EESSI in the module environment of target zen4: EESSI_VERSION is unset; no EESSI change under them is seen until a record of them is written
+INFO [summary] zen4: summary.json and summary.html written in $WORK/site/logs/20261117_110000
+#+end_example
+
+Its work directory stays for a look: =eessi-probe.log= holds what the module environment printed as it loaded, without the variables, which =env -0= writes to a file that is deleted once read:
+
+#+begin_src bash
+find scratch/eb-pipeline-watch -type f
+#+end_src
+
+#+begin_example
+scratch/eb-pipeline-watch/zen4/20261117_110000/record/eessi-probe.log
+#+end_example
+
+| Reason                                                                                  | Cause                                                                                          |
+|-----------------------------------------------------------------------------------------+------------------------------------------------------------------------------------------------|
+| =eb-stack tells what an install depends on, and cannot run `eb-stack --version`: ERROR= | eb-stack is not on =PATH=, or not where =[site.tools.eb_stack]= names it.                      |
+| =the module environment of target TARGET did not load (exit N); its output is in PATH=  | The module wrapper failed, or =env -0= wrote nothing.                                          |
+| =no EESSI in the module environment of target TARGET: NAME is unset=                    | The module environment sets no =EESSI_VERSION=, =EESSI_SOFTWARE_SUBDIR= or =EESSI_MODULEPATH=. |
+| =cannot read the revision of REPOSITORY: ERROR=                                         | The repository is not there, as when CVMFS is not mounted.                                     |
+| =eb-stack rebuild-set exited N; its output is in PATH=                                  | eb-stack failed; =PATH= is =rebuild-set.log= in the work directory.                            |
+| =the run was stopped by SIGNAL=                                                         | The run was stopped by =SIGINT= or =SIGTERM=, which ends it before the record.                 |
+
+The installs that a failed record leaves out are not seen to change until a later record of them is written.
+
+** The state file
+
+=STATE_DIR/TARGET.json= holds what each recorded install of the target was built against, in JavaScript Object Notation (JSON), with the keys of every object in sorted order.
+A record replaces the entries of the installs it records, and keeps the others.
+
+#+begin_src bash
+cat site/zen4/.eb-pipeline-watch/zen4.json
+#+end_src
+
+#+begin_example
+{
+  "installs": {
+    "hiredis/1.2.0-GCCcore-13.2.0": {
+      "deps": {
+        "CMake/3.27.6-GCCcore-13.2.0": {
+          "class": "review",
+          "easyconfig": "CMake-3.27.6-GCCcore-13.2.0.eb",
+          "edge_kind": "builddependency",
+          "identity": "fnv1a64:3e8cc4071c68df5b"
+        },
+        "OpenSSL/1.1": {
+          "class": "no-rebuild",
+          "easyconfig": "OpenSSL-1.1.eb",
+          "edge_kind": "runtime",
+          "identity": "fnv1a64:c5be457853aa70e1"
+        }
+      },
+      "easyconfig": "hiredis-1.2.0-GCCcore-13.2.0.eb",
+      "eessi_version": "2023.06",
+      "how": "built",
+      "modules_dirs": [
+        "$WORK/cvmfs/software.eessi.io/versions/2023.06/software/linux/x86_64/amd/zen4/modules/all"
+      ],
+      "recorded_at": "2026-11-17T07:06:25.590988846+00:00",
+      "revision": 32663,
+      "run": "20261117_090000",
+      "software_subdir": "x86_64/amd/zen4"
+    },
+...
+  },
+  "kind": "watch-state",
+  "schema_version": 1,
+  "target": "zen4"
+}
+#+end_example
+
+| Key              | Type    | Meaning                                    |
+|------------------+---------+--------------------------------------------|
+| =installs=       | object  | Each recorded install, by its module name. |
+| =kind=           | string  | =watch-state=.                             |
+| =schema_version= | integer | =1=.                                       |
+| =target=         | string  | The name of the target.                    |
+
+*** Each entry of =installs=
+
+| Key               | Type            | Meaning                                                                                                     |
+|-------------------+-----------------+-------------------------------------------------------------------------------------------------------------|
+| =deps=            | object          | Each EESSI module that the install depends on, by its module name.                                          |
+| =easyconfig=      | string          | The easyconfig, as the build list names it.                                                                 |
+| =eessi_version=   | string          | The =EESSI_VERSION= it was built against.                                                                   |
+| =how=             | string          | =built=, by a run.                                                                                          |
+| =modules_dirs=    | array of string | The EESSI module trees that its dependencies were found in.                                                 |
+| =recorded_at=     | string          | When the record was written, in RFC 3339.                                                                   |
+| =revision=        | integer         | The CVMFS revision of the repository that its dependencies were last found at; only for a CVMFS repository. |
+| =run=             | string          | The log stamp of the run that recorded it.                                                                  |
+| =software_subdir= | string          | The =EESSI_SOFTWARE_SUBDIR= it was built against.                                                           |
+
+*** Each entry of =deps=
+
+| Key          | Type   | Meaning                                                                                                |
+|--------------+--------+--------------------------------------------------------------------------------------------------------|
+| =class=      | string | =must-rebuild=, =no-rebuild= or =review=, the strongest class that a row of =rebuild-set= gives it.    |
+| =easyconfig= | string | The file name of its easyconfig.                                                                       |
+| =edge_kind=  | string | The =edge_kind= of the row that gave the class, such as =builddependency= or =runtime=.                |
+| =identity=   | string | =fnv1a64:= and a hash of its module file and of the names in the =easybuild= directory of its install. |
+
+EasyBuild leaves a new log in the =easybuild= directory each time it builds a module, so a module rebuilt in place under the same name gets another identity, as does one whose module file changes.
+
+** See also
+
+- [[file:site-file.org][The site file]], for =[watch]= and =[site.tools.eb_stack]=
+- [[file:environment.org][Environment variables]], for what a record reads from the module environment
+- [[file:log-tree.org][The log tree and its locks]], for =STATE_DIR/TARGET.lock=
+- [[file:../api/eb_pipeline/watch/struct.State.html][eb_pipeline::watch::State]], the type behind the state file

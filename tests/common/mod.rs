@@ -1,6 +1,6 @@
-//! A site file with targets `cpu` and `gpu`, and stub `eb` and
-//! `eb-keep-logs` binaries, for the tests of the run summary and what reads
-//! it. Each test file uses a part of it.
+//! A site file with targets `cpu` and `gpu`, stub `eb`, `eb-keep-logs` and
+//! `eb-stack` binaries, and a fake EESSI tree, for the tests of the run
+//! summary, `watch` and what reads them. Each test file uses a part of it.
 #![allow(dead_code)]
 
 use serde_json::Value;
@@ -10,12 +10,61 @@ use std::process::{Command, Output, Stdio};
 
 pub const STAMP: &str = "20260101_000000";
 
-/// Fails the easyconfig stems listed in STUB_EB_FAIL.
+/// Fails the easyconfig stems listed in STUB_EB_FAIL. With STUB_EB_INSTALL
+/// set it installs `Name-version.eb` as EasyBuild does, a module file and
+/// an `easybuild` directory with a new log, unless the module is there and
+/// the line does not ask for a rebuild.
 const EB: &str = r#"#!/bin/sh
 D="${STUB_DIR:?}"
 ec="$1"; stem="${ec##*/}"; stem="${stem%.eb}"
 echo "$*" >> "$D/eb.calls"
 case ",${STUB_EB_FAIL:-}," in *",$stem,"*) echo "ERROR: $stem failed"; exit 1;; esac
+[ -n "${STUB_EB_INSTALL:-}" ] || exit 0
+name="${stem%%-*}"; ver="${stem#*-}"
+root="$EASYBUILD_INSTALLPATH/software/$name/$ver"
+mod="$EASYBUILD_INSTALLPATH/modules/all/$name/$ver.lua"
+case " $* " in
+  *" --rebuild "*) rm -rf "$root";;
+  *) if [ -f "$mod" ]; then echo "$stem is already installed"; exit 0; fi;;
+esac
+mkdir -p "$root/easybuild" "${mod%/*}"
+echo "name = '$name'" > "$root/easybuild/$stem.eb"
+: > "$root/easybuild/easybuild-$name-$ver-$(date +%s%N).log"
+printf 'help([==[%s]==])\nlocal root = "%s"\n' "$name" "$root" > "$mod"
+exit 0
+"#;
+
+/// `rebuild-set` answers from `$STUB_DIR/deps.tsv`, one `dependent changed
+/// class edge_kind` row per line: the rows whose changed easyconfig is in
+/// `--changed`. `stack shard` writes the build list in the order of the
+/// easyconfigs in `$STUB_DIR/order.txt`, then the rest as given.
+const EB_STACK: &str = r#"#!/bin/sh
+D="${STUB_DIR:?}"
+case "$1" in --version) echo "eb-stack 0.7.4"; exit 0;; esac
+echo "$*" >> "$D/ebstack.calls"
+cmd="$1"; shift
+if [ "$cmd" = stack ]; then cmd="stack-$1"; shift; fi
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --out-dir) out="$2"; shift;;
+    --changed) changed="$2"; shift;;
+    --build-list) list="$2"; shift;;
+  esac
+  shift
+done
+[ -n "${STUB_EB_STACK_FAIL:-}" ] && { echo "error: stub failure"; exit 1; }
+mkdir -p "$out"
+touch "$D/deps.tsv" "$D/order.txt"
+case "$cmd" in
+  rebuild-set)
+    rows=$(awk -F'\t' 'NR == FNR { c[$1] = 1; next }
+      ($2 in c) { printf "%s{\"changed\":\"%s\",\"dependent\":\"%s\",\"class\":\"%s\",\"edge_kind\":\"%s\",\"reason\":\"stub\"}", (n++ ? "," : ""), $2, $1, $3, $4 }' "$changed" "$D/deps.tsv")
+    printf '{"schema_version":5,"rows":[%s]}\n' "$rows" > "$out/rebuild-set.json";;
+  stack-shard)
+    awk 'NR == FNR { o[$1] = NR; next } { print (($1 in o) ? o[$1] : 100000 + FNR) "\t" $0 }' "$D/order.txt" "$list" \
+      | sort -n | cut -f2- > "$out/shard-01.list"
+    printf '{"prelude":null,"shards":[{"name":"shard-01","file":"shard-01.list"}]}\n' > "$out/plan.json";;
+esac
 exit 0
 "#;
 
@@ -54,6 +103,97 @@ impl T {
         let text = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
         serde_json::from_str(&text).unwrap()
     }
+
+    /// The fake EESSI module tree.
+    pub fn eessi_modules(&self) -> PathBuf {
+        self.root().join("eessi/modules/all")
+    }
+
+    /// Install `name/version` in the fake EESSI tree, or rebuild it in
+    /// place, which leaves another log in its `easybuild` directory.
+    pub fn eessi_module(&self, name: &str, version: &str) {
+        let root = self.root().join("eessi/software").join(name).join(version);
+        let eb = root.join("easybuild");
+        std::fs::create_dir_all(&eb).unwrap();
+        std::fs::write(eb.join(format!("{name}-{version}.eb")), "").unwrap();
+        let logs = std::fs::read_dir(&eb).unwrap().count();
+        std::fs::write(
+            eb.join(format!("easybuild-{name}-{version}-{logs}.log")),
+            "",
+        )
+        .unwrap();
+        let dir = self.eessi_modules().join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("{version}.lua")),
+            format!(
+                "help([==[{name}]==])\nlocal root = \"{}\"\n",
+                root.display()
+            ),
+        )
+        .unwrap();
+    }
+
+    pub fn remove_eessi_module(&self, name: &str, version: &str) {
+        std::fs::remove_file(
+            self.eessi_modules()
+                .join(name)
+                .join(format!("{version}.lua")),
+        )
+        .unwrap();
+    }
+
+    /// What `eb-stack rebuild-set` answers: `(dependent, changed easyconfig,
+    /// class, edge kind)` rows.
+    pub fn deps(&self, rows: &[(&str, &str, &str, &str)]) {
+        let text: String = rows
+            .iter()
+            .map(|(d, c, k, e)| format!("{d}\t{c}\t{k}\t{e}\n"))
+            .collect();
+        std::fs::write(self.root().join("deps.tsv"), text).unwrap();
+    }
+
+    /// The watch state of `target`.
+    pub fn watch_state(&self, target: &str) -> Value {
+        let p = self
+            .root()
+            .join("install/.eb-pipeline-watch")
+            .join(format!("{target}.json"));
+        let text = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+        serde_json::from_str(&text).unwrap()
+    }
+
+    pub fn calls(&self, tool: &str) -> String {
+        std::fs::read_to_string(self.root().join(format!("{tool}.calls"))).unwrap_or_default()
+    }
+}
+
+/// The variables EESSI's init sets, for the fake tree.
+pub fn eessi_vars(t: &T, version: &'static str) -> Vec<(&'static str, String)> {
+    vec![
+        ("EESSI_VERSION", version.to_string()),
+        ("EESSI_SOFTWARE_SUBDIR", "x86_64/generic".to_string()),
+        ("EESSI_MODULEPATH", t.eessi_modules().display().to_string()),
+        ("STUB_EB_INSTALL", "1".to_string()),
+    ]
+}
+
+/// Give `dir` the CVMFS revision attribute that a repository carries.
+pub fn set_revision(dir: &Path, rev: u64) {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(dir.as_os_str().as_bytes()).unwrap();
+    let value = rev.to_string();
+    // SAFETY: both names are NUL-terminated and the value outlives the call.
+    let r = unsafe {
+        libc::setxattr(
+            path.as_ptr(),
+            c"user.revision".as_ptr(),
+            value.as_ptr().cast(),
+            value.len(),
+            0,
+        )
+    };
+    assert_eq!(r, 0, "{}", std::io::Error::last_os_error());
 }
 
 pub fn write_exec(path: &Path, text: &str) {
@@ -61,7 +201,8 @@ pub fn write_exec(path: &Path, text: &str) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-/// A site file whose tables end with `extra`.
+/// A site file whose tables end with `extra`, in which `@ROOT@` is the
+/// test's directory.
 pub fn setup(extra: &str) -> T {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
@@ -69,8 +210,10 @@ pub fn setup(extra: &str) -> T {
     std::fs::create_dir(&stubs).unwrap();
     write_exec(&stubs.join("eb"), EB);
     write_exec(&stubs.join("eb-keep-logs"), KEEP_LOGS);
+    write_exec(&stubs.join("eb-stack"), EB_STACK);
     let r = root.display();
     let s = stubs.display();
+    let extra = extra.replace("@ROOT@", &r.to_string());
     let site = format!(
         r#"
 schema_version = 1
