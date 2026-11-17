@@ -207,6 +207,29 @@ pub fn write_exec(path: &Path, text: &str) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+/// Start each command of the site through `srun`, a stand-in for srun, with
+/// `build_path` in the job's directory under `local/`, which is returned.
+pub fn with_job_dirs(t: &T, srun: &str) -> PathBuf {
+    let bin = t.stubs.join("srun");
+    write_exec(&bin, srun);
+    let local = t.root().join("local");
+    let text = std::fs::read_to_string(&t.site)
+        .unwrap()
+        .replace(
+            "kind = \"local\"",
+            &format!("kind = \"slurm\"\nlaunch = \"{}\"", bin.display()),
+        )
+        .replace(
+            &format!("build_path = \"{}/build\"", t.root().display()),
+            &format!(
+                "job_dir = \"{}/{{user}}.{{job}}\"\nbuild_path = \"{{job_dir}}/build\"",
+                local.display()
+            ),
+        );
+    std::fs::write(&t.site, text).unwrap();
+    local
+}
+
 /// A site file whose tables end with `extra`, in which `@ROOT@` is the
 /// test's directory.
 pub fn setup(extra: &str) -> T {
