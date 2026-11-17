@@ -13,4 +13,5 @@ The title names the task.
 
    install
    write-a-site-file
+   build-from-ci
 #+end_export

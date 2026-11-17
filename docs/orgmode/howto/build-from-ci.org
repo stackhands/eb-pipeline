@@ -1,0 +1,132 @@
+#+TITLE: Build a list on every target from CI
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Build a list on every target from CI
+
+Build one list on every target of a site file from continuous integration (CI): one run per target, each with a run id of its own, and one target at a time unless the targets build in places of their own.
+The caller names no partition, path, licence group or quota command; the site file holds them, and the caller keeps the exit status and the result file of each run.
+
+** Before you start
+
+- A site file that passes =check=, in a repository with the build lists, as in [[file:write-a-site-file.org][Write a site file for your cluster]].
+- A CI runner that runs as the build account, on a host that can start jobs on the cluster, with eb-pipeline on its =PATH=, as in [[file:install.org][Install eb-pipeline]].
+- For GitHub Actions, a self-hosted runner with a label of its own; the workflow below calls it =eb-build=.
+
+The site file on this page builds for two kinds of node, =zen2= and =zen4=, each with its own software tree:
+
+#+INCLUDE: "build-from-ci/site.toml" src toml
+
+** Steps
+
+1. List the targets that the runs go through, in the order of the site file, as lines and as the array in JavaScript Object Notation (JSON) that a CI matrix reads:
+
+   #+begin_src bash
+   eb-pipeline targets --site site.toml
+   eb-pipeline targets --site site.toml --format json
+   #+end_src
+
+   #+begin_example
+   zen2
+   zen4
+   ["zen2","zen4"]
+   #+end_example
+
+   A site file that does not pass =check= makes =targets= exit 2 with nothing on stdout, so no run starts.
+2. For GitHub Actions, copy =examples/ci/github-actions.yml= of the eb-pipeline repository into =.github/workflows/= of your repository, and change =eb-build= to the label of your runner:
+
+#+INCLUDE: "../../../examples/ci/github-actions.yml" src yaml
+
+3. [@3] Keep the run id of each target apart.
+   The workflow sets =EB_PIPELINE_RUN_ID= to =${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target }}=: =stack shard= writes its plan into =SHARD_DIR/RUN_ID=, which has no target in it, and eb-staged-rebuild refuses a run id it already holds.
+   Without =--run-id=, the run id is the log stamp, which is the same for two runs that start in the same second.
+4. Keep =max-parallel: 1= unless no two targets that build at once share a build directory, a download directory or, with staged rebuilds, a state root.
+   ={target}= in =filesystems.build_path= and in the first entry of =filesystems.source_paths= gives each target its own, as in the site file above; check what each target gets:
+
+   #+begin_src bash
+   for t in $(eb-pipeline targets --site site.toml); do
+       eb-pipeline explain --site site.toml --target "$t" | grep -E "BUILDPATH|SOURCEPATH"
+   done
+   #+end_src
+
+   #+begin_example
+   EASYBUILD_BUILDPATH = "/scratch/alice/build/zen2"
+   EASYBUILD_SOURCEPATH = "/scratch/alice/sources/zen2:/opt/site/sources"
+   EASYBUILD_BUILDPATH = "/scratch/alice/build/zen4"
+   EASYBUILD_SOURCEPATH = "/scratch/alice/sources/zen4:/opt/site/sources"
+   #+end_example
+
+   With staged rebuilds, ={target}= in =rebuild.state_root=, or no =state_root=, gives each target a state root of its own.
+   Logs need nothing: each run writes under =LOG_ROOT/LOG_STAMP/TARGET=, and with =[logs.rotate]= a run rotates only when no other run under the log root is live, as [[file:../reference/log-tree.org][The log tree and its locks]] says.
+5. Keep the =concurrency= of the build job.
+   =max-parallel= holds within one run of the workflow, and each dispatch is a run of its own.
+   The build job's =concurrency= group, =eb-pipeline-<target>=, lets one dispatch at a time build a target: another dispatch's job for that target waits until the running one has finished, and =cancel-in-progress: false= leaves the running build alone.
+   GitHub keeps only one pending job per group, so a third dispatch replaces the waiting one, which is cancelled.
+   The group belongs to the repository and has no workflow name in it, so another workflow of the repository that uses the same group waits as well.
+   It keeps two dispatches off one target, not off one path: one dispatch can build a target while another builds a different one.
+   Targets that share a build directory, a download directory or a state root therefore need one group for the whole build job, =eb-pipeline= with no target in it, so that one build job of the repository runs at a time.
+6. For another CI system, run the targets one after the other from a script, and keep its exit status:
+
+#+INCLUDE: "build-from-ci/build-all.sh" src bash
+
+The script exits as one run of eb-pipeline would, from what the runs of its targets came to; [[file:../reference/exit-status.org][Exit status]] gives the order.
+
+** Check that it worked
+
+Each run prints its lines as it goes, and the script the exit status of each target.
+Here the script ran against a copy of the site file above with the =local= scheduler, no modules and paths under a work directory, and with a stand-in for =eb= that fails the second line of the list:
+
+#+begin_src bash
+bash build-all.sh build.list production 1234; echo "exit $?"
+#+end_src
+
+#+begin_example
+INFO [licences] zen2: not configured
+INFO [shard] zen2: not configured
+INFO [sources] zen2: not configured
+INFO [admission] zen2: not configured
+INFO [caches] zen2: not configured
+INFO [logs] zen2: not configured
+INFO [build] zen2: Example-1.0-GCCcore-15.2.0: start
+INFO [build] zen2: Example-1.0-GCCcore-15.2.0: ok
+INFO [build] zen2: Broken-1.0-GCCcore-15.2.0: start
+ERROR [build] zen2: Broken-1.0-GCCcore-15.2.0: failed (exit 1)
+zen2: exit 1
+INFO [licences] zen4: not configured
+...
+ERROR [build] zen4: Broken-1.0-GCCcore-15.2.0: failed (exit 1)
+zen4: exit 1
+exit 1
+#+end_example
+
+Each target leaves a result file, and the exit status of the run is its top-level =exit_code=:
+
+#+begin_src bash
+grep -H '^  "exit_code"' result-*.json
+#+end_src
+
+#+begin_example
+result-zen2.json:  "exit_code": 1,
+result-zen4.json:  "exit_code": 1,
+#+end_example
+
+In GitHub Actions, each build job uploads its result file as the artifact =result-TARGET=.
+
+** If it fails
+
+| Message                                                                                   | Cause                                                                                                          | What to do                                                                                                         |
+|-------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------|
+| =ERROR [check] example: targets: duplicate name `zen2`=, from =targets=, and no build job | The site file does not pass =check=; =targets= exits 2 and prints no names.                                    | Correct the site file, and run =eb-pipeline check= on it.                                                          |
+| =ERROR [main] -: cannot read list missing.list: No such file or directory (os error 2)=   | The list is not where the run looks for it, relative to the directory the job runs in.                         | Give the list relative to the top of the repository, which the workflow checks out; the script stops with exit 2.  |
+| No result file to upload                                                                  | The run stopped on an input error before it wrote one, and exited 2 or, for the licence gate alone, 78.        | Read the run's =ERROR= lines in the job log.                                                                       |
+| A line =refused= with =another eb-staged-rebuild holds the lock at PATH=                  | Two targets that share a state root rebuilt at once, and the second waited longer than =rebuild.lock_timeout=. | Give each target a state root of its own, or keep =max-parallel: 1= and one =concurrency= group for the build job. |
+
+The commands and their output on this page come from =docs/examples/ci.sh=.
+
+** Related
+
+- [[file:write-a-site-file.org][Write a site file for your cluster]]
+- [[file:../reference/cli.org][The eb-pipeline command]], for =targets= and =run=
+- [[file:../reference/site-file.org][The site file]], for ={target}= in paths
+- [[file:../reference/exit-status.org][Exit status]]
+- [[file:../reference/plan-and-result.org][The plan and result files]]

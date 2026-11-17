@@ -1,0 +1,51 @@
+# Example University: the zen2 and zen4 nodes of the cpu partition, each
+# with a software tree of its own, and EasyBuild from a module.
+schema_version = 1
+kind = "site"
+
+[site]
+name = "example"
+build_account = "alice"
+default_group = "alice"
+
+[scheduler]
+kind = "slurm"
+launch = "srun"
+job_name_template = "{project}-{build}-{phase}-{target}"
+
+[phase_defaults]
+plan = "-p cpu -N 1 --ntasks-per-node=1 -c 1 -t 15:00"
+short = "-p cpu -N 1 --ntasks-per-node=1 -c 1 -t 15:00"
+build = "-p cpu -N 1 --ntasks-per-node=1 -c 16 -t 1-00:00:00"
+cpu = "-p cpu -N 1 --ntasks-per-node=1 -c 16 -t 1-00:00:00"
+cache = "-p cpu -N 1 --ntasks-per-node=1 -c 1 -t 15:00"
+
+[[targets]]
+name = "zen2"
+build_lists = ["zen2.list"]
+site_prefix = "/opt/site/zen2"
+
+[targets.phases]
+build = "-p cpu -C zen2 -N 1 --ntasks-per-node=1 -c 16 -t 1-00:00:00"
+
+[[targets]]
+name = "zen4"
+build_lists = ["zen4.list"]
+site_prefix = "/opt/site/zen4"
+default = true
+
+[targets.phases]
+build = "-p cpu -C zen4 -N 1 --ntasks-per-node=1 -c 16 -t 1-00:00:00"
+
+[filesystems]
+scratch = "/scratch/alice"
+tmp = "/scratch/alice/tmp"
+# A build directory and a download directory per target, so that the
+# targets can build at once.
+build_path = "/scratch/alice/build/{target}"
+source_paths = ["/scratch/alice/sources/{target}", "/opt/site/sources"]
+install_root = "/opt/site"
+log_root = "/opt/site/logs"
+
+[modules]
+init = ["EasyBuild"]
