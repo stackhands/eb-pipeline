@@ -27,7 +27,8 @@ fn help_and_version_exit_zero() {
     let help = bin().arg("--help").output().unwrap();
     assert_eq!(help.status.code(), Some(0));
     let text = String::from_utf8(help.stdout).unwrap();
-    assert!(text.contains("eb-junit --result FILE"));
+    assert!(text.contains("eb-junit [--result FILE]... [--reframe-report FILE]... [--out FILE]"));
+    assert!(text.contains("--reframe-report FILE"));
     assert!(text.contains("Exit 0 means the report was"));
     assert!(help.stderr.is_empty());
 
@@ -97,6 +98,46 @@ fn a_plan_and_a_missing_file_are_usage_errors() {
 }
 
 #[test]
+fn a_reframe_report_adds_suites() {
+    let dir = tempfile::tempdir().unwrap();
+    let report = dir.path().join("reframe.json");
+    std::fs::write(
+        &report,
+        r#"{
+  "report_version": "4.8",
+  "runs": [
+    {
+      "system": "cluster",
+      "partition": "cpu",
+      "environ": "foss",
+      "testcases": [
+        {"name": "checks/ok", "result": "success", "time_total": 0.5},
+        {"name": "checks/wait", "result": "skipped", "fail_reason": "maint"},
+        {"name": "checks/fail", "result": "failure", "fail_reason": "wrong answer"}
+      ]
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+    let o = bin().arg("--reframe-report").arg(&report).output().unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let xml = String::from_utf8(o.stdout).unwrap();
+    assert!(xml.contains("name=\"reframe/cluster/cpu/foss\""), "{xml}");
+    assert!(xml.contains("name=\"checks/ok\""), "{xml}");
+    assert!(xml.contains("<skipped message=\"skipped\">"), "{xml}");
+    assert!(
+        xml.contains("<failure type=\"failure\" message=\"failure\">"),
+        "{xml}"
+    );
+}
+
+#[test]
 fn the_pages_name_eb_junit() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/orgmode");
     for rel in [
@@ -106,6 +147,7 @@ fn the_pages_name_eb_junit() {
     ] {
         let page = std::fs::read_to_string(root.join(rel)).unwrap();
         assert!(page.contains("eb-junit"), "{rel}");
+        assert!(page.contains("--reframe-report"), "{rel}");
     }
     let howto = std::fs::read_to_string(root.join("howto/index.org")).unwrap();
     assert!(howto.contains("publish-a-junit-report"), "{howto}");
