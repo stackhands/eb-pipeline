@@ -1,8 +1,8 @@
-#+TITLE: Build a list on every target from CI
+#+TITLE: Build a list on every target from continuous integration
 #+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
 #+STARTUP: content
 
-* Build a list on every target from CI
+* Build a list on every target from continuous integration
 
 Build one list on every target of a site file from continuous integration (CI): one run per target, each with a run id of its own, and one target at a time unless the targets build in places of their own.
 The caller names no partition, path, licence group or quota command; the site file holds them, and the caller keeps the exit status and the result file of each run.

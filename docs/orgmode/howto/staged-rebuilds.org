@@ -9,11 +9,11 @@ Have =eb-pipeline run= rebuild a package that is already installed through eb-st
 ** Before you start
 
 - eb-staged-rebuild on the =PATH= of the build account, or named in =[site.tools.eb_staged_rebuild]= =bin=.
-- A site file whose targets have an install prefix each, such as the one in [[file:build-from-ci.org][Build a list on every target from CI]].
+- A site file whose targets have an install prefix each, such as the one in [[file:build-from-ci.org][Build a list on every target from continuous integration]].
 - The package installed on the target already, with its module file under the target's =modules_root=.
 
 The output on this page comes from =docs/examples/staged.sh=.
-It checks the site file of [[file:build-from-ci.org][Build a list on every target from CI]] with the =[rebuild]= table below, then runs a copy of it with the =local= scheduler, its paths under =$WORK= and a stand-in for eb-staged-rebuild that prints its arguments.
+It checks the site file of [[file:build-from-ci.org][Build a list on every target from continuous integration]] with the =[rebuild]= table below, then runs a copy of it with the =local= scheduler, its paths under =$WORK= and a stand-in for eb-staged-rebuild that prints its arguments.
 
 ** Steps
 
