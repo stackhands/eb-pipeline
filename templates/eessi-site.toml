@@ -79,8 +79,8 @@ accel_target = "accel/nvidia/cc90"
 site_prefix = "/opt/eb/gpu-a"
 # With EESSI_ACCELERATOR_INSTALL set, EESSI-extend appends /<accel_target> for
 # an NVIDIA target, and the roots follow it.
-software_root = "/opt/eb/gpu-a/versions/<release>/software/linux/<cpu_target>/software"
-modules_root = "/opt/eb/gpu-a/versions/<release>/software/linux/<cpu_target>/modules"
+software_root = "/opt/eb/gpu-a/versions/<release>/software/linux/<cpu_target>/<accel_target>/software"
+modules_root = "/opt/eb/gpu-a/versions/<release>/software/linux/<cpu_target>/<accel_target>/modules"
 
 [targets.phases]
 build = "-p <gpu-partition> -N 1 --ntasks-per-node=1 -c 72 --gpus-per-node=4 -t 2-00:00:00"
@@ -134,8 +134,8 @@ cuda_compute_capabilities = "8.0"
 cpu_target = "x86_64/<vendor>/<uarch>"
 accel_target = "accel/nvidia/cc80"
 site_prefix = "/opt/eb/gpu-b"
-software_root = "/opt/eb/gpu-b/versions/<release>/software/linux/<cpu_target>/software"
-modules_root = "/opt/eb/gpu-b/versions/<release>/software/linux/<cpu_target>/modules"
+software_root = "/opt/eb/gpu-b/versions/<release>/software/linux/<cpu_target>/<accel_target>/software"
+modules_root = "/opt/eb/gpu-b/versions/<release>/software/linux/<cpu_target>/<accel_target>/modules"
 
 [targets.phases]
 build = "-p <gpu-partition-b> -N 1 --ntasks-per-node=1 -c 32 --gpus-per-node=4 -t 2-00:00:00"
