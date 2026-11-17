@@ -208,6 +208,7 @@ Each option in the tables above that names a variable reads it when the option i
 |    143 | =run=: interrupted by =SIGTERM=.                                                                                                                                                                                |
 
 The commands other than =run= exit 0, 1 or 2.
+[[file:exit-status.org][Exit status]] has the cases behind each status, how =run= picks one when several apply, and how it reads the exit statuses of the tools it starts.
 
 ** Files
 
@@ -224,5 +225,5 @@ A list line is split into words as a shell splits them, with single and double q
 ** See also
 
 - [[file:../tutorials/first-build-list.org][Run your first build list]]
-- [[file:environment.org][Environment variables]]
+- [[file:environment.org][Environment variables]] and [[file:exit-status.org][Exit status]]
 - The [[file:api.org][API]] of the =eb_pipeline= library, which the command is built on.
