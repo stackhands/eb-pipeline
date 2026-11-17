@@ -76,7 +76,7 @@ The job id and the user are known only inside the job.
 =plan= and =explain= show =EASYBUILD_BUILDPATH= with ={job_dir}= in it, and =EB_PIPELINE_JOB_DIR= with ={job}= and ={user}=.
 Each command that a job starts first runs a wrapper that replaces them, then checks that the directory exists and that the job can write to it, and otherwise exits 1 before the command starts.
 So every job that a run or =watch= starts needs the directory, whatever its phase.
-=check= refuses a =job_dir= without ={job}=, a =job_dir= with a scheduler other than =slurm=, ={job_dir}= in the other paths, and ={work_dir}= in a route when =build_path= has ={job_dir}=, as the route starts before the job.
+=check= refuses a =job_dir= without ={job}=, a =job_dir= with a scheduler other than =slurm=, ={job_dir}= in the other paths, and a route that still names the job directory when =build_path= has ={job_dir}=. That includes ={work_dir}= written directly, through ={runtime_root}=, or left in the route command: the route starts before the job.
 
 ** Top level
 

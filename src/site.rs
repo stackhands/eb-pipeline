@@ -222,20 +222,56 @@ fn validate_job_dir(site: &Site, e: &mut Vec<String>) {
     }
     for t in &site.targets {
         let Some(r) = &t.route else { continue };
-        let names_work_dir = r
-            .args
-            .iter()
-            .chain(r.env.values())
-            .chain(&r.shares_ro)
-            .chain(&r.shares_rw)
-            .any(|a| a.contains("{work_dir}"));
-        if names_work_dir {
+        if route_names_unresolved_job_dir(&t.name, &fs.build_path, r) {
             e.push(format!(
                 "targets.{}.route: {{work_dir}} is filesystems.build_path, whose {{job_dir}} is resolved inside the job, after the route has started",
                 t.name
             ));
         }
     }
+}
+
+/// Whether `route`, which starts before the job, still names a directory the
+/// job has not resolved. Placeholders are filled as a run fills them, so
+/// `{work_dir}` named directly, arriving through `{runtime_root}`, or left
+/// in the route command is seen too.
+fn route_names_unresolved_job_dir(target: &str, build_path: &str, route: &Route) -> bool {
+    let work = build_path.replace("{target}", target);
+    let root = route.runtime_root.as_deref().unwrap_or("");
+    let basic = |s: &str| s.replace("{work_dir}", &work).replace("{target}", target);
+    let shares_ro = route
+        .shares_ro
+        .iter()
+        .map(|s| basic(s))
+        .collect::<Vec<_>>()
+        .join(":");
+    let shares_rw = route
+        .shares_rw
+        .iter()
+        .map(|s| basic(s))
+        .collect::<Vec<_>>()
+        .join(":");
+    let full = |s: &str| {
+        basic(s)
+            .replace("{runtime_root}", root)
+            .replace("{shares_ro}", &shares_ro)
+            .replace("{shares_rw}", &shares_rw)
+    };
+    let unresolved = |s: &str| {
+        s.contains("{job_dir}")
+            || s.contains("{work_dir}")
+            || s.contains("{job}")
+            || s.contains("{user}")
+    };
+    unresolved(root)
+        || route.command.as_deref().is_some_and(unresolved)
+        || route.args.iter().any(|a| unresolved(&full(a)))
+        || route.env.values().any(|v| unresolved(&full(v)))
+        || route
+            .shares_ro
+            .iter()
+            .chain(&route.shares_rw)
+            .any(|s| unresolved(&basic(s)))
 }
 
 fn validate_route(t: &str, r: &Route, e: &mut Vec<String>) {

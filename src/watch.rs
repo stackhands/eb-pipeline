@@ -11,7 +11,7 @@ use crate::resolve::job_dir_refusal;
 use crate::run::{exec_logged, log, RunResult};
 use crate::schema::{Site, Watch};
 use crate::tools::{self, Tool};
-use crate::util::{cmp_version, parse_version, quote, ListLine};
+use crate::util::{cmp_version, list_word, parse_version, ListLine};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -554,10 +554,10 @@ fn built_by(
     lines: &[ListLine],
     res: &RunResult,
     before: &Listings,
-) -> (Vec<ToRecord>, usize) {
+) -> Result<(Vec<ToRecord>, usize), Fail> {
     let mut built = Vec::new();
     let mut unchanged = 0;
-    let (kept, _) = p.select_lines(lines);
+    let (kept, _) = p.select_lines(lines)?;
     for l in res.lines.iter().filter(|l| l.status == "success") {
         let Some(rel) = module_rel(&l.easyconfig) else {
             continue;
@@ -584,14 +584,28 @@ fn built_by(
             how: "built",
         });
     }
-    (built, unchanged)
+    Ok((built, unchanged))
 }
 
 /// After a run of `lines`, record the installs it built. A problem is a
 /// warning; the run's exit code stays as it was.
 pub fn record_run(p: &Planner, lines: &[ListLine], res: &RunResult, before: &Listings) {
     let target = &p.scope.target.name;
-    let (built, unchanged) = built_by(p, lines, res, before);
+    let (built, unchanged) = match built_by(p, lines, res, before) {
+        Ok(v) => v,
+        Err(f) => {
+            log(
+                "WARN",
+                "watch",
+                target,
+                &format!(
+                    "not recorded: {}; no EESSI change under them is seen until watch --adopt records them",
+                    f.msg
+                ),
+            );
+            return;
+        }
+    };
     if unchanged > 0 {
         log(
             "INFO",
@@ -905,6 +919,8 @@ struct ShardPlanLine {
 /// staged tree holds as they were installed. A module a line's closure
 /// needs that no line builds, such as a vanished EESSI one, goes before
 /// that line as `Name-version.eb`, since a build of the list has no robot.
+/// Each option is a build list word, so a parenthesis or a star stays bare
+/// and `stack shard`, which keeps quote characters, still sees the option.
 pub fn order(
     p: &Planner,
     work: &Path,
@@ -912,18 +928,15 @@ pub fn order(
     verdicts: &[Verdict],
     robot: &[String],
 ) -> Result<Vec<String>, Fail> {
-    let rebuild: BTreeMap<&str, String> = verdicts
-        .iter()
-        .filter(|v| v.action == "rebuild")
-        .map(|v| {
-            let words: Vec<String> = std::iter::once(&v.easyconfig)
-                .chain(&v.args)
-                .map(|a| quote(a))
-                .chain(["--rebuild".to_string()])
-                .collect();
-            (file_name(&v.easyconfig), words.join(" "))
-        })
-        .collect();
+    let mut rebuild: BTreeMap<&str, String> = BTreeMap::new();
+    for v in verdicts.iter().filter(|v| v.action == "rebuild") {
+        let mut words = Vec::with_capacity(v.args.len() + 2);
+        for a in std::iter::once(v.easyconfig.as_str()).chain(v.args.iter().map(String::as_str)) {
+            words.push(list_word(a)?);
+        }
+        words.push("--rebuild".to_string());
+        rebuild.insert(file_name(&v.easyconfig), words.join(" "));
+    }
     let list = work.join("rebuild.list");
     let text: String = verdicts
         .iter()
@@ -1185,9 +1198,10 @@ pub fn settle(
 ) -> Result<Vec<String>, Fail> {
     let dir = p.scope.watch_state_dir().expect("[watch] is on");
     let target = &p.scope.target.name;
-    let rebuilt = rebuild
-        .map(|(lines, res, before)| built_by(p, lines, res, before).0)
-        .unwrap_or_default();
+    let rebuilt = match rebuild {
+        Some((lines, res, before)) => built_by(p, lines, res, before)?.0,
+        None => Vec::new(),
+    };
     let mut recorded = Vec::new();
     if !rebuilt.is_empty() {
         let work = work_dir(p, "record")?;

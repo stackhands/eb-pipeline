@@ -1,0 +1,1 @@
+`check` refuses a route that still names the per-job directory when `build_path` uses `{job_dir}`, including `{work_dir}` that arrives through `{runtime_root}` or is left in the route command. The route starts before the job, so that path is not a directory yet.

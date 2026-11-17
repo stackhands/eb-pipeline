@@ -1,4 +1,4 @@
-use eb_pipeline::{resolve, schema::Site, site};
+use eb_pipeline::{plan, resolve, schema::Site, site, util};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -606,6 +606,43 @@ fn selection_when_absent_all_and_strip() {
     }
     let c = &phase(&v, "build")["commands"][2];
     assert!(argv_of(c).contains(&"--rebuild".to_string()));
+}
+
+#[test]
+fn stripping_keeps_an_argument_the_list_reader_returns() {
+    let text = with_target(
+        "[targets.select]\noption = \"--only-targets\"\nvalue = \"other\"\nstrip = true\n",
+    );
+    let site = site::parse(&text).unwrap();
+    let target = site.target("other").unwrap();
+    let scope = resolve::Scope {
+        site: &site,
+        site_file: None,
+        target,
+        build_type: Some("production"),
+        run_id: "r".into(),
+        log_stamp: "20260101_000000".into(),
+    };
+    let planner = plan::Planner::new(scope, "list.txt".into());
+    let lines = util::parse_list(
+        "Foo-1.0.eb --only-targets=other --comment=\"it's\" --hooks=/tmp/a(b).py\n",
+    )
+    .unwrap();
+    let (kept, _) = planner.select_lines(&lines).unwrap();
+    let again = util::parse_list(&kept[0].raw).expect(&kept[0].raw);
+    assert_eq!(again[0].easyconfig, "Foo-1.0.eb");
+    assert_eq!(
+        again[0].args,
+        vec![
+            "--comment=it's".to_string(),
+            "--hooks=/tmp/a(b).py".to_string()
+        ]
+    );
+    assert!(
+        !kept[0].raw.contains("'--hooks"),
+        "a parenthesis was shell-quoted: {}",
+        kept[0].raw
+    );
 }
 
 #[test]
@@ -1544,6 +1581,53 @@ fn check_refuses_a_job_dir_that_is_not_the_jobs_own() {
 }
 
 #[test]
+fn check_refuses_a_job_directory_reached_through_another_placeholder() {
+    let errs = |text: String| site::validate(&site::parse(&text).unwrap(), None);
+    let msg = "targets.other.route: {work_dir} is filesystems.build_path, whose {job_dir} is resolved inside the job, after the route has started";
+    let routed = |extra: &str| {
+        with_job_dir("/scratch/x/tmp").replace(
+            "name = \"other\"",
+            &format!(
+                "name = \"other\"\n[targets.route]\nkind = \"command\"\ncommand = \"route\"\n{extra}"
+            ),
+        )
+    };
+    assert_eq!(
+        errs(routed(
+            "runtime_root = \"{work_dir}\"\nargs = [\"--bind={runtime_root}\"]\n"
+        )),
+        [msg]
+    );
+    assert_eq!(errs(routed("runtime_root = \"{work_dir}\"\n")), [msg]);
+    assert_eq!(
+        errs(routed(
+            "runtime_root = \"{work_dir}\"\n[targets.route.env]\nBIND = \"{runtime_root}\"\n"
+        )),
+        [msg]
+    );
+    assert_eq!(errs(routed("shares_ro = [\"{work_dir}\"]\n")), [msg]);
+    assert!(errs(routed(
+        "runtime_root = \"/opt/rt\"\nargs = [\"--bind={runtime_root}\"]\n"
+    ))
+    .is_empty());
+    assert!(errs(routed("args = [\"--bind=/local\"]\n")).is_empty());
+    // tmp is per job and build_path is not, so the route may name the build path.
+    let tmp_only = with_job_dir("{job_dir}/tmp")
+        .replace("\"{job_dir}/build/{target}\"", "\"/scratch/x/build\"")
+        .replace(
+            "name = \"other\"",
+            "name = \"other\"\n[targets.route]\nkind = \"command\"\ncommand = \"route\"\nargs = [\"--bind={work_dir}\"]\n",
+        );
+    let tmp_errs = errs(tmp_only);
+    assert!(tmp_errs.is_empty(), "{tmp_errs:?}");
+    let command = with_job_dir("/scratch/x/tmp").replace(
+        "name = \"other\"",
+        "name = \"other\"\n[targets.route]\nkind = \"command\"\ncommand = \"route --bind={work_dir}\"\n",
+    );
+    assert_eq!(errs(command), [msg]);
+}
+
+#[test]
 fn a_target_state_root_cannot_split_one_live_tree() {
     // Both targets of MINIMAL install into /opt/eb.
     let site =
@@ -2023,6 +2107,113 @@ fn shard_list_arg(v: &serde_json::Value) -> String {
     let a = argv_of(&phase(v, "shard")["commands"][0]);
     let i = a.iter().position(|x| x == "--build-list").unwrap();
     a[i + 1].clone()
+}
+
+#[test]
+fn shards_refuse_a_line_whose_words_are_not_its_arguments() {
+    let site_text = format!("{MINIMAL}\n[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n");
+    let d = tempfile::tempdir().unwrap();
+    let s = d.path().join("site.toml");
+    let l = d.path().join("in.yml");
+    std::fs::write(&s, site_text).unwrap();
+    std::fs::write(
+        &l,
+        "easyconfigs:\n  - x.eb:\n      options:\n        accept-eula-for: 'A B'\n",
+    )
+    .unwrap();
+    let o = bin()
+        .args(["plan", "--site"])
+        .arg(&s)
+        .arg("--list")
+        .arg(&l)
+        .args(["--target", "other", "--build-type", "production"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(2),
+        "stdout {}\nstderr {}",
+        String::from_utf8_lossy(&o.stdout),
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        err.contains("stack shard reads words split on white space"),
+        "{err}"
+    );
+
+    // The same line without shards is the argument the build runs.
+    let plain = d.path().join("site-plain.toml");
+    std::fs::write(&plain, MINIMAL).unwrap();
+    let o = bin()
+        .args(["plan", "--site"])
+        .arg(&plain)
+        .arg("--list")
+        .arg(&l)
+        .args(["--target", "other", "--build-type", "production"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    let args = argv_of(&phase(&v, "build")["commands"][0]);
+    assert!(
+        args.iter().any(|a| a == "--accept-eula-for=A B"),
+        "{args:?}"
+    );
+
+    // A build list the operator quoted is the same mismatch.
+    let quoted = d.path().join("quoted.list");
+    std::fs::write(&quoted, "Foo-1.0.eb '--comment=hello world'\n").unwrap();
+    let o = bin()
+        .args(["plan", "--site"])
+        .arg(&s)
+        .arg("--list")
+        .arg(&quoted)
+        .args(["--target", "other", "--build-type", "production"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains("stack shard reads words split on white space")
+    );
+
+    // A parenthesis is not a quote. The word stays bare, so both readers agree.
+    let bare = d.path().join("bare.yml");
+    std::fs::write(
+        &bare,
+        "easyconfigs:\n  - x.eb:\n      options:\n        filter-deps: \"foo(bar)\"\n",
+    )
+    .unwrap();
+    let o = bin()
+        .args(["plan", "--site"])
+        .arg(&s)
+        .arg("--list")
+        .arg(&bare)
+        .args(["--target", "other", "--build-type", "production"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    let args = argv_of(&phase(&v, "build")["commands"][0]);
+    assert!(
+        args.iter().any(|a| a == "--filter-deps=foo(bar)"),
+        "{args:?}"
+    );
 }
 
 #[test]
