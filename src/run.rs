@@ -982,6 +982,8 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                 break;
             }
             make_route_dirs(p, u.role, "build");
+            // Before the build, which may install the module file it looks for.
+            let staged = p.is_staged(l);
             let cmd = match p.build_cmd(u.role, l, s) {
                 Ok(c) => c,
                 Err(f) => {
@@ -1000,7 +1002,6 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                     return finish(st, Some(f.code));
                 }
             };
-            let staged = p.is_staged(l);
             let mut lr = LineResult {
                 easyconfig: l.easyconfig.clone(),
                 unit: u.name.clone(),

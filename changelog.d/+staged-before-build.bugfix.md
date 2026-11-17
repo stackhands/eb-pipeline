@@ -1,0 +1,1 @@
+A rebuild line on a staged target that ran as plain `eb`, because its module file was missing, is recorded as plain `eb` even when the build installs that module file. The result file said it `ran through eb-staged-rebuild`, against the run log's WARN, and a failing build's exit 2 or 75 was read as an eb-staged-rebuild refusal (78) or pending ledger event.
