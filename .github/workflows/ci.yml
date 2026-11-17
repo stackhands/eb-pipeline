@@ -78,3 +78,4 @@ jobs:
           bash docs/examples/rotation.sh
           bash docs/examples/staged.sh
           bash docs/examples/select.sh
+          bash docs/examples/from-eb-stack.sh

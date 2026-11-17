@@ -31,18 +31,19 @@ logs/20261117_090000/cpu/Example-1.0-GCCcore-15.2.0.stdout.log
 logs/20261117_090000/cpu/rotate.log
 #+end_example
 
-| File                           | Phase          | What it holds                                                                                              |
-|--------------------------------+----------------+------------------------------------------------------------------------------------------------------------|
-| =LOG_DIR/selected-TARGET.list= | before =shard= | The lines that =[targets.select]= keeps, which =stack shard= reads.                                        |
-| =LOG_DIR/shard.log=            | =shard=        | The output of =stack shard=.                                                                               |
-| =LOG_DIR/STEM.fetch.log=       | =sources=      | The output of the prefetch of the line's sources.                                                          |
-| =LOG_DIR/admission-UNIT.N.log= | =admission=    | The output of attempt =N= of =stack admit= for the unit, counting from 1.                                  |
-| =LOG_DIR/STEM.stdout.log=      | =build=        | The output of the line's =eb= or =eb-staged-rebuild run=; the =log= of the line in the result file.        |
-| =LOG_DIR/easybuild-logs/STEM/= | =build=        | The logs of EasyBuild itself, which =eb= writes there with =--tmp-logdir= when =[logs] keep_failed= is on. |
-| =LOG_DIR/STEM.keep-logs.log=   | =build=        | The output of =eb-keep-logs failed= after the line failed.                                                 |
-| =LOG_DIR/caches.log=           | =caches=       | The output of the cache command.                                                                           |
-| =LOG_DIR/rotate.log=           | =logs=         | The output of =eb-keep-logs rotate=.                                                                       |
-| =LOG_DIR/PHASE/=               | routed         | The directory ={phase_dir}= names, made before a command whose route arguments or shares use it.           |
+| File                            | Phase          | What it holds                                                                                              |
+|---------------------------------+----------------+------------------------------------------------------------------------------------------------------------|
+| =LOG_DIR/selected-TARGET.list=  | before =shard= | The lines that =[targets.select]= keeps, which =stack shard= reads.                                        |
+| =LOG_DIR/easystack-TARGET.list= | before =shard= | The lines of the easystack given as =--list=, which =stack shard= reads; not with =[targets.select]=.      |
+| =LOG_DIR/shard.log=             | =shard=        | The output of =stack shard=.                                                                               |
+| =LOG_DIR/STEM.fetch.log=        | =sources=      | The output of the prefetch of the line's sources.                                                          |
+| =LOG_DIR/admission-UNIT.N.log=  | =admission=    | The output of attempt =N= of =stack admit= for the unit, counting from 1.                                  |
+| =LOG_DIR/STEM.stdout.log=       | =build=        | The output of the line's =eb= or =eb-staged-rebuild run=; the =log= of the line in the result file.        |
+| =LOG_DIR/easybuild-logs/STEM/=  | =build=        | The logs of EasyBuild itself, which =eb= writes there with =--tmp-logdir= when =[logs] keep_failed= is on. |
+| =LOG_DIR/STEM.keep-logs.log=    | =build=        | The output of =eb-keep-logs failed= after the line failed.                                                 |
+| =LOG_DIR/caches.log=            | =caches=       | The output of the cache command.                                                                           |
+| =LOG_DIR/rotate.log=            | =logs=         | The output of =eb-keep-logs rotate=.                                                                       |
+| =LOG_DIR/PHASE/=                | routed         | The directory ={phase_dir}= names, made before a command whose route arguments or shares use it.           |
 
 =STEM= is the easyconfig file name without =.eb=, with =.2=, =.3= and so on added when the list repeats a line, and =UNIT= is =all=, =cpu-prerequisites=, =prelude= or the name of a shard.
 Each log holds the standard output and the standard error of its command, which starts with no standard input, and =run= creates it anew when the command starts.

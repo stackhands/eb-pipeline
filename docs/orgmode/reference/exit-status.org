@@ -50,6 +50,7 @@ A failed =eb-keep-logs failed= after a failed line leaves the status as it is, w
 - The site file cannot be read, is not valid, or is not valid after the =EB_PIPELINE__= variables are applied.
 - The target is not one of the site file's.
 - The list cannot be read, holds no line, or has a quote that is not closed.
+- The list is an easystack that is not YAML, has no =easyconfigs= list, or has an entry that is not an easyconfig name with its =options=, or an option value that a line cannot carry as EasyBuild would write it.
 - =run=, and =check --probe-tools=: a tool that needs a =min_version= cannot be started, prints no version, or prints one below the minimum.
   =check --probe-tools= also checks the tools without a =min_version=.
 - =init=: the template is unknown, or the =--out= file cannot be created, as when it exists.

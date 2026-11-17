@@ -1,5 +1,6 @@
 //! `eb-pipeline`: a site-neutral EasyBuild pipeline driver.
 
+pub mod easystack;
 pub mod exit;
 pub mod lint;
 pub mod plan;

@@ -246,8 +246,19 @@ struct Out {
 }
 
 fn driver(env: &Env, list: &str, vars: &[(&str, &str)], extra: &[&str]) -> std::process::Child {
+    driver_named(env, "list.txt", list, vars, extra)
+}
+
+/// `driver` with the list in the file `name`.
+fn driver_named(
+    env: &Env,
+    name: &str,
+    list: &str,
+    vars: &[(&str, &str)],
+    extra: &[&str],
+) -> std::process::Child {
     let root = env.dir.path();
-    let list_path = root.join("list.txt");
+    let list_path = root.join(name);
     std::fs::write(&list_path, list).unwrap();
     let path = format!(
         "{}:{}",
@@ -1885,6 +1896,47 @@ fn selected_list_keeps_the_option_without_strip() {
     assert_eq!(
         file_text(&env, "shard.listtext"),
         "Foo-1.0-foss-2025a.eb --only-targets=cpu\nBaz-3.0-foss-2025a.eb\n"
+    );
+}
+
+#[test]
+fn an_easystack_reaches_the_shard_planner_as_build_list_lines() {
+    let env = setup("[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n");
+    let easystack = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/eb-stack/stack-easystack.yml"),
+    )
+    .unwrap();
+    let c = driver_named(
+        &env,
+        "stack.yml",
+        &easystack,
+        &[("STUB_SHARD", "fromlist")],
+        &[],
+    );
+    let o = finish(&env, c);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let lines = "Autoconf-2.72-GCCcore-15.2.0.eb\nM4-1.4.20-GCCcore-15.2.0.eb\nPerl-5.42.0-GCCcore-15.2.0.eb\npigz-2.8-GCCcore-15.2.0.eb --rebuild\n";
+    assert_eq!(file_text(&env, "shard.listtext"), lines);
+    let path = file_text(&env, "shard.listpath");
+    assert!(
+        path.trim()
+            .ends_with("/logs/20260101_000000/cpu/easystack-cpu.list"),
+        "{path}"
+    );
+    let mut built: Vec<String> = calls(&env, "eb.calls")
+        .iter()
+        .map(|c| c.split(" --tmp-logdir=").next().unwrap().to_string())
+        .collect();
+    built.sort();
+    assert_eq!(
+        built,
+        [
+            "Autoconf-2.72-GCCcore-15.2.0.eb",
+            "M4-1.4.20-GCCcore-15.2.0.eb",
+            "Perl-5.42.0-GCCcore-15.2.0.eb",
+            "pigz-2.8-GCCcore-15.2.0.eb --rebuild",
+        ]
     );
 }
 

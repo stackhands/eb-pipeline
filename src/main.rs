@@ -3,7 +3,7 @@ use eb_pipeline::exit::{self, Fail};
 use eb_pipeline::plan::{build_plan, read_units, Planner};
 use eb_pipeline::resolve::{explain, Scope};
 use eb_pipeline::run::{install_handlers, log, run, Options};
-use eb_pipeline::{schema, site, templates, tools, util};
+use eb_pipeline::{easystack, schema, site, templates, tools, util};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -123,7 +123,8 @@ struct Common {
     /// Site file.
     #[arg(long, env = "EB_PIPELINE_SITE")]
     site: PathBuf,
-    /// Build list file: one `Name-version-toolchain.eb [eb options]` per line.
+    /// Build list file: one `Name-version-toolchain.eb [eb options]` per line,
+    /// or an EasyBuild easystack, a `.yml` or `.yaml` file.
     #[arg(long, env = "EB_PIPELINE_LIST")]
     list: PathBuf,
     /// Target name.
@@ -365,7 +366,12 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
     let target = s.target(&c.target)?;
     let list_text = std::fs::read_to_string(&c.list)
         .map_err(|e| Fail::usage(format!("cannot read list {}: {e}", c.list.display())))?;
-    let lines = util::parse_list(&list_text)?;
+    let lines = if easystack::is_easystack(&c.list) {
+        easystack::parse(&list_text)
+            .map_err(|e| Fail::usage(format!("easystack {}: {e}", c.list.display())))?
+    } else {
+        util::parse_list(&list_text)?
+    };
     if lines.is_empty() {
         return Err(Fail::usage(format!(
             "list {} holds no lines",

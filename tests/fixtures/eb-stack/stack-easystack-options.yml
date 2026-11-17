@@ -1,0 +1,11 @@
+easyconfigs:
+- Autoconf-2.72-GCCcore-15.2.0.eb
+- M4-1.4.20-GCCcore-15.2.0.eb
+- Perl-5.42.0-GCCcore-15.2.0.eb:
+    options:
+      accept-eula-for: A,B
+- pigz-2.8-GCCcore-15.2.0.eb:
+    options:
+      cuda-compute-capabilities: '8.0'
+      parallel: 4
+      rebuild: true
