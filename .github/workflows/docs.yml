@@ -40,6 +40,13 @@ jobs:
         env:
           DOCS_SOURCE_REF: ${{ github.sha }}
 
+      - name: Upload pull request docs artifact
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: documentation
+          path: docs/build/html
+
       - name: External links
         run: pixi run -e docs linkcheck
         env:
