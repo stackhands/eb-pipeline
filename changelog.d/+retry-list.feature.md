@@ -1,0 +1,1 @@
+`eb-retry-list` extracts the unfinished lines (`failed`, `refused`, `pending`, `skipped`, or unreached after a non-zero exit) of a `--list` build list or easystack from `eb-pipeline run --result` or `summary.json` (`--summary` with `--target`), preserving original list order and per-line `eb` options.

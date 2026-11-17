@@ -145,6 +145,20 @@ The text names the site, the target, the build type, the run id and whether the 
 =--format json= prints the same facts as one document whose =kind= is =status=.
 Either command exits 0 when the file can be read, including when the run failed.
 
+** Extract a retry list from an unfinished run
+
+When a run stops with failed, refused, pending or skipped lines, =eb-retry-list= reads the original build list (or easystack) and either =result.json= or =summary.json= and writes only the unfinished lines in their original order with their =eb= options:
+
+#+begin_src bash
+eb-retry-list --summary site/logs/20261117_120000/summary.json --target zen2 --list build.list --out retry.list
+if [ -s retry.list ]; then
+    eb-pipeline run --site site.toml --list retry.list --target zen2 --build-type production
+fi
+#+end_src
+
+Lines recorded as =success= and lines deselected by =[targets.select]= are left out, so =--rebuild= lines that already succeeded are not rebuilt.
+Use =--result result.json= in place of =--summary= and =--target=, and =--status failed= to narrow to specific line statuses.
+
 ** If it fails
 
 | Message                                                                                                                      | Cause                                                                                                          | What to do                                                                           |
