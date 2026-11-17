@@ -76,7 +76,8 @@ cat plan.json
         "EB_PIPELINE_LOG_DIR": "$WORK/logs/20261117_090000/cpu",
         "EB_PIPELINE_LOG_STAMP": "20261117_090000",
         "EB_PIPELINE_RUN_ID": "nightly",
-        "EB_PIPELINE_SITE": "example",
+        "EB_PIPELINE_SITE": "$WORK/site.toml",
+        "EB_PIPELINE_SITE_NAME": "example",
         "EB_PIPELINE_TARGET": "cpu"
       },
       "name": "build",

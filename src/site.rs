@@ -501,6 +501,7 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
         for t in site.targets.iter().filter(|t| t.staged.unwrap_or(r.staged)) {
             let scope = Scope {
                 site,
+                site_file: None,
                 target: t,
                 build_type: None,
                 run_id: String::new(),

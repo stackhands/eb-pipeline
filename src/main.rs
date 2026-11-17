@@ -188,6 +188,14 @@ fn load_valid(path: &Path, lists_dir: Option<&Path>) -> Result<schema::Site, Fai
     }
 }
 
+/// The site file as the commands of a run get it in `EB_PIPELINE_SITE`:
+/// absolute, so that it names the same file from any directory.
+fn site_file(path: &Path) -> Option<String> {
+    std::path::absolute(path)
+        .ok()
+        .and_then(|p| p.to_str().map(str::to_string))
+}
+
 fn cmd_check(site_path: &Path, lists_dir: Option<&Path>, probe: bool) -> Result<i32, Fail> {
     let s = load_valid(site_path, lists_dir)?;
     let m = &s.modules;
@@ -237,7 +245,7 @@ fn cmd_explain(
     format: Format,
 ) -> Result<i32, Fail> {
     let s = load_valid(site_path, None)?;
-    let v = explain(&s, target, build_type)?;
+    let v = explain(&s, site_file(site_path).as_deref(), target, build_type)?;
     match format {
         Format::Json => write_json(&v, None)?,
         Format::Toml => print!(
@@ -380,6 +388,7 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
     });
     let scope = Scope {
         site: &s,
+        site_file: site_file(&c.site),
         target,
         build_type: Some(&c.build_type),
         run_id,

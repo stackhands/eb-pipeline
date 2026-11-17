@@ -88,7 +88,8 @@ For a site on top of the European Environment for Scientific Software Installati
    EB_PIPELINE_LOG_STAMP = "<log-stamp>"
    EB_PIPELINE_MODULES = "EasyBuild"
    EB_PIPELINE_RUN_ID = "<run-id>"
-   EB_PIPELINE_SITE = "example"
+   EB_PIPELINE_SITE = "$WORK/site.toml"
+   EB_PIPELINE_SITE_NAME = "example"
    EB_PIPELINE_TARGET = "zen4"
 
    [targets.phases.build]
@@ -98,6 +99,8 @@ For a site on top of the European Environment for Scientific Software Installati
        "--job-name=example-production-build",
    ...
    #+end_example
+
+   =EB_PIPELINE_SITE= is the site file as an absolute path, here with =$WORK= for the directory that holds it, so that a command can run eb-pipeline on the same file.
 
 5. To change a value for one run without editing the file, set it in a variable named =EB_PIPELINE__SECTION__KEY=, here a node-local build directory:
 

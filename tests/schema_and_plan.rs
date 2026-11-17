@@ -80,7 +80,7 @@ fn missing_required_sections_are_rejected() {
 fn defaults_and_overrides_resolve() {
     let s = site::parse(MINIMAL).unwrap();
     assert!(site::validate(&s, None).is_empty());
-    let v = resolve::explain(&s, Some("cpu"), Some("test")).unwrap();
+    let v = resolve::explain(&s, None, Some("cpu"), Some("test")).unwrap();
     let t = &v["targets"][0];
     // target override wins over the default
     assert_eq!(t["phases"]["build"]["args"], "-p big -c 64");
@@ -88,12 +88,12 @@ fn defaults_and_overrides_resolve() {
     assert_eq!(t["phases"]["short"]["args"], "-p batch -c 1");
     // per build type override wins over the target value
     assert_eq!(t["eb_optarch"], "GCC:-march=b");
-    let v = resolve::explain(&s, Some("cpu"), Some("production")).unwrap();
+    let v = resolve::explain(&s, None, Some("cpu"), Some("production")).unwrap();
     assert_eq!(v["targets"][0]["eb_optarch"], "GCC:-march=a");
     // launch line: launch, job name, role arguments
     let launch: Vec<String> = serde_json::from_value(
-        resolve::explain(&s, Some("other"), Some("production")).unwrap()["targets"][0]["phases"]
-            ["build"]["launch"]
+        resolve::explain(&s, None, Some("other"), Some("production")).unwrap()["targets"][0]
+            ["phases"]["build"]["launch"]
             .clone(),
     )
     .unwrap();
@@ -108,7 +108,27 @@ fn defaults_and_overrides_resolve() {
             "4"
         ]
     );
-    assert!(resolve::explain(&s, Some("nope"), None).is_err());
+    assert!(resolve::explain(&s, None, Some("nope"), None).is_err());
+}
+
+#[test]
+fn the_environment_names_the_site_file_and_the_site() {
+    let s = site::parse(MINIMAL).unwrap();
+    let env =
+        |file| resolve::explain(&s, file, Some("cpu"), None).unwrap()["targets"][0]["env"].clone();
+    let e = env(Some("/etc/eb/site.toml"));
+    assert_eq!(e["EB_PIPELINE_SITE"], "/etc/eb/site.toml");
+    assert_eq!(e["EB_PIPELINE_SITE_NAME"], "t");
+    assert!(env(None).get("EB_PIPELINE_SITE").is_none());
+    let v = plan_of(MINIMAL, "Foo-1.0.eb\n", "other");
+    let e = &phase(&v, "build")["env"];
+    assert!(
+        e["EB_PIPELINE_SITE"]
+            .as_str()
+            .is_some_and(|f| f.starts_with('/') && f.ends_with("/site.toml")),
+        "{e}"
+    );
+    assert_eq!(e["EB_PIPELINE_SITE_NAME"], "t");
 }
 
 #[test]
@@ -129,7 +149,7 @@ fn staged_targets_record_through_their_own_ledger_config() {
     );
     let s = site::parse(&own).unwrap();
     assert!(site::validate(&s, None).is_empty());
-    let v = resolve::explain(&s, None, None).unwrap();
+    let v = resolve::explain(&s, None, None, None).unwrap();
     assert_eq!(v["targets"][0]["ledger_config"], "/etc/eb/ledger.json");
     assert_eq!(
         v["targets"][1]["ledger_config"],
@@ -859,8 +879,8 @@ fn route_phases_select_what_is_routed() {
 fn route_without_args_keeps_the_zero_one_argv() {
     let site = with_target("[targets.route]\nkind = \"command\"\ncommand = \"/opt/r/route\"\n");
     let s = site::parse(&site).unwrap();
-    let launch = resolve::explain(&s, Some("other"), Some("production")).unwrap()["targets"][0]
-        ["phases"]["cpu"]["launch"]
+    let launch = resolve::explain(&s, None, Some("other"), Some("production")).unwrap()["targets"]
+        [0]["phases"]["cpu"]["launch"]
         .clone();
     assert_eq!(launch[0], "/opt/r/route");
     assert_eq!(launch[1], "srun");
@@ -912,7 +932,7 @@ fn cpu_hardware_and_fetch_profile() {
     assert_eq!(fetch["EB_PIPELINE_HW_VENDOR_ID"], "v");
     assert_eq!(fetch["EB_PIPELINE_HW_MODEL"], "2");
     let s = site::parse(&site).unwrap();
-    let e = resolve::explain(&s, Some("other"), None).unwrap();
+    let e = resolve::explain(&s, None, Some("other"), None).unwrap();
     assert_eq!(e["targets"][0]["cpu_hardware"]["model"], 4);
     // without cpu_hardware nothing is exported
     let site = with_target("[targets.hardware]\nvendor_id = \"v\"\n");
@@ -1234,7 +1254,7 @@ fn work_dir_is_the_target_build_path() {
     .replace("/scratch/x/build", "/scratch/x/build/{target}");
     let s = site::parse(&site).unwrap();
     assert!(site::validate(&s, None).is_empty());
-    let t = &resolve::explain(&s, Some("other"), None).unwrap()["targets"][0];
+    let t = &resolve::explain(&s, None, Some("other"), None).unwrap()["targets"][0];
     let launch: Vec<String> = serde_json::from_value(t["phases"]["cpu"]["launch"].clone()).unwrap();
     assert_eq!(
         launch[..4],
@@ -1261,7 +1281,7 @@ fn a_target_state_root_gives_each_target_its_own_state_root() {
     let a = argv_of(&phase(&v, "build")["commands"][0]);
     let i = a.iter().position(|x| x == "--state-root").unwrap();
     assert_eq!(a[i + 1], "/opt/eb/other/.eb-staged-rebuild");
-    let e = resolve::explain(&s, None, None).unwrap();
+    let e = resolve::explain(&s, None, None, None).unwrap();
     assert_eq!(
         e["targets"][0]["state_root"],
         "/opt/eb/cpu/.eb-staged-rebuild"
@@ -1428,7 +1448,8 @@ fn explain_names_the_eessi_extend_install_path() {
     );
     let note = |text: &str| {
         let s = site::parse(text).unwrap();
-        resolve::explain(&s, Some("other"), None).unwrap()["targets"][0]["install_note"].clone()
+        resolve::explain(&s, None, Some("other"), None).unwrap()["targets"][0]["install_note"]
+            .clone()
     };
     assert_eq!(
         note(&site),
@@ -1457,7 +1478,7 @@ fn explain_names_the_eessi_extend_install_path() {
 fn eessi_template_roots_sit_under_the_eessi_extend_path() {
     let text = std::fs::read_to_string(example("eessi-site.toml")).unwrap();
     let s = site::parse(&text).unwrap();
-    let v = resolve::explain(&s, None, None).unwrap();
+    let v = resolve::explain(&s, None, None, None).unwrap();
     for t in v["targets"].as_array().unwrap() {
         let base = format!(
             "{}/versions/<release>/software/linux/",
@@ -1476,7 +1497,7 @@ fn eessi_template_roots_sit_under_the_eessi_extend_path() {
 fn eessi_template_targets_have_a_build_path_and_a_state_root_each() {
     let text = std::fs::read_to_string(example("eessi-site.toml")).unwrap();
     let s = site::parse(&text).unwrap();
-    let v = resolve::explain(&s, None, None).unwrap();
+    let v = resolve::explain(&s, None, None, None).unwrap();
     let targets = v["targets"].as_array().unwrap();
     assert_eq!(targets.len(), 4);
     for t in targets {

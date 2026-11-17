@@ -77,14 +77,14 @@ It is one file in Tom's Obvious Minimal Language (TOML), named by =--site=.
 
 ** =[site]=
 
-| Key                | Type   | Default                                           | Meaning                                                                                             |
-|--------------------+--------+---------------------------------------------------+-----------------------------------------------------------------------------------------------------|
-| =name=             | string | required                                          | The name of the site. A run exports it as =EB_PIPELINE_SITE=, and it is the default of =project=.   |
-| =project=          | string | =site.name=                                       | The value of ={project}= in =scheduler.job_name_template=.                                          |
-| =build_account=    | string | none                                              | The account that owns the installs; exported as =EB_PIPELINE_BUILD_ACCOUNT= and not read otherwise. |
-| =default_group=    | string | none                                              | The default Unix group of the installs; exported as =EB_PIPELINE_DEFAULT_GROUP=.                    |
-| =stack_generation= | string | none                                              | A label for the generation of the software stack, such as =2026.1=; not read.                       |
-| =tools=            | table  | all tools looked up on =PATH=, no minimum version | The programs of the sibling tools and the versions they need.                                       |
+| Key                | Type   | Default                                           | Meaning                                                                                                |
+|--------------------+--------+---------------------------------------------------+--------------------------------------------------------------------------------------------------------|
+| =name=             | string | required                                          | The name of the site. A run exports it as =EB_PIPELINE_SITE_NAME=, and it is the default of =project=. |
+| =project=          | string | =site.name=                                       | The value of ={project}= in =scheduler.job_name_template=.                                             |
+| =build_account=    | string | none                                              | The account that owns the installs; exported as =EB_PIPELINE_BUILD_ACCOUNT= and not read otherwise.    |
+| =default_group=    | string | none                                              | The default Unix group of the installs; exported as =EB_PIPELINE_DEFAULT_GROUP=.                       |
+| =stack_generation= | string | none                                              | A label for the generation of the software stack, such as =2026.1=; not read.                          |
+| =tools=            | table  | all tools looked up on =PATH=, no minimum version | The programs of the sibling tools and the versions they need.                                          |
 
 *** =[site.tools]=
 

@@ -75,6 +75,9 @@ ec="$1"; stem="${ec%.eb}"
 echo "$*" >> "$D/eb.calls"
 case " $* " in *" --fetch "*) kind=fetch;; *) kind=build;; esac
 env | grep '^EB_PIPELINE_\|^EASYBUILD_\|^ROUTE_' | sort > "$D/env.$kind.$stem"
+if [ -n "${STUB_EB_PIPELINE:-}" ]; then
+  (cd / && "$STUB_EB_PIPELINE" targets) > "$D/targets.$stem" 2>&1 || exit 1
+fi
 if [ -n "${STUB_EB_SLEEP:-}" ]; then
   echo started > "$D/started"
   trap 'echo term > "$D/termed"; kill $pid 2>/dev/null; exit 0' TERM
@@ -2027,6 +2030,54 @@ fn split_install_vars_reach_the_build() {
     );
     assert!(!e.contains("EASYBUILD_INSTALLPATH="), "{e}");
     assert!(e.contains("EASYBUILD_READ_ONLY_INSTALLDIR=True"), "{e}");
+}
+
+/// A command of a run that runs eb-pipeline without `--site`, from another
+/// directory, reads the site file of the run: a relative `--site` reaches it
+/// as an absolute EB_PIPELINE_SITE, and the site name as EB_PIPELINE_SITE_NAME.
+#[test]
+fn a_command_that_runs_eb_pipeline_reads_the_site_file_of_the_run() {
+    let env = setup("");
+    let root = env.dir.path();
+    std::fs::write(root.join("list.txt"), "Foo-1.0-foss-2025a.eb\n").unwrap();
+    let path = format!(
+        "{}:{}",
+        env.stubs.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut c = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"));
+    c.current_dir(root)
+        .args(["run", "--site", "site.toml", "--list", "list.txt"])
+        .args(["--target", "cpu", "--build-type", "production"])
+        .args(["--log-stamp", "20260101_000000"])
+        .env("PATH", path)
+        .env("STUB_DIR", root)
+        .env("STUB_EB_PIPELINE", env!("CARGO_BIN_EXE_eb-pipeline"))
+        .env_remove("EB_PIPELINE_SITE")
+        .env_remove("EB_PIPELINE_SITE_NAME")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let child = {
+        let _g = SPAWN.lock().unwrap();
+        c.spawn().unwrap()
+    };
+    let o = child.wait_with_output().unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let e = file_text(&env, "env.build.Foo-1.0-foss-2025a");
+    let site_file = root.canonicalize().unwrap().join("site.toml");
+    assert!(
+        e.lines()
+            .any(|l| l == format!("EB_PIPELINE_SITE={}", site_file.display())),
+        "{e}"
+    );
+    assert!(e.lines().any(|l| l == "EB_PIPELINE_SITE_NAME=t"), "{e}");
+    assert_eq!(file_text(&env, "targets.Foo-1.0-foss-2025a"), "cpu\n");
 }
 
 #[test]
