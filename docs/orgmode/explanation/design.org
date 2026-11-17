@@ -32,7 +32,7 @@ A command logs each such value by its key and its variable, never by the value.
 
 =plan= works out every command of a run and starts none of them: the launch line, the environment and the argument vector of each, as JavaScript Object Notation (JSON) with sorted keys, the same on every call, so two plans can be compared with =diff=.
 =run --dry-run= prints the same commands as text, and =explain= prints what the file comes to for each target.
-=run= starts the same commands, with what only a run knows filled in: the job id and the other variables that =plan= shows as =${NAME}=, and, with sharding, the units of the plan that =stack shard= writes, which =plan --shard-plan DIR= reads.
+=run= starts the same commands, with what only a run knows filled in: the job id and the other variables that =plan= shows as =${NAME}=, and, with sharding, the units of the plan that =stack shard= writes. Both =plan --shard-plan DIR= and =run --shard-plan DIR= can read those units; =run= then skips the shard-planner subprocess.
 
 *** Commands are argument vectors
 

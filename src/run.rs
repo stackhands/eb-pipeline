@@ -490,9 +490,11 @@ fn release(r: Reservation, target: &str) {
 }
 
 /// How [`run`] goes through the plan.
-pub struct Options {
+pub struct Options<'a> {
     /// Print each planned command, run none, and return exit 0.
     pub dry_run: bool,
+    /// Units read from a saved `stack shard` plan, when the caller supplied one.
+    pub shard_units: Option<&'a [Unit]>,
 }
 
 struct State {
@@ -535,7 +537,7 @@ impl State {
 
 /// Execute the plan. Returns the result; its `exit_code` is the process
 /// exit code.
-pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
+pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResult {
     let mut owned = planner.clone();
     let p = &mut owned;
     let site = p.scope.site;
@@ -638,7 +640,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
             }
         }
     }
-    if let Some(sh) = site.shards_on() {
+    if let Some(sh) = site.shards_on().filter(|_| opts.shard_units.is_none()) {
         let mut vars = BTreeMap::new();
         for n in &sh.installed_modules_dirs_from_env {
             match std::env::var(n) {
@@ -714,7 +716,16 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
     st.res.deselected = deselected;
 
     // shard
-    let mut units: Vec<Unit> = if has_select && kept.is_empty() {
+    let mut units: Vec<Unit> = if let Some(saved) = opts.shard_units {
+        st.res.sharded = true;
+        st.phase(
+            "shard",
+            "ok",
+            Some(0),
+            Some("reused the supplied shard plan".into()),
+        );
+        saved.to_vec()
+    } else if has_select && kept.is_empty() {
         vec![]
     } else {
         vec![Unit {
@@ -724,7 +735,10 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
             footprint: None,
         }]
     };
-    if let Some(sh) = site.shards_on().filter(|_| !units.is_empty()) {
+    if let Some(sh) = site
+        .shards_on()
+        .filter(|_| opts.shard_units.is_none() && !units.is_empty())
+    {
         match p.shard_cmd() {
             Err(f) => {
                 st.res.message = Some(f.msg);

@@ -201,10 +201,11 @@ It shows =<run-id>= and =<log-stamp>= where a run puts its own.
 
 =run= takes the first six options of =plan=, and these:
 
-| Option          | Meaning                                                                                                                                                                                     |
-|-----------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| =--result FILE= | Write the result file to =FILE= when the run ends. Without it, no result file is written. An error in the input, which stops the run before it starts, leaves an existing =FILE= as it was. |
-| =--dry-run=     | Print each command of the plan on stdout and start nothing. No result file or summary is written, even with =--result=.                                                                     |
+| Option             | Meaning                                                                                                                                                                                                       |
+|--------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =--result FILE=    | Write the result file to =FILE= when the run ends. Without it, no result file is written. An error in the input, which stops the run before it starts, leaves an existing =FILE= as it was.                   |
+| =--shard-plan DIR= | Read the units from a plan previously written by =eb-stack stack shard=. The run does not call the shard planner or require its installed-module-directory environment variables.                           |
+| =--dry-run=        | Print each command of the plan on stdout and start nothing. No result file or summary is written, even with =--result=.                                                                                       |
 
 =--run-id= defaults to the log stamp, and =--log-stamp= to the UTC time at which the run starts, taken once.
 A line that =eb-staged-rebuild= builds passes =RUN_ID-STEM= as its run id, where =STEM= is the easyconfig file name without =.eb=, with =.2=, =.3= and so on added when the list repeats the line.

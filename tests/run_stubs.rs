@@ -1904,6 +1904,60 @@ fn selected_list_feeds_the_shard_planner() {
 }
 
 #[test]
+fn run_can_reuse_a_saved_shard_plan() {
+    let env = setup(&format!(
+        "[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n{ADMISSION}"
+    ));
+    let plan = env.dir.path().join("saved-shards");
+    std::fs::create_dir(&plan).unwrap();
+    std::fs::write(
+        plan.join("plan.json"),
+        r#"{"prelude":{"file":null},"shards":[{"name":"saved-01","file":"saved-01.list","inode_footprint":111},{"name":"saved-02","file":"saved-02.list","inode_footprint":222}]}"#,
+    )
+    .unwrap();
+    std::fs::write(plan.join("saved-01.list"), "Foo-1.0-foss-2025a.eb\n").unwrap();
+    std::fs::write(plan.join("saved-02.list"), "Bar-2.0-foss-2025a.eb\n").unwrap();
+
+    let o = finish(
+        &env,
+        driver(&env, LIST, &[], &["--shard-plan", plan.to_str().unwrap()]),
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let stack = calls(&env, "eb-stack.calls");
+    assert!(
+        stack.iter().all(|line| !line.starts_with("shard ")),
+        "{stack:?}"
+    );
+    assert_eq!(
+        stack
+            .iter()
+            .filter(|line| line.starts_with("admit "))
+            .count(),
+        2
+    );
+    assert_eq!(
+        calls(&env, "eb.calls"),
+        [
+            "Foo-1.0-foss-2025a.eb --tmp-logdir=".to_string()
+                + &env
+                    .dir
+                    .path()
+                    .join("logs/20260101_000000/cpu/easybuild-logs/Foo-1.0-foss-2025a")
+                    .display()
+                    .to_string(),
+            "Bar-2.0-foss-2025a.eb --tmp-logdir=".to_string()
+                + &env
+                    .dir
+                    .path()
+                    .join("logs/20260101_000000/cpu/easybuild-logs/Bar-2.0-foss-2025a")
+                    .display()
+                    .to_string(),
+        ]
+    );
+    assert_eq!(o.result.unwrap()["sharded"], true);
+}
+
+#[test]
 fn selected_list_keeps_the_option_without_strip() {
     let env = setup("[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n");
     with_cpu_target(
