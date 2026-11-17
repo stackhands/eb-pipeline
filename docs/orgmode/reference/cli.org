@@ -306,6 +306,28 @@ eb-retry-list (--result FILE | --summary FILE --target NAME) --list FILE [--stat
 
 Exit 0 means the retry list was written (empty when every line succeeded or was deselected). Exit 2 is a missing or invalid input.
 
+*** eb-shard-weights
+
+=eb-shard-weights= turns observed =duration_seconds= of succeeded =build= lines from =result.json=, =summary.json= or =--log-root= into the =MODULE<TAB>SECONDS= table read by =eb-stack stack shard --weights= and =[shards] weights=.
+
+#+begin_example
+eb-shard-weights (--result FILE... | --summary FILE... | --log-root DIR [--last N])
+                 [--target NAME] [--existing FILE] [--mode max|latest|mean] [--out FILE]
+#+end_example
+
+| Option | Meaning |
+|--------+---------|
+| =--result FILE= | Result file written by =eb-pipeline run --result=. Repeatable. |
+| =--summary FILE= | Run summary file (=summary.json=). Repeatable. |
+| =--log-root DIR= | Log root holding =LOG_STAMP= run directories to scan. |
+| =--last N= | How many newest run directories under =--log-root= to read (1 to 65535; default 10). |
+| =--target NAME= | Keep observations from this target only. |
+| =--existing FILE= | Seed weights TSV (=MODULE<TAB>SECONDS=) to merge with new observations. |
+| =--mode MODE= | Combine durations with =max= (default), =latest= or =mean=. |
+| =--out FILE= | Write the table to =FILE=; =-= or absent prints to stdout. |
+
+Exit 0 means the table was written. Exit 2 is a missing or invalid input.
+
 ** See also
 
 - [[file:../tutorials/first-build-list.org][Run your first build list]]

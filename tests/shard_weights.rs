@@ -1,0 +1,252 @@
+//! `eb-shard-weights` builds an `eb-stack stack shard --weights` TSV from run durations.
+
+use std::process::Command;
+
+fn bin() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_eb-shard-weights"))
+}
+
+#[test]
+fn successful_build_durations_become_sorted_tab_separated_weights() {
+    let dir = tempfile::tempdir().unwrap();
+    let result = dir.path().join("result.json");
+    std::fs::write(
+        &result,
+        r#"{
+  "kind": "result",
+  "target": "zen4",
+  "ended_at": "2026-11-17T09:00:00Z",
+  "lines": [
+    {"easyconfig": "GROMACS-2024.1-foss-2023b.eb", "phase": "build", "status": "success", "duration_seconds": 124.2},
+    {"easyconfig": "pigz-2.8-GCCcore-15.2.0.eb", "phase": "build", "status": "success", "duration_seconds": 0.2},
+    {"easyconfig": "Broken-1.0-foss-2023b.eb", "phase": "build", "status": "failed", "duration_seconds": 3.0},
+    {"easyconfig": "Skip-1.0-foss-2023b.eb", "phase": "build", "status": "skipped"},
+    {"easyconfig": "FetchOnly-1.0-foss-2023b.eb", "phase": "sources", "status": "failed", "duration_seconds": 9.0}
+  ]
+}
+"#,
+    )
+    .unwrap();
+    let o = bin().args(["--result"]).arg(&result).output().unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(
+        o.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(o.stdout).unwrap(),
+        "GROMACS/2024.1-foss-2023b\t125\npigz/2.8-GCCcore-15.2.0\t1\n"
+    );
+}
+
+#[test]
+fn log_root_and_existing_weights_aggregate_with_mode_and_target_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    let logs = dir.path().join("logs");
+    let run1 = logs.join("20261116_010000");
+    let run2 = logs.join("20261117_010000");
+    std::fs::create_dir_all(run1.join("zen4")).unwrap();
+    std::fs::create_dir_all(run2.join("zen4")).unwrap();
+    std::fs::create_dir_all(run2.join("zen2")).unwrap();
+    // In-progress run without summary.json is skipped cleanly.
+    std::fs::create_dir_all(logs.join("20261117_020000/zen4")).unwrap();
+
+    std::fs::write(
+        run1.join("summary.json"),
+        r#"{
+  "schema_version": 1,
+  "kind": "summary",
+  "tool": "eb-pipeline 0.3.0",
+  "site": "example",
+  "run": "20261116_010000",
+  "updated_at": "2026-11-16T01:10:00Z",
+  "exit_code": 0,
+  "status": "success",
+  "targets": [
+    {
+      "name": "zen4",
+      "command": "run",
+      "build_type": "production",
+      "run_id": "r1",
+      "list": "b.list",
+      "log_dir": "/tmp/logs/20261116_010000/zen4",
+      "started_at": "2026-11-16T01:00:00Z",
+      "ended_at": "2026-11-16T01:10:00Z",
+      "duration_seconds": 50.0,
+      "exit_code": 0,
+      "status": "success",
+      "counts": {"success": 1},
+      "phases": [],
+      "packages": [
+        {"easyconfig": "FFTW-3.3.10-GCC-13.2.0.eb", "module": "FFTW/3.3.10-GCC-13.2.0", "unit": "all", "phase": "build", "status": "success", "duration_seconds": 40.0, "log": "/tmp/a.log"}
+      ]
+    }
+  ]
+}
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        run2.join("summary.json"),
+        r#"{
+  "schema_version": 1,
+  "kind": "summary",
+  "tool": "eb-pipeline 0.3.0",
+  "site": "example",
+  "run": "20261117_010000",
+  "updated_at": "2026-11-17T01:10:00Z",
+  "exit_code": 0,
+  "status": "success",
+  "targets": [
+    {
+      "name": "zen2",
+      "command": "run",
+      "build_type": "production",
+      "run_id": "r2a",
+      "list": "b.list",
+      "log_dir": "/tmp/logs/20261117_010000/zen2",
+      "started_at": "2026-11-17T01:00:00Z",
+      "ended_at": "2026-11-17T01:05:00Z",
+      "duration_seconds": 99.0,
+      "exit_code": 0,
+      "status": "success",
+      "counts": {"success": 1},
+      "phases": [],
+      "packages": [
+        {"easyconfig": "FFTW-3.3.10-GCC-13.2.0.eb", "module": "FFTW/3.3.10-GCC-13.2.0", "unit": "all", "phase": "build", "status": "success", "duration_seconds": 99.0, "log": "/tmp/b.log"}
+      ]
+    },
+    {
+      "name": "zen4",
+      "command": "run",
+      "build_type": "production",
+      "run_id": "r2b",
+      "list": "b.list",
+      "log_dir": "/tmp/logs/20261117_010000/zen4",
+      "started_at": "2026-11-17T01:00:00Z",
+      "ended_at": "2026-11-17T01:10:00Z",
+      "duration_seconds": 20.0,
+      "exit_code": 0,
+      "status": "success",
+      "counts": {"success": 1},
+      "phases": [],
+      "packages": [
+        {"easyconfig": "FFTW-3.3.10-GCC-13.2.0.eb", "module": "FFTW/3.3.10-GCC-13.2.0", "unit": "all", "phase": "build", "status": "success", "duration_seconds": 20.0, "log": "/tmp/c.log"}
+      ]
+    }
+  ]
+}
+"#,
+    )
+    .unwrap();
+
+    let existing = dir.path().join("existing.tsv");
+    std::fs::write(
+        &existing,
+        "# seed\nFFTW/3.3.10-GCC-13.2.0\t10\nOldMod/1.0\t77\n",
+    )
+    .unwrap();
+    let out = dir.path().join("weights.tsv");
+
+    // `max` keeps 40 for zen4 (ignoring zen2's 99) and preserves OldMod/1.0.
+    let o = bin()
+        .args(["--log-root"])
+        .arg(&logs)
+        .args(["--target", "zen4", "--existing"])
+        .arg(&existing)
+        .args(["--mode", "max", "--out"])
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&out).unwrap(),
+        "FFTW/3.3.10-GCC-13.2.0\t40\nOldMod/1.0\t77\n"
+    );
+
+    // `latest` uses the newest run (20) for zen4 and preserves OldMod/1.0.
+    let o = bin()
+        .args(["--log-root"])
+        .arg(&logs)
+        .args(["--target", "zen4", "--existing"])
+        .arg(&existing)
+        .args(["--mode", "latest"])
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8(o.stdout).unwrap(),
+        "FFTW/3.3.10-GCC-13.2.0\t20\nOldMod/1.0\t77\n"
+    );
+
+    // `mean` averages 40 and 20 -> 30.
+    let o = bin()
+        .args(["--log-root"])
+        .arg(&logs)
+        .args(["--target", "zen4", "--mode", "mean"])
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8(o.stdout).unwrap(),
+        "FFTW/3.3.10-GCC-13.2.0\t30\n"
+    );
+}
+
+#[test]
+fn invalid_inputs_exit_2() {
+    let dir = tempfile::tempdir().unwrap();
+    let plan = dir.path().join("plan.json");
+    let bad_tsv = dir.path().join("bad.tsv");
+    std::fs::write(&plan, "{\"kind\":\"plan\"}\n").unwrap();
+    std::fs::write(&bad_tsv, "OnlyOneField\n").unwrap();
+
+    for args in [
+        vec![],
+        vec!["--result", plan.to_str().unwrap()],
+        vec!["--result", plan.to_str().unwrap(), "--last", "5"],
+        vec!["--log-root", dir.path().to_str().unwrap(), "--last", "0"],
+        vec![
+            "--log-root",
+            dir.path().to_str().unwrap(),
+            "--mode",
+            "median",
+        ],
+        vec![
+            "--log-root",
+            dir.path().to_str().unwrap(),
+            "--existing",
+            bad_tsv.to_str().unwrap(),
+        ],
+    ] {
+        let o = bin().args(&args).output().unwrap();
+        assert_eq!(
+            o.status.code(),
+            Some(2),
+            "args={args:?} stderr={}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        assert!(o.stdout.is_empty(), "args={args:?}");
+    }
+}
+
+#[test]
+fn docs_name_eb_shard_weights() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/orgmode");
+    for rel in ["howto/build-from-ci.org", "reference/cli.org"] {
+        let page = std::fs::read_to_string(root.join(rel)).unwrap();
+        assert!(page.contains("eb-shard-weights"), "{rel}");
+        assert!(page.contains("--weights"), "{rel}");
+    }
+}

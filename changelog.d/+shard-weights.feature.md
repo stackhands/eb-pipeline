@@ -1,0 +1,1 @@
+`eb-shard-weights` aggregates `duration_seconds` of succeeded `build` lines from `--result`, `--summary`, or recent `--log-root` runs into a sorted `MODULE<TAB>SECONDS` table for `eb-stack stack shard --weights` and `[shards] weights`.
