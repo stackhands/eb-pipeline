@@ -1,0 +1,82 @@
+#+TITLE: Why one site file drives the build
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Why one site file drives the build
+
+Why does eb-pipeline keep everything about a site in one Tom's Obvious Minimal Language (TOML) file, and leave the continuous integration (CI) system a caller that passes a list and a target?
+
+** The problem
+
+Building a site's software with EasyBuild takes more than =eb=.
+The build list is split into units with eb-stack, the sources are fetched, each unit is admitted under the inode quota of scratch, each line builds in a Slurm allocation with the site's modules loaded, a failed build keeps its logs through eb-keep-logs, and the log tree is rotated.
+Every step needs something of the site's: the partitions and their limits, the scratch and install paths, the licence groups, the quota command.
+
+When the CI system holds those, in a Jenkins file, a GitLab CI job or a cron script, each caller has its own copy of them, and of the order of the steps.
+Two callers then build the same list in two ways, a change to a path is made in as many places as there are callers, and nothing shows the commands of a run before it starts them on the cluster.
+
+** How eb-pipeline handles it
+
+*** One file describes the site, the environment one deployment
+
+The site file describes the targets, the scheduler allocations, the paths, admission, modules, caches, log handling and licences.
+A table that turns on a phase, such as =[admission]= or =[caches]=, can be left out or set =enabled = false=, and the run then passes over that phase and records it as =not configured=.
+The parser refuses a key it does not know and a value of the wrong type, so a typing error stops =check= instead of falling back to a default.
+The keys that 0.2.0 added are all optional, and their defaults do what 0.1.0 did, so a site file of 0.1.0 stays valid with =schema_version = 1=.
+
+The environment holds what differs from one deployment of the same file to the next.
+Each option falls back to an =EB_PIPELINE_= variable, and =EB_PIPELINE__SECTION__KEY= sets one value of the file; the file and those values go through the same schema as the file alone.
+A command logs each such value by its key and its variable, never by the value.
+
+*** The plan comes before the run
+
+=plan= works out every command of a run and starts none of them: the launch line, the environment and the argument vector of each, as JavaScript Object Notation (JSON) with sorted keys, the same on every call, so two plans can be compared with =diff=.
+=run --dry-run= prints the same commands as text, and =explain= prints what the file comes to for each target.
+=run= starts the same commands, with what only a run knows filled in: the job id and the other variables that =plan= shows as =${NAME}=, and, with sharding, the units of the plan that =stack shard= writes, which =plan --shard-plan DIR= reads.
+
+*** Commands are argument vectors
+
+=run= starts each command as a list of arguments, and writes its output to a log file of its own.
+A string of the site file that holds arguments, such as the launch arguments of a role or =[caches]= =command=, is split on spaces, with quoted text kept together, and no shell takes part, so =$= and backquotes in it stay as they are.
+The one shell that eb-pipeline starts is the module wrapper, which a =[modules]= init list puts before a command: a fixed script that loads the modules named in a variable, then runs the command from its own arguments.
+=[admission]= =quota_cmd= and =live_jobs_cmd= are shell commands, which eb-stack runs.
+
+*** The other tools stay programs of their own
+
+eb-pipeline starts eb-stack, eb-keep-logs and eb-staged-rebuild as programs, and never links them in.
+Each keeps its own releases, its own command line and its own documentation, and a site can run each one by hand.
+A =min_version= in =[site.tools]= is checked before any work, and the exit statuses of each tool are read as that tool defines them, then mapped onto the statuses of a run, as [[file:phases.org][How a run goes through its phases]] describes.
+
+*** The caller is thin
+
+A caller passes a site file, a build list, a target, a build type and a run id, and reads an exit status and a result file.
+It names no partition, path, licence group or quota command, so a Jenkins job, a GitLab CI job, a GitHub Actions workflow and a cron line build a list the same way.
+[[file:../howto/build-from-ci.org][Build a list on every target from continuous integration]] shows such a caller.
+
+*** Nothing about a site lives in the repository
+
+The templates that =init= writes carry placeholders only, and are built into the binary, so =init= works without a checkout.
+A test refuses a template value that looks like one site's, and =EB_PIPELINE_LINT_DENY= adds the names and paths of a site of one's own to what it refuses.
+
+** What was considered and turned down
+
+- /A run that builds every target of the site file./
+  A run builds one target, and the caller starts one run per name that =targets= prints.
+  Each target has launch lines, an install tree and a log directory of its own, each run writes one result file, and a CI system that starts one job per target shows the state of each, and can run them at once when their paths allow, as [[file:shared-paths.org][What the targets of a site file share]] explains.
+- /Module names written into the text of the wrapper./
+  The script stays the same for every command and takes the module names from a variable, so a module name cannot become a command of the shell.
+- /Linking the tools in./
+  Each tool is released, documented and run on its own; started as a program, it stays so, and eb-pipeline needs from it only its command line, its exit statuses and what it writes, such as the shard plan of =stack shard=.
+
+** Limits
+
+- =check= reads the site file and, when asked, checks that the build lists are files in a directory and runs the tools for their versions; it does not check that a partition, a path or a group exists on the cluster.
+- The licence gate checks the site file only: that every package that needs a licence has a group, a version threshold or an exemption.
+  It does not check file permissions or group membership on the host.
+- A value inside =[[targets]]= cannot be set from the environment; it stays in the file.
+
+** Further reading
+
+- [[file:phases.org][How a run goes through its phases]], for the order of the work and the exit status.
+- [[file:../reference/site-file.org][The site file]], for every key.
+- [[file:../reference/environment.org][Environment variables]], for the variables that a deployment sets.

@@ -1,0 +1,1 @@
+Explanation pages say why one site file drives the build and the caller stays thin, and how a run goes through its phases and units, what stops it, and how one exit status sums up its lines, with a figure of the phases; the tutorial links them.

@@ -315,7 +315,9 @@ rm -rf "$WORK"
 ** What just happened
 
 1. The site file described a site of one machine: with the =local= scheduler, every phase started there as a plain process.
+   [[file:../explanation/design.org][Why one site file drives the build]] says why everything about a site lives in that file.
 2. =run --dry-run= printed the plan, the phases of a run in their fixed order, of which this site file configures only =build=.
+   [[file:../explanation/phases.org][How a run goes through its phases]] describes them, and how one exit status sums up a run.
 3. =run= started one =eb= for each line, in the order of the list, with the paths from the site file in =EASYBUILD_= variables and its output in a log of its own.
 4. The result file recorded every phase and every line, and the exit status gave the outcome: 0 when every line built, 1 when a line failed.
 5. A line that failed did not stop the run; the lines after it still built.
@@ -324,5 +326,6 @@ rm -rf "$WORK"
 
 - [[file:../howto/index.org][The how-to guides]], for a site file for your cluster and for the jobs that call eb-pipeline.
 - [[file:../reference/index.org][The reference]], for every command, site file key and exit status.
+- [[file:../explanation/index.org][The explanation]], for why eb-pipeline works the way it does.
 
 Checked with Rust 1.90.0 and eb-pipeline at commit ef2fbe2 on 2026-11-17.
