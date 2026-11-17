@@ -6,9 +6,12 @@
 //! options `pigz-2.8-GCCcore-15.2.0.eb:cuda-compute-capabilities=8.0`,
 //! `pigz-2.8-GCCcore-15.2.0.eb:parallel=4`,
 //! `pigz-2.8-GCCcore-15.2.0.eb:rebuild=true` and
-//! `Perl-5.42.0-GCCcore-15.2.0.eb:accept-eula-for=A,B`, and
-//! `solve.build.list` and `solve.jenkins.list` by `stack solve
-//! --build-list-out` and `--jenkins-build-list-out`.
+//! `Perl-5.42.0-GCCcore-15.2.0.eb:accept-eula-for=A,B`,
+//! `stack-easystack-one.yml` by the same with the options
+//! `pigz-2.8-GCCcore-15.2.0.eb:parallel=1` and
+//! `pigz-2.8-GCCcore-15.2.0.eb:rebuild=1`, and `solve.build.list` and
+//! `solve.jenkins.list` by `stack solve --build-list-out` and
+//! `--jenkins-build-list-out`.
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -173,6 +176,30 @@ fn the_options_eb_stack_writes_reach_eb_as_it_was_given_them() {
             "Perl-5.42.0-GCCcore-15.2.0.eb --accept-eula-for=A,B",
             "pigz-2.8-GCCcore-15.2.0.eb --cuda-compute-capabilities=8.0 --parallel=4 --rebuild",
         ]
+    );
+}
+
+#[test]
+fn a_plain_one_that_eb_stack_writes_gives_the_bare_option_as_in_easybuild() {
+    let d = tempfile::tempdir().unwrap();
+    let module = d
+        .path()
+        .join("install/modules/all/pigz/2.8-GCCcore-15.2.0.lua");
+    std::fs::create_dir_all(module.parent().unwrap()).unwrap();
+    std::fs::write(&module, "-- module\n").unwrap();
+    let v = plan_of(&site(d.path(), ""), &fixture("stack-easystack-one.yml"));
+    let pigz = phase(&v, "build")["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "build:pigz-2.8-GCCcore-15.2.0")
+        .unwrap();
+    let a = argv(pigz);
+    assert_eq!(a[..2], ["eb-staged-rebuild", "run"], "{a:?}");
+    // eb refuses `--parallel` without a value, as with `eb --easystack`.
+    assert_eq!(
+        a[a.len() - 3..],
+        ["pigz-2.8-GCCcore-15.2.0.eb", "--parallel", "--rebuild"]
     );
 }
 

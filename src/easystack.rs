@@ -111,9 +111,10 @@ fn options_of<'a>(name: &str, v: &'a Value) -> Result<Option<&'a Mapping>, Strin
 
 /// The `eb` options of an entry, as `opts_dict_to_eb_opts` writes them:
 /// sorted by name, `-x` for a name of one letter and `--name` for a longer
-/// one; true or no value gives the bare option, false `--disable-name`, a
-/// list its items joined with `,`, and anything else `--name=value`, except
-/// that `amend` and `try-amend` take one option per item.
+/// one; true, no value or the number 1 gives the bare option, false
+/// `--disable-name`, a list its items joined with `,`, and anything else
+/// `--name=value`, except that `amend` and `try-amend` take one option per
+/// item.
 fn eb_args(options: &Mapping) -> Result<Vec<String>, String> {
     let mut named = Vec::new();
     for (k, v) in options {
@@ -175,14 +176,16 @@ fn eb_args(options: &Mapping) -> Result<Vec<String>, String> {
     Ok(args)
 }
 
-/// `Some(true)` for a value that gives the bare option, true or no value,
-/// and `Some(false)` for false. EasyBuild reads YAML 1.1, where yes, on, no
-/// and off are booleans too.
+/// `Some(true)` for a value that gives the bare option, and `Some(false)`
+/// for false. EasyBuild reads YAML 1.1, where yes, on, no and off are
+/// booleans too, and gives the bare option for each value in `[True,
+/// None]`, which in Python holds the number 1 as well.
 fn flag(v: &Value) -> Option<bool> {
     match v {
         Value::Null => Some(true),
         Value::Bool(b) => Some(*b),
         Value::String(s) => yaml11_bool(s),
+        Value::Number(n) if n.as_u64() == Some(1) => Some(true),
         _ => None,
     }
 }
@@ -290,6 +293,24 @@ mod tests {
             &parse("easyconfigs:\n  - x.eb: {options: {rebuild: on, robot: off, a-b: [yes, 1]}}\n")
                 .unwrap()[0];
         assert_eq!(l.args, ["--a-b=True,1", "--rebuild", "--disable-robot"]);
+    }
+
+    #[test]
+    fn a_plain_one_gives_the_bare_option_as_in_easybuild() {
+        let l = &parse(
+            "easyconfigs:\n  - x.eb: {options: {rebuild: 1, parallel: '1', a-b: [1], amend: 1, c-d: 0}}\n",
+        )
+        .unwrap()[0];
+        assert_eq!(
+            l.args,
+            [
+                "--a-b=1",
+                "--amend=1",
+                "--c-d=0",
+                "--parallel=1",
+                "--rebuild"
+            ]
+        );
     }
 
     #[test]
