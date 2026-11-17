@@ -4,6 +4,7 @@
 
 use crate::easystack::is_easystack;
 use crate::exit::{self, Fail};
+use crate::package_plan::{Input as PackagePlanInput, Verification, R_DESCRIPTION_CHECK};
 use crate::resolve::{Role, Scope};
 use crate::tools::Tool;
 use crate::util::{list_word, parse_list, quote, ListLine};
@@ -64,6 +65,9 @@ pub struct Plan {
     pub run_id: String,
     /// The build list, as given.
     pub list: String,
+    /// SHA-256 of the eb-stack `package.plan.json`, for a package-plan input.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package_plan_digest: Option<String>,
     /// Where the run writes its logs.
     pub log_dir: String,
     /// The build list's lines, without blank lines and comments.
@@ -91,7 +95,7 @@ pub struct Deselected {
 }
 
 /// Every phase, in the order a run goes through them.
-pub const PHASES: [&str; 9] = [
+pub const PHASES: [&str; 10] = [
     "preflight",
     "licences",
     "shard",
@@ -99,6 +103,7 @@ pub const PHASES: [&str; 9] = [
     "admission",
     "build",
     "checks",
+    "verification",
     "caches",
     "logs",
 ];
@@ -135,6 +140,10 @@ pub struct Planner<'a> {
     pub offline_bundle: Option<PathBuf>,
     /// Network-isolating command requested by `--require-offline`.
     pub offline_wrapper: Vec<String>,
+    /// Validated eb-stack package-plan input, when one was selected.
+    pub package_plan: Option<PackagePlanInput>,
+    /// Whether to run the package plan's ecosystem-native checks.
+    pub verify_package_plan: bool,
 }
 
 /// Module path of an easyconfig relative to `<modules_root>/all`, without extension.
@@ -226,6 +235,8 @@ impl<'a> Planner<'a> {
             runtime_env: None,
             offline_bundle: None,
             offline_wrapper: Vec::new(),
+            package_plan: None,
+            verify_package_plan: false,
         }
     }
 
@@ -278,16 +289,23 @@ impl<'a> Planner<'a> {
         )
     }
 
-    /// Where a run writes the lines it read from an easystack, which
-    /// `stack shard` reads as a build list; with a selector, the selected
-    /// list holds them.
+    /// Where a run writes generated build-list lines, which `stack shard`
+    /// reads: package-plan recipes or lines read from an easystack. With a
+    /// selector, the selected list holds them instead.
     pub fn easystack_list_path(&self) -> Option<PathBuf> {
-        if self.scope.target.select.is_some() || !is_easystack(Path::new(&self.list_path)) {
+        if self.scope.target.select.is_some() {
             return None;
         }
+        let stem = if self.package_plan.is_some() {
+            "package-plan"
+        } else if is_easystack(Path::new(&self.list_path)) {
+            "easystack"
+        } else {
+            return None;
+        };
         Some(
             PathBuf::from(self.scope.log_dir())
-                .join(format!("easystack-{}.list", self.scope.target.name)),
+                .join(format!("{stem}-{}.list", self.scope.target.name)),
         )
     }
 
@@ -1021,6 +1039,62 @@ impl<'a> Planner<'a> {
         }))
     }
 
+    /// Ecosystem-native verification commands for an eb-stack package plan.
+    pub fn verification_cmds(&self) -> Result<Vec<Cmd>, Fail> {
+        let Some(input) = self
+            .package_plan
+            .as_ref()
+            .filter(|_| self.verify_package_plan)
+        else {
+            return Ok(Vec::new());
+        };
+        input
+            .verification
+            .iter()
+            .map(|check| {
+                let module = check.module()?;
+                let inner = match check {
+                    Verification::Pip { .. } => vec!["pip".into(), "check".into()],
+                    Verification::R { package, .. } => vec![
+                        "Rscript".into(),
+                        "--vanilla".into(),
+                        "-e".into(),
+                        R_DESCRIPTION_CHECK.into(),
+                        package.clone(),
+                    ],
+                };
+                let mut env = BTreeMap::new();
+                let modules = self
+                    .site()
+                    .modules
+                    .init
+                    .iter()
+                    .map(String::as_str)
+                    .chain(std::iter::once(module.as_str()))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                env.insert("EB_PIPELINE_MODULES".into(), modules);
+                let mut argv = self.scope.launch_with(Role::Short, "verification", None)?;
+                argv.extend([
+                    self.site().modules.shell.clone(),
+                    "-c".into(),
+                    crate::resolve::MODULE_SCRIPT.into(),
+                    "eb-pipeline".into(),
+                ]);
+                argv.extend(inner);
+                Ok(Cmd {
+                    name: match check {
+                        Verification::Pip { .. } => format!("pip-check:{module}"),
+                        Verification::R { .. } => format!("r-description-check:{module}"),
+                    },
+                    argv,
+                    env,
+                    note: Some(format!("loads {module}")),
+                })
+            })
+            .collect()
+    }
+
     /// The cache command of the target's `[[caches.targets]]` entry; `None`
     /// without an active `[caches]`, its `command` or such an entry.
     pub fn cache_cmd(&self) -> Result<Option<Cmd>, Fail> {
@@ -1293,6 +1367,15 @@ pub fn build_plan(
         None => skip("checks", p.checks_reason(any_staged)),
     });
 
+    if p.package_plan.is_some() {
+        let commands = p.verification_cmds()?;
+        phases.push(if p.verify_package_plan {
+            planned("verification", Some(Role::Short), commands)
+        } else {
+            skip("verification", "not requested")
+        });
+    }
+
     phases.push(match p.cache_cmd()? {
         Some(c) => planned("caches", Some(Role::Cache), vec![c]),
         None => skip("caches", "not configured"),
@@ -1311,6 +1394,7 @@ pub fn build_plan(
         build_type: p.scope.build_name().to_string(),
         run_id: p.scope.run_id.clone(),
         list: p.list_path.clone(),
+        package_plan_digest: p.package_plan.as_ref().map(|input| input.digest.clone()),
         log_dir: p.scope.log_dir(),
         lines: lines.len(),
         selected: p.scope.target.select.as_ref().map(|_| kept.len()),

@@ -190,6 +190,9 @@ pub struct RunResult {
     /// SHA-256 of the `stack order --hashes-out` file, when `[resume]` recorded it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_digest: Option<String>,
+    /// SHA-256 of the eb-stack `package.plan.json`, for a package-plan input.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package_plan_digest: Option<String>,
     /// How many lines came to each status.
     pub counts: BTreeMap<String, usize>,
     /// The phases the site file leaves out.
@@ -657,6 +660,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
             exit_code: 0,
             sharded: false,
             input_digest: None,
+            package_plan_digest: p.package_plan.as_ref().map(|input| input.digest.clone()),
             counts: BTreeMap::new(),
             not_configured: vec![],
             admission: vec![],
@@ -1735,6 +1739,66 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
         Err(f) => {
             st.res.message = Some(f.msg);
             return finish(st, Some(f.code));
+        }
+    }
+
+    if p.package_plan.is_some() && p.verify_package_plan {
+        match p.verification_cmds() {
+            Ok(commands) if !st.failed && !st.refused && !st.pending => {
+                let mut failed = None;
+                for (index, cmd) in commands.iter().enumerate() {
+                    log(
+                        "INFO",
+                        "verification",
+                        &target,
+                        &format!("{}: start", cmd.name),
+                    );
+                    match st.exec(
+                        "verification",
+                        cmd,
+                        &env,
+                        &log_dir.join(format!("verification-{}.log", index + 1)),
+                    ) {
+                        Ok(ex) if ex.code == 0 => {
+                            log(
+                                "INFO",
+                                "verification",
+                                &target,
+                                &format!("{}: ok", cmd.name),
+                            );
+                        }
+                        Ok(ex) => {
+                            let message = format!("{} exited {}", cmd.name, ex.code);
+                            log("ERROR", "verification", &target, &message);
+                            failed.get_or_insert((ex.code, message));
+                        }
+                        Err(f) => {
+                            st.res.message = Some(f.msg);
+                            return finish(st, Some(f.code));
+                        }
+                    }
+                    if let Some(c) = stop_if_signalled(&mut st, "verification") {
+                        return finish(st, Some(c));
+                    }
+                }
+                match failed {
+                    Some((code, message)) => {
+                        st.phase("verification", "failed", Some(code), Some(message));
+                        st.failed = true;
+                    }
+                    None => st.phase("verification", "ok", Some(0), None),
+                }
+            }
+            Ok(_) => st.phase(
+                "verification",
+                "skipped",
+                None,
+                Some("the build did not finish cleanly".into()),
+            ),
+            Err(f) => {
+                st.res.message = Some(f.msg);
+                return finish(st, Some(f.code));
+            }
         }
     }
 

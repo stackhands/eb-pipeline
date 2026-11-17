@@ -1,5 +1,6 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use eb_pipeline::exit::{self, Fail};
+use eb_pipeline::package_plan;
 use eb_pipeline::plan::{build_plan, read_units, Planner};
 use eb_pipeline::resolve::{explain, Scope};
 use eb_pipeline::run::{install_handlers, log, run, Options, RunResult};
@@ -20,9 +21,10 @@ Examples:
   eb-pipeline metrics --result result.json
 
 Configuration: every flag above falls back to an EB_PIPELINE_<FLAG> variable
-(EB_PIPELINE_SITE, EB_PIPELINE_LIST, EB_PIPELINE_TARGET, EB_PIPELINE_BUILD_TYPE,
-EB_PIPELINE_RUN_ID, EB_PIPELINE_LOG_STAMP, EB_PIPELINE_LISTS_DIR,
-EB_PIPELINE_RESULT); a flag on the command line wins.
+(EB_PIPELINE_SITE, EB_PIPELINE_LIST, EB_PIPELINE_PACKAGE_PLAN,
+EB_PIPELINE_TARGET, EB_PIPELINE_BUILD_TYPE, EB_PIPELINE_RUN_ID,
+EB_PIPELINE_LOG_STAMP, EB_PIPELINE_LISTS_DIR, EB_PIPELINE_RESULT); a flag on
+the command line wins.
 EB_PIPELINE__SECTION__KEY=value sets one site file value, for example
 EB_PIPELINE__FILESYSTEMS__SCRATCH=/scratch/eb; the result is validated like the
 file.
@@ -220,8 +222,24 @@ struct Common {
     site: PathBuf,
     /// Build list file: one `Name-version-toolchain.eb [eb options]` per line,
     /// or an EasyBuild easystack, a `.yml` or `.yaml` file.
-    #[arg(long, env = "EB_PIPELINE_LIST")]
-    list: PathBuf,
+    #[arg(
+        long,
+        env = "EB_PIPELINE_LIST",
+        required_unless_present = "package_plan",
+        conflicts_with = "package_plan"
+    )]
+    list: Option<PathBuf>,
+    /// Directory written by `eb-stack package plan`; builds its emitted recipes.
+    #[arg(
+        long,
+        env = "EB_PIPELINE_PACKAGE_PLAN",
+        required_unless_present = "list",
+        conflicts_with = "list"
+    )]
+    package_plan: Option<PathBuf>,
+    /// Run ecosystem-native checks after a package-plan build.
+    #[arg(long, requires = "package_plan")]
+    verify_package_plan: bool,
     /// Target name.
     #[arg(long, env = "EB_PIPELINE_TARGET")]
     target: String,
@@ -552,19 +570,27 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
             ));
         }
     }
-    let list_text = std::fs::read_to_string(&c.list)
-        .map_err(|e| Fail::usage(format!("cannot read list {}: {e}", c.list.display())))?;
-    let lines = if easystack::is_easystack(&c.list) {
-        easystack::parse(&list_text)
-            .map_err(|e| Fail::usage(format!("easystack {}: {e}", c.list.display())))?
+    let package_input = c
+        .package_plan
+        .as_deref()
+        .map(package_plan::load)
+        .transpose()?;
+    let (input_name, lines) = if let Some(input) = &package_input {
+        (input.bundle.display().to_string(), input.lines.clone())
     } else {
-        util::parse_list(&list_text)?
+        let list = c.list.as_deref().expect("clap requires one input");
+        let list_text = std::fs::read_to_string(list)
+            .map_err(|e| Fail::usage(format!("cannot read list {}: {e}", list.display())))?;
+        let lines = if easystack::is_easystack(list) {
+            easystack::parse(&list_text)
+                .map_err(|e| Fail::usage(format!("easystack {}: {e}", list.display())))?
+        } else {
+            util::parse_list(&list_text)?
+        };
+        (list.display().to_string(), lines)
     };
     if lines.is_empty() {
-        return Err(Fail::usage(format!(
-            "list {} holds no lines",
-            c.list.display()
-        )));
+        return Err(Fail::usage(format!("input {input_name} holds no lines")));
     }
     let log_stamp = c.log_stamp.clone().unwrap_or_else(|| {
         if is_run {
@@ -588,7 +614,7 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         run_id,
         log_stamp,
     };
-    let mut planner = Planner::new(scope, c.list.display().to_string());
+    let mut planner = Planner::new(scope, input_name);
     planner.offline_bundle = c.offline_bundle.clone();
     if c.require_offline {
         planner.offline_wrapper = sources
@@ -596,6 +622,8 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
             .offline_wrapper
             .clone();
     }
+    planner.package_plan = package_input;
+    planner.verify_package_plan = c.verify_package_plan;
     if !is_run {
         let units = match shard_plan {
             Some(d) => Some(read_units(d)?),
