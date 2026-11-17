@@ -865,12 +865,64 @@ impl<'a> Planner<'a> {
     }
 }
 
+/// Refuse a plan whose `[modules] init` names an EESSI generation other than
+/// the one the target's watch record was built against. Building into that
+/// prefix would mix the two. The installs are [`crate::watch::built_against_other`],
+/// the same walk [`crate::watch::other_eessi`] uses, with no CPU subdirectory:
+/// a move that keeps the generation is still watch's check. A site with no
+/// `[watch]` table, no recorded install, or no `EESSI/YYYY.MM` module is left
+/// as it was. The generation is [`crate::eessi::generation_name`].
+pub fn refuse_mixed_generation(p: &Planner) -> Result<(), Fail> {
+    if p.scope.site.watch_on().is_none() {
+        return Ok(());
+    }
+    let Some(loaded) = crate::eessi::last_init_generation(&p.scope.site.modules.init) else {
+        return Ok(());
+    };
+    let Some(dir) = p.scope.watch_state_dir() else {
+        return Ok(());
+    };
+    let state =
+        crate::watch::load(&dir, &p.scope.target.name).map_err(|e| Fail::new(exit::FAILED, e))?;
+    if state.installs.is_empty() {
+        return Ok(());
+    }
+    let other = crate::watch::built_against_other(&state, loaded, None);
+    if other.is_empty() {
+        return Ok(());
+    }
+    let mut seen: Vec<(&str, &str)> = Vec::new();
+    for (_, install) in &other {
+        if !seen
+            .iter()
+            .any(|(v, s)| *v == install.eessi_version && *s == install.software_subdir)
+        {
+            seen.push((&install.eessi_version, &install.software_subdir));
+        }
+    }
+    let recorded = seen
+        .iter()
+        .map(|(version, subdir)| format!("EESSI {version} {subdir}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(Fail::new(
+        exit::REFUSED,
+        format!(
+            "target {} loads EESSI {loaded} in [modules] init, and {} of {} recorded installs were built against {recorded}; a build into this prefix would mix the two. Give the new EESSI its own prefix. eb-stack stack gap --out-dir DIR writes roots.txt, the easyconfigs the new version lacks, and eb-pipeline plan --list DIR/roots.txt plans that list. Then record the new prefix with watch --adopt",
+            p.scope.target.name,
+            other.len(),
+            state.installs.len(),
+        ),
+    ))
+}
+
 /// Build the whole plan for one target and list.
 pub fn build_plan(
     p: &Planner,
     lines: &[ListLine],
     shard_units: Option<&[Unit]>,
 ) -> Result<Plan, Fail> {
+    refuse_mixed_generation(p)?;
     let site = p.scope.site;
     let env = p.scope.env();
     let mut phases = Vec::new();
@@ -1179,5 +1231,141 @@ mod read_tests {
         assert_eq!(units.len(), 1);
         assert_eq!(units[0].lines[0].easyconfig, "Foo-1.0.eb");
         assert_eq!(units[0].footprint, Some(3));
+    }
+}
+
+#[cfg(test)]
+mod generation_tests {
+    use super::{build_plan, Planner};
+    use crate::resolve::Scope;
+    use crate::site;
+    use crate::util;
+
+    fn site_text(prefix: &str, init: &str, watch: bool) -> String {
+        let watch_table = if watch { "[watch]\n" } else { "" };
+        format!(
+            r#"
+schema_version = 1
+kind = "site"
+[site]
+name = "example"
+[scheduler]
+kind = "local"
+[[targets]]
+name = "zen4"
+site_prefix = "{prefix}"
+default = true
+[filesystems]
+scratch = "/tmp/scratch"
+tmp = "/tmp/scratch/tmp"
+build_path = "/tmp/scratch/build"
+install_root = "/tmp/site"
+log_root = "/tmp/logs"
+[modules]
+init = ["{init}"]
+{watch_table}"#
+        )
+    }
+
+    fn record(prefix: &str, version: &str) {
+        let dir = format!("{prefix}/.eb-pipeline-watch");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            format!("{dir}/zen4.json"),
+            format!(
+                r#"{{
+  "schema_version": 1,
+  "kind": "watch-state",
+  "target": "zen4",
+  "installs": {{
+    "hiredis/1.2.0-GCCcore-13.2.0": {{
+      "easyconfig": "hiredis-1.2.0-GCCcore-13.2.0.eb",
+      "how": "built",
+      "run": "20261117_090000",
+      "recorded_at": "2026-11-17T09:00:00Z",
+      "eessi_version": "{version}",
+      "software_subdir": "x86_64/amd/zen4",
+      "modules_dirs": ["/cvmfs/modules"],
+      "deps": {{}}
+    }}
+  }}
+}}"#
+            ),
+        )
+        .unwrap();
+    }
+
+    fn plan(prefix: &str, init: &str, watch: bool) -> Result<super::Plan, crate::exit::Fail> {
+        let text = site_text(prefix, init, watch);
+        let site = site::parse(&text).unwrap();
+        let target = site.target("zen4").unwrap();
+        let scope = Scope {
+            site: &site,
+            site_file: None,
+            target,
+            build_type: Some("production"),
+            run_id: "r".into(),
+            log_stamp: "20261117_140000".into(),
+        };
+        let planner = Planner::new(scope, "zen4.list".into());
+        let lines = util::parse_list("hiredis-1.2.0-GCCcore-13.2.0.eb\n").unwrap();
+        build_plan(&planner, &lines, None)
+    }
+
+    #[test]
+    fn a_plan_refuses_to_mix_two_eessi_generations() {
+        let root = tempfile::tempdir().unwrap();
+        let prefix = root.path().to_str().unwrap();
+        record(prefix, "2023.06");
+        let err = plan(prefix, "EESSI/2025.06", true).unwrap_err();
+        assert_eq!(err.code, 78, "{}", err.msg);
+        assert!(
+            err.msg.contains("loads EESSI 2025.06 in [modules] init"),
+            "{}",
+            err.msg
+        );
+        assert!(
+            err.msg.contains(
+                "1 of 1 recorded installs were built against EESSI 2023.06 x86_64/amd/zen4"
+            ),
+            "{}",
+            err.msg
+        );
+        assert!(err.msg.contains("roots.txt"), "{}", err.msg);
+        assert!(err.msg.contains("watch --adopt"), "{}", err.msg);
+    }
+
+    #[test]
+    fn a_plan_of_the_recorded_generation_goes_ahead() {
+        let root = tempfile::tempdir().unwrap();
+        let prefix = root.path().to_str().unwrap();
+        record(prefix, "2023.06");
+        assert!(plan(prefix, "EESSI/2023.06", true).is_ok());
+        // The last EESSI/YYYY.MM in init is the generation, and a month
+        // generation_name rejects is not one, so neither refuses.
+        assert!(plan(prefix, "EESSI/2025.06\", \"EESSI/2023.06", true).is_ok());
+        assert!(plan(prefix, "EESSI/2025.13", true).is_ok());
+    }
+
+    #[test]
+    fn a_plan_with_no_watch_record_goes_ahead() {
+        let root = tempfile::tempdir().unwrap();
+        let prefix = root.path().to_str().unwrap();
+        assert!(plan(prefix, "EESSI/2025.06", true).is_ok());
+        record(prefix, "2023.06");
+        assert!(plan(prefix, "EESSI/2025.06", false).is_ok());
+    }
+
+    #[test]
+    fn the_how_tos_quote_the_refusal() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/orgmode/howto");
+        for name in ["from-eb-stack.org", "staged-rebuilds.org"] {
+            let page = std::fs::read_to_string(root.join(name)).unwrap();
+            assert!(
+                page.contains("loads EESSI VERSION in [modules] init"),
+                "{name}"
+            );
+            assert!(page.contains("watch --adopt"), "{name}");
+        }
     }
 }

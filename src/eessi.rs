@@ -87,6 +87,23 @@ pub fn generation_name(name: &str) -> Option<(u32, u32)> {
     }
 }
 
+/// `EESSI/YYYY.MM`, the way `[modules] init` names a generation.
+/// A name [`generation_name`] rejects is not a generation.
+pub fn module_generation(module: &str) -> Option<&str> {
+    let rest = module.strip_prefix("EESSI/")?;
+    generation_name(rest)?;
+    Some(rest)
+}
+
+/// The last generation in a module list. A later `EESSI/YYYY.MM` wins, and
+/// a name that is not a generation is skipped.
+pub fn last_init_generation(modules: &[String]) -> Option<&str> {
+    modules
+        .iter()
+        .rev()
+        .find_map(|module| module_generation(module))
+}
+
 /// The newest `YYYY.MM` directory under `versions` that is newer than `loaded`.
 ///
 /// A name that is not `YYYY.MM`, and a path that is not a directory, are
@@ -373,6 +390,27 @@ mod tests {
         assert_eq!(newer_generation(&versions, "latest").unwrap(), None);
         assert_eq!(
             newer_generation(&d.path().join("absent"), "2023.06").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_module_generation_is_eessi_then_yyyy_mm() {
+        assert_eq!(module_generation("EESSI/2025.06"), Some("2025.06"));
+        assert_eq!(module_generation("EESSI/2025.13"), None);
+        assert_eq!(module_generation("EESSI/2025.6"), None);
+        assert_eq!(module_generation("EESSI/2025.06/extra"), None);
+        assert_eq!(module_generation("2025.06"), None);
+        assert_eq!(
+            last_init_generation(&[
+                "EESSI/2023.06".into(),
+                "Other/1.0".into(),
+                "EESSI/2025.06".into(),
+            ]),
+            Some("2025.06")
+        );
+        assert_eq!(
+            last_init_generation(&["EESSI/2025.13".into(), "Other/1.0".into()]),
             None
         );
     }
