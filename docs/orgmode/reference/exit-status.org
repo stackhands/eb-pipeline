@@ -117,3 +117,4 @@ A run in which one line failed and another was refused exits 1.
 ** See also
 
 - [[file:cli.org][The eb-pipeline command]] and [[file:site-file.org][The site file]]
+- [[file:plan-and-result.org][The plan and result files]], for the status of each line and phase in the result file

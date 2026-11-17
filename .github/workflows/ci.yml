@@ -70,3 +70,4 @@ jobs:
         run: |
           bash docs/examples/tutorial.sh
           bash docs/examples/cli.sh
+          bash docs/examples/files.sh

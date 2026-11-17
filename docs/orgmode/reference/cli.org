@@ -216,8 +216,8 @@ The commands other than =run= exit 0, 1 or 2.
 |---------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | the site file, =--site=         | Everything about the site; [[file:site-file.org][The site file]] lists its keys.                                                                                       |
 | the build list, =--list=        | One easyconfig per line, followed by the options =eb= gets for it, as =Name-version-toolchain.eb [eb options]=. Blank lines and lines that start with =#= are skipped. |
-| the plan, =plan --out=          | What =plan= prints.                                                                                                                                                    |
-| the result file, =run --result= | What the run did, line by line and phase by phase.                                                                                                                     |
+| the plan, =plan --out=          | What =plan= prints; [[file:plan-and-result.org][The plan and result files]] lists its keys.                                                                            |
+| the result file, =run --result= | What the run did, line by line and phase by phase; [[file:plan-and-result.org][The plan and result files]] lists its keys.                                             |
 | =LOG_ROOT/LOG_STAMP/TARGET/=    | The log directory of a run, under =filesystems.log_root=.                                                                                                              |
 
 A list line is split into words as a shell splits them, with single and double quotes.
@@ -225,5 +225,6 @@ A list line is split into words as a shell splits them, with single and double q
 ** See also
 
 - [[file:../tutorials/first-build-list.org][Run your first build list]]
-- [[file:site-file.org][The site file]], [[file:environment.org][Environment variables]] and [[file:exit-status.org][Exit status]]
+- [[file:site-file.org][The site file]] and [[file:plan-and-result.org][The plan and result files]]
+- [[file:environment.org][Environment variables]] and [[file:exit-status.org][Exit status]]
 - The [[file:api.org][API]] of the =eb_pipeline= library, which the command is built on.
