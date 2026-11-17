@@ -14,9 +14,11 @@ Until the next release, install from source to have them.
 
 - For a release, a Linux host on x86_64 or aarch64.
   Its binary is linked statically against musl, so it needs no other library.
-- For a build from source, Rust 1.90 or newer with Cargo, and a checkout of the repository:
+- For a build from source, Rust 1.90 or newer with Cargo, and a checkout of the repository.
+  When =cargo --version= is older than 1.90, install that toolchain first:
 
   #+begin_src bash
+  rustup toolchain install 1.90 --profile minimal
   git clone https://github.com/stackhands/eb-pipeline.git
   cd eb-pipeline
   #+end_src
@@ -63,7 +65,7 @@ Until the next release, install from source to have them.
 In the checkout, build and install the binary into =~/.local/bin=, with the versions of the dependencies that =Cargo.lock= names:
 
 #+begin_src bash
-cargo install --locked --path . --root ~/.local
+cargo +1.90 install --locked --path . --root ~/.local
 #+end_src
 
 To install another commit, check it out first; to replace an eb-pipeline that is installed there, add =--force=.

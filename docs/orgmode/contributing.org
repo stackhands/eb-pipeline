@@ -48,6 +48,7 @@ bash docs/examples/tutorial.sh
 
 The =docs= job of the =ci= workflow runs every one of them but =install.sh=, which downloads release 0.3.0 and builds a clone of the checkout with =cargo install=.
 Run that one by hand when the install steps change, with a Rust toolchain of 1.90 or newer, as =RUSTUP_TOOLCHAIN=1.90.0 bash docs/examples/install.sh=.
+=bash docs/examples/tutorial-rust-floor.sh= fails until the tutorial and install how-to name =rustup toolchain install 1.90= and =cargo +1.90 install=.
 
 ** Build the documentation
 
