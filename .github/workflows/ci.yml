@@ -64,6 +64,13 @@ jobs:
           cargo run --locked --quiet --bin eb-cvmfs -- \
             --dry-run --metrics-file cvmfs.prom repo.example -- true > /dev/null
           ./promtool check metrics < cvmfs.prom
+      - name: completion and manpage assets are up to date
+        run: |
+          cargo run --quiet --locked --bin eb-pipeline -- completions --shell bash --out-dir share/completions
+          cargo run --quiet --locked --bin eb-pipeline -- completions --shell zsh --out-dir share/completions
+          cargo run --quiet --locked --bin eb-pipeline -- completions --shell fish --out-dir share/completions
+          cargo run --quiet --locked --bin eb-pipeline -- man --out-dir share/man
+          git diff --exit-code -- share/completions share/man
       - name: Examples hold placeholders only
         run: cargo test --locked --test examples
 

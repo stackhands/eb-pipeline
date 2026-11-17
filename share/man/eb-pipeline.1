@@ -1,0 +1,100 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH eb-pipeline 1  "eb-pipeline 0.3.1" 
+.SH NAME
+eb\-pipeline \- Site\-neutral EasyBuild pipeline driver configured by a per\-site TOML file
+.SH SYNOPSIS
+\fBeb\-pipeline\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Site\-neutral EasyBuild pipeline driver configured by a per\-site TOML file
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH SUBCOMMANDS
+.TP
+eb\-pipeline\-check(1)
+Parse and validate a site file
+.TP
+eb\-pipeline\-schema(1)
+Print the site file reference: every key, type, default and meaning
+.TP
+eb\-pipeline\-init(1)
+Write a starter site file from a built\-in template
+.TP
+eb\-pipeline\-explain(1)
+Print the resolved configuration of one or all targets
+.TP
+eb\-pipeline\-targets(1)
+Print the target names in file order, for a CI matrix or a shell loop
+.TP
+eb\-pipeline\-status(1)
+Print the last runs under the log root, newest first, from their summaries
+.TP
+eb\-pipeline\-metrics(1)
+Print Prometheus text, or a short JSON status, for one result file
+.TP
+eb\-pipeline\-plan(1)
+Compute phases, launch lines, environments and tool calls without executing
+.TP
+eb\-pipeline\-run(1)
+Execute the plan\*(Aqs phases as subprocesses
+.TP
+eb\-pipeline\-watch(1)
+Rebuild the recorded installs an EESSI change reaches, in dependency order
+.TP
+eb\-pipeline\-help(1)
+Print this message or the help of the given subcommand(s)
+.SH EXTRA
+Examples:
+  eb\-pipeline init \-\-template small\-cluster \-\-out site.toml
+  eb\-pipeline check \-\-site site.toml
+  eb\-pipeline targets \-\-site site.toml \-\-format json
+  eb\-pipeline plan \-\-site site.toml \-\-list list.txt \-\-target cpu \-\-build\-type production \-\-out plan.json
+  eb\-pipeline run \-\-site site.toml \-\-list list.txt \-\-target cpu \-\-build\-type production \-\-result result.json
+  eb\-pipeline watch \-\-site site.toml \-\-target cpu \-\-build\-type production \-\-dry\-run
+  eb\-pipeline metrics \-\-result result.json
+
+Configuration: every flag above falls back to an EB_PIPELINE_<FLAG> variable
+(EB_PIPELINE_SITE, EB_PIPELINE_LIST, EB_PIPELINE_PACKAGE_PLAN,
+EB_PIPELINE_TARGET, EB_PIPELINE_BUILD_TYPE, EB_PIPELINE_RUN_ID,
+EB_PIPELINE_LOG_STAMP, EB_PIPELINE_LISTS_DIR, EB_PIPELINE_RESULT); a flag on
+the command line wins.
+EB_PIPELINE__SECTION__KEY=value sets one site file value, for example
+EB_PIPELINE__FILESYSTEMS__SCRATCH=/scratch/eb; the result is validated like the
+file.
+
+Output streams: stdout carries plan, explain, schema, init, status, targets and
+metrics, and run \-\-dry\-run or watch \-\-dry\-run output only. Events go to stderr
+as `LEVEL [phase] target: message`. The result JSON goes to \-\-result, and each
+run\*(Aqs summary to summary.json and summary.html in its run directory,
+<log_root>/<log\-stamp>/. Run \-\-metrics\-file atomically replaces a Prometheus
+text file when the run ends. `metrics` exits 0 when it can read the file,
+including when the run itself failed.
+
+Exit codes:
+   0  all requested work completed
+   1  work attempted and failed (a build line or a phase); see the result file
+   2  usage error, invalid site file, or a tool below its minimum version
+  75  a resource is temporarily unavailable or a step is pending; rerun
+  78  refused by a precondition, by admission or by eb\-staged\-rebuild; lines
+      built before the refusal stay built, see the result file
+ 130  interrupted by SIGINT, after the running child ended
+ 143  interrupted by SIGTERM, after the running child ended
+
+Sibling tool codes are mapped explicitly:
+  eb\-stack admit    0 admitted, 78 refused, 1 failed, 2 usage
+  eb\-stack shard    the code in shards.planner_exit_unsharded (default 3) means
+                    unsharded; the run continues
+  eb\-staged\-rebuild 2 is a refusal there; the driver records it as refused
+                    (exit 78), 75 as pending (exit 75), any other non\-zero as failed
+  eb\-keep\-logs      rotate 75 means another rotate holds the log root\*(Aqs lock;
+                    the logs phase is recorded as skipped, any other non\-zero
+                    as failed
+A signal (130, 143) or a usage error (2) ends the run with that code. Otherwise,
+when several apply: 1, then 78, then 75, then 0. Codes are never summed.
+.SH VERSION
+v0.3.1
