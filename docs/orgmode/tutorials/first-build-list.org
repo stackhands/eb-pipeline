@@ -29,12 +29,12 @@ A stand-in for EasyBuild's =eb= command, six lines of shell, takes the place of 
 
 ** Install eb-pipeline
 
-Clone the repository, check out the commit this tutorial was checked with, and install the program from it:
+Clone the repository, check out its main branch, and install the program from it:
 
 #+begin_src bash
 git clone https://github.com/stackhands/eb-pipeline.git
 cd eb-pipeline
-git checkout 741099ee
+git checkout main
 cargo +1.90 install --locked --path .
 #+end_src
 
