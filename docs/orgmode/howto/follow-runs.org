@@ -134,6 +134,17 @@ exit 0
 
 The webhook gets the =summary.json= of the run directory as it is when the target's run ends, with every target that has written to it by then.
 
+A scraper that reads Prometheus text takes one result file:
+
+#+begin_src bash
+eb-pipeline metrics --result result.json
+eb-pipeline metrics --result result.json --format json
+#+end_src
+
+The text names the site, the target, the build type, the run id and whether the run was sharded, and gives the exit code, the line counts and each phase.
+=--format json= prints the same facts as one document whose =kind= is =status=.
+Either command exits 0 when the file can be read, including when the run failed.
+
 ** If it fails
 
 | Message                                                                                                                      | Cause                                                                                                          | What to do                                                                           |

@@ -190,6 +190,19 @@ It shows =<run-id>= and =<log-stamp>= where a run puts its own.
 =status= reads the directories under =filesystems.log_root= whose names are log stamps, newest first, and leaves out every other entry.
 [[file:run-summary.org][The run summary]] shows what it prints.
 
+*** metrics
+
+| Option            | Variable               | Meaning                                                                                                                          |
+|-------------------+------------------------+----------------------------------------------------------------------------------------------------------------------------------|
+| =--result FILE=   | =EB_PIPELINE_RESULT=   | The result file of one run; required.                                                                                            |
+| =--format FORMAT= |                        | =prometheus=, the default, prints Prometheus text; =json= prints one JSON status document.                                       |
+
+=metrics= reads that file and prints gauges =eb_pipeline_info=, =eb_pipeline_exit_code=, =eb_pipeline_lines= and =eb_pipeline_phase=.
+A status the run did not use is 0.
+Log paths stay in the result file.
+Exit 0 means the file was read, including when the run's own exit code is not 0.
+Exit 2 means the file is missing, is not JSON, or its =kind= is not =result=.
+
 *** plan
 
 | Option              | Variable                 | Meaning                                                                                                                                                                          |
