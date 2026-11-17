@@ -455,6 +455,19 @@ doc_struct! {
 }
 
 doc_struct! {
+    /// A site test command, run after a clean build and before caches.
+    Checks {
+        #[serde(default = "yes")]
+        enabled: bool => ("boolean", "true", false, "Set false to skip the phase."),
+        command: Option<String> => ("string", "none", false,
+            "Test command, split on whitespace with quotes honoured, run once on the short launch line after a clean build. Without it the phase is not configured."),
+        #[serde(default = "d_when")]
+        when: String => ("string", "clean", false,
+            "`clean` runs after every clean build. `staged` runs only when the list rebuilds an installed module; otherwise the phase is not configured."),
+    }
+}
+
+doc_struct! {
     /// Module caches, one finaliser per target.
     Caches {
         #[serde(default = "yes")]
@@ -579,6 +592,10 @@ fn d_curl() -> String {
     "curl".into()
 }
 
+fn d_when() -> String {
+    "clean".into()
+}
+
 doc_struct! {
     /// What each install was built against in EESSI, and the rebuild of the
     /// installs an EESSI change reaches.
@@ -616,6 +633,8 @@ doc_struct! {
         sources: Option<Sources> => ("table", "none", false, "Source prefetch."),
         modules: Modules => ("table", "", true, "Environment modules."),
         caches: Option<Caches> => ("table", "none", false, "Module caches."),
+        checks: Option<Checks> => ("table", "none", false,
+            "A test command run after a clean build and before caches."),
         logs: Option<Logs> => ("table", "none", false, "Log handling."),
         rebuild: Option<Rebuild> => ("table", "none", false, "Staged rebuild."),
         licences: Option<Licences> => ("table", "none", false, "Licence enforcement."),
@@ -647,6 +666,7 @@ pub const SECTIONS: &[(&str, &[FieldDoc])] = &[
     ("modules.eessi", Eessi::FIELDS),
     ("caches", Caches::FIELDS),
     ("caches.targets[]", CacheTarget::FIELDS),
+    ("checks", Checks::FIELDS),
     ("logs", Logs::FIELDS),
     ("logs.rotate", Rotate::FIELDS),
     ("rebuild", Rebuild::FIELDS),
@@ -754,6 +774,7 @@ mod tests {
             Eessi,
             Caches,
             CacheTarget,
+            Checks,
             Logs,
             Rotate,
             Rebuild,
@@ -790,6 +811,7 @@ mod tests {
             "shards",
             "sources",
             "caches",
+            "checks",
             "logs",
             "rebuild",
             "licences",

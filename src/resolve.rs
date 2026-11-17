@@ -14,7 +14,7 @@ pub enum Role {
     Plan,
     /// The builds of the whole list, the prelude and each shard.
     Build,
-    /// Admission, source prefetch and log handling.
+    /// Admission, source prefetch, the checks command and log handling.
     Short,
     /// The CPU-only prerequisite builds; the target's `route` wraps these.
     Cpu,

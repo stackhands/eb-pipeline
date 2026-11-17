@@ -240,6 +240,7 @@ fn plan_is_deterministic_and_sorted() {
             "sources",
             "admission",
             "build",
+            "checks",
             "caches",
             "logs"
         ]
@@ -2240,4 +2241,79 @@ fn plan_without_selection_shards_the_list_as_given() {
     assert!(shard_list_arg(&v).ends_with("/l.txt"));
     assert!(v.get("selected").is_none());
     assert!(v.get("selected_list").is_none());
+}
+
+#[test]
+fn checks_phase_names_the_site_test_command() {
+    let site = format!("{MINIMAL}\n[checks]\ncommand = \"/opt/reframe -c /opt/checks -r\"\n");
+    let v = plan_of(&site, "Foo-1.0.eb\n", "cpu");
+    let ph = phase(&v, "checks");
+    assert_eq!(ph["status"], "planned");
+    assert_eq!(ph["role"], "short");
+    let argv = argv_of(&ph["commands"][0]);
+    assert!(argv.iter().any(|a| a == "/opt/reframe"), "{argv:?}");
+    assert!(argv.iter().any(|a| a == "/opt/checks"), "{argv:?}");
+    assert!(argv.iter().any(|a| a == "-r"), "{argv:?}");
+    let env = &ph["commands"][0]["env"];
+    assert_eq!(env["EB_PIPELINE_CHECK_RUN_ID"], "<run-id>");
+    assert_eq!(env["EB_PIPELINE_CHECK_STAGED"], "0");
+    assert!(env["EB_PIPELINE_CHECK_SOFTWARE"]
+        .as_str()
+        .unwrap()
+        .ends_with("/software"));
+    assert!(env["EB_PIPELINE_CHECK_MODULES"]
+        .as_str()
+        .unwrap()
+        .ends_with("/modules"));
+    assert_eq!(
+        env["EB_PIPELINE_CHECK_LOG_DIR"],
+        "/opt/eb/logs/<log-stamp>/cpu"
+    );
+
+    let plain = plan_of(MINIMAL, "Foo-1.0.eb\n", "cpu");
+    assert_eq!(phase(&plain, "checks")["status"], "not configured");
+    assert_eq!(phase(&plain, "checks")["reason"], "not configured");
+
+    let staged = format!("{MINIMAL}\n[checks]\ncommand = \"/opt/reframe\"\nwhen = \"staged\"\n");
+    let v = plan_of(&staged, "Foo-1.0.eb\n", "cpu");
+    assert_eq!(phase(&v, "checks")["status"], "not configured");
+    assert_eq!(
+        phase(&v, "checks")["reason"],
+        "no staged rebuild in this list"
+    );
+
+    let bad = format!("{MINIMAL}\n[checks]\ncommand = \"/opt/reframe\"\nwhen = \"always\"\n");
+    let s = site::parse(&bad).unwrap();
+    assert!(site::validate(&s, None)
+        .iter()
+        .any(|e| e.contains("checks.when")));
+
+    let quoted = format!("{MINIMAL}\n[checks]\ncommand = \"/opt/reframe -c '\"\n");
+    let s = site::parse(&quoted).unwrap();
+    assert!(site::validate(&s, None)
+        .iter()
+        .any(|e| e.contains("checks.command")));
+}
+
+#[test]
+fn checks_when_staged_plans_only_an_installed_rebuild() {
+    let d = tempfile::tempdir().unwrap();
+    let modules = d.path().join("modules");
+    let lua = modules.join("all/Foo/1.0-foss-2025a.lua");
+    std::fs::create_dir_all(lua.parent().unwrap()).unwrap();
+    std::fs::write(&lua, "-- module\n").unwrap();
+    let site = format!(
+        "{MINIMAL}\n[rebuild]\nstaged = true\n[checks]\ncommand = \"/opt/reframe\"\nwhen = \"staged\"\n"
+    )
+    .replace(
+        "name = \"cpu\"\n",
+        &format!("name = \"cpu\"\nmodules_root = \"{}\"\n", modules.display()),
+    );
+    let v = plan_of(&site, "Foo-1.0-foss-2025a.eb --rebuild\n", "cpu");
+    let ph = phase(&v, "checks");
+    assert_eq!(ph["status"], "planned");
+    assert_eq!(ph["commands"][0]["env"]["EB_PIPELINE_CHECK_STAGED"], "1");
+    assert!(argv_of(&ph["commands"][0])
+        .iter()
+        .any(|a| a == "/opt/reframe"));
 }

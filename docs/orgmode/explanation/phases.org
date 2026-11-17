@@ -16,7 +16,7 @@ The caller reads one exit status, and has to know from it what to do next, witho
 
 *** The phases, in order
 
-A run goes through =preflight=, =licences=, =shard=, =sources=, =admission=, =build=, =caches= and =logs=, in that order.
+A run goes through =preflight=, =licences=, =shard=, =sources=, =admission=, =build=, =checks=, =caches= and =logs=, in that order.
 A phase whose table is absent, or has =enabled = false=, is =not configured=, and the run passes over it.
 
 #+CAPTION: The phases of one run, and what each outcome does to the rest of it.
@@ -35,6 +35,13 @@ The =licences= phase records the gate that passed.
   A refusal after the last attempt skips the lines of that unit and of every later one, and the run exits 78, or 1 when a line failed before; any other failure of =stack admit= ends the run at once.
 - =build= starts the lines of a unit in list order.
   A line that fails keeps its logs, with =eb-keep-logs failed= when =[logs]= =keep_failed= is set, and the next line starts; so does the next line after a staged line that eb-staged-rebuild refused or left pending.
+- =checks= runs =[checks].command= once, after a clean build and before caches, on the short launch line.
+  =when = "clean"=, the default, runs after every clean build.
+  =when = "staged"= runs only when the list rebuilds an installed module; otherwise the phase is not configured, with the reason =no staged rebuild in this list=.
+  A non-zero status fails the run and skips caches.
+  A build that did not finish cleanly does not start the command.
+  The swapped tree stays where the rebuild left it; =eb-staged-rebuild rollback= puts the previous generation back.
+  A site points the command at the regression suite it already runs, for example =reframe -C /opt/site/reframe/config.py -c /opt/site/checks -r= with =when = "staged"=.
 - =caches= runs only after a clean build, and =logs= rotates the log tree, as [[file:log-rotation.org][Why the rotation takes two locks]] describes.
 
 *** Units, one at a time

@@ -117,7 +117,7 @@ Where a run reads a value when it starts, the plan shows a stand-in: =<run-id>= 
 |------------+--------+----------------------------------------------------------------------------------------------------------------------------------|
 | =commands= | array  | The commands of the phase, in the order a run starts them.                                                                       |
 | =env=      | object | The environment of the phase, which each of its commands gets.                                                                   |
-| =name=     | string | =preflight=, =licences=, =shard=, =sources=, =admission=, =build=, =caches= or =logs=.                                           |
+| =name=     | string | =preflight=, =licences=, =shard=, =sources=, =admission=, =build=, =checks=, =caches= or =logs=.                                |
 | =reason=   | string | Why the phase is not planned; only then.                                                                                         |
 | =role=     | string | The role whose launch arguments its commands take, such as =build= or =short=; only for a phase that has one.                    |
 | =status=   | string | =planned=, =not configured=, or =refused= for an admission that =admission.required= asks for when the site file cannot give it. |
@@ -128,7 +128,7 @@ Where a run reads a value when it starts, the plan shows a stand-in: =<run-id>= 
 |--------+-----------------+---------------------------------------------------------------------------------------------------------------------------|
 | =argv= | array of string | The whole command: the route, the launch line and the module wrapper when there are any, then the tool and its arguments. |
 | =env=  | object          | Variables set over the phase environment for this command; only when there are some.                                      |
-| =name= | string          | =probe:TOOL=, =shard=, =fetch:STEM=, =admit:UNIT=, =build:STEM=, =keep-failed:STEM=, =cache= or =rotate=.                 |
+| =name= | string          | =probe:TOOL=, =shard=, =fetch:STEM=, =admit:UNIT=, =build:STEM=, =keep-failed:STEM=, =check=, =cache= or =rotate=.        |
 | =note= | string          | What to know about the command, such as what its exit statuses mean; only when there is something.                        |
 
 =STEM= is the easyconfig file name without =.eb=, with =.2=, =.3= and so on added when the list repeats a line.

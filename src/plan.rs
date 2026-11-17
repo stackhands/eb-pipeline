@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Cmd {
     /// What it is: `probe:<tool>`, `shard`, `fetch:<stem>`, `admit:<unit>`,
-    /// `build:<stem>`, `keep-failed:<stem>`, `cache` or `rotate`.
+    /// `build:<stem>`, `keep-failed:<stem>`, `check`, `cache` or `rotate`.
     pub name: String,
     /// Full argument vector: launch prefix, module wrapper, tool.
     pub argv: Vec<String>,
@@ -91,13 +91,14 @@ pub struct Deselected {
 }
 
 /// Every phase, in the order a run goes through them.
-pub const PHASES: [&str; 8] = [
+pub const PHASES: [&str; 9] = [
     "preflight",
     "licences",
     "shard",
     "sources",
     "admission",
     "build",
+    "checks",
     "caches",
     "logs",
 ];
@@ -764,6 +765,68 @@ impl<'a> Planner<'a> {
         PathBuf::from(&self.site().filesystems.log_root).join(".eb-keep-logs-rotate.lock")
     }
 
+    /// Whether any kept line rebuilds an installed module.
+    pub fn any_staged(&self, lines: &[ListLine]) -> Result<bool, Fail> {
+        let (kept, _) = self.select_lines(lines)?;
+        Ok(kept.iter().any(|l| self.is_staged(l)))
+    }
+
+    /// Why the checks phase is absent, when `check_cmd` returns none.
+    pub fn checks_reason(&self, any_staged: bool) -> &'static str {
+        let Some(c) = self.site().checks_on() else {
+            return "not configured";
+        };
+        let empty = c
+            .command
+            .as_ref()
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(true);
+        if empty {
+            return "not configured";
+        }
+        if c.when == "staged" && !any_staged {
+            return "no staged rebuild in this list";
+        }
+        "not configured"
+    }
+
+    /// The site test command, or none when the phase does not apply.
+    pub fn check_cmd(&self, any_staged: bool) -> Result<Option<Cmd>, Fail> {
+        let Some(c) = self.site().checks_on() else {
+            return Ok(None);
+        };
+        let Some(command) = c.command.as_ref().filter(|s| !s.trim().is_empty()) else {
+            return Ok(None);
+        };
+        if c.when == "staged" && !any_staged {
+            return Ok(None);
+        }
+        let mut env = BTreeMap::new();
+        env.insert(
+            "EB_PIPELINE_CHECK_SOFTWARE".into(),
+            self.scope.software_root(),
+        );
+        env.insert(
+            "EB_PIPELINE_CHECK_MODULES".into(),
+            self.scope.modules_root(),
+        );
+        env.insert("EB_PIPELINE_CHECK_RUN_ID".into(), self.scope.run_id.clone());
+        env.insert("EB_PIPELINE_CHECK_LOG_DIR".into(), self.scope.log_dir());
+        env.insert(
+            "EB_PIPELINE_CHECK_STAGED".into(),
+            if any_staged { "1" } else { "0" }.into(),
+        );
+        let mut argv = self.scope.launch_with(Role::Short, "checks", None)?;
+        argv.extend(self.scope.module_wrap());
+        argv.extend(crate::util::split_args(command)?);
+        Ok(Some(Cmd {
+            name: "check".into(),
+            argv,
+            env,
+            note: Some(format!("when={}", c.when)),
+        }))
+    }
+
     /// The cache command of the target's `[[caches.targets]]` entry; `None`
     /// without an active `[caches]`, its `command` or such an entry.
     pub fn cache_cmd(&self) -> Result<Option<Cmd>, Fail> {
@@ -952,6 +1015,12 @@ pub fn build_plan(
         }
     }
     phases.push(planned("build", Some(Role::Build), cmds));
+
+    let any_staged = units.iter().flat_map(|u| &u.lines).any(|l| p.is_staged(l));
+    phases.push(match p.check_cmd(any_staged)? {
+        Some(c) => planned("checks", Some(Role::Short), vec![c]),
+        None => skip("checks", p.checks_reason(any_staged)),
+    });
 
     phases.push(match p.cache_cmd()? {
         Some(c) => planned("caches", Some(Role::Cache), vec![c]),

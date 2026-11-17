@@ -2340,3 +2340,129 @@ fn installed_modules_dirs_come_from_the_environment_at_run_time() {
     assert!(calls(&env, "eb-stack.calls").is_empty());
     assert!(calls(&env, "eb.calls").is_empty());
 }
+
+const CHECK: &str = r#"#!/bin/sh
+D="${STUB_DIR:?}"
+echo "$*" >> "$D/check.calls"
+env | grep '^EB_PIPELINE_CHECK_' | sort > "$D/check.env"
+exit "${STUB_CHECK_CODE:-0}"
+"#;
+
+const CACHE_STUB: &str = "#!/bin/sh\necho called >> \"${STUB_DIR:?}/cache.calls\"\nexit 0\n";
+
+/// A site whose check command is the stub, with `CHECKBIN` replaced.
+fn with_check(extra: &str) -> Env {
+    let env = setup(extra);
+    let bin = env.stubs.join("check");
+    write_exec(&bin, CHECK);
+    let text = std::fs::read_to_string(&env.site)
+        .unwrap()
+        .replace("CHECKBIN", &bin.display().to_string());
+    std::fs::write(&env.site, text).unwrap();
+    env
+}
+
+fn phase_status(r: &Value, name: &str) -> String {
+    r["phases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == name)
+        .unwrap()["status"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn a_clean_build_runs_the_check_command() {
+    let env = with_check("[checks]\ncommand = \"CHECKBIN -c /opt/checks\"\n");
+    let o = go(&env, LIST, &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(
+        calls(&env, "check.calls"),
+        vec!["-c /opt/checks".to_string()]
+    );
+    let r = o.result.unwrap();
+    assert_eq!(phase_status(&r, "checks"), "ok");
+    let recorded = std::fs::read_to_string(env.dir.path().join("check.env")).unwrap();
+    assert!(
+        recorded.contains("EB_PIPELINE_CHECK_STAGED=0\n"),
+        "{recorded}"
+    );
+    assert!(
+        recorded.contains("EB_PIPELINE_CHECK_RUN_ID=r1\n"),
+        "{recorded}"
+    );
+    assert!(
+        recorded.contains("EB_PIPELINE_CHECK_SOFTWARE="),
+        "{recorded}"
+    );
+    assert!(
+        recorded.contains("EB_PIPELINE_CHECK_MODULES="),
+        "{recorded}"
+    );
+}
+
+#[test]
+fn a_failed_check_fails_the_run_and_skips_caches() {
+    let env = with_check(
+        "[checks]\ncommand = \"CHECKBIN\"\n[caches]\ncommand = \"CACHEBIN\"\n[[caches.targets]]\ntarget = \"cpu\"\nconfig = \"/opt/c\"\n",
+    );
+    let cache = env.stubs.join("cache");
+    write_exec(&cache, CACHE_STUB);
+    let text = std::fs::read_to_string(&env.site)
+        .unwrap()
+        .replace("CACHEBIN", &cache.display().to_string());
+    std::fs::write(&env.site, text).unwrap();
+    let o = go(&env, LIST, &[("STUB_CHECK_CODE", "7")]);
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    assert!(calls(&env, "cache.calls").is_empty());
+    let r = o.result.unwrap();
+    assert_eq!(phase_status(&r, "checks"), "failed");
+    assert_eq!(
+        r["phases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == "checks")
+            .unwrap()["exit_code"],
+        7
+    );
+    assert_eq!(phase_status(&r, "caches"), "skipped");
+}
+
+#[test]
+fn a_failed_build_does_not_run_the_check() {
+    let env = with_check("[checks]\ncommand = \"CHECKBIN\"\n");
+    let o = go(
+        &env,
+        "Foo-1.0-foss-2025a.eb\n",
+        &[("STUB_EB_FAIL", "Foo-1.0-foss-2025a")],
+    );
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    assert!(calls(&env, "check.calls").is_empty());
+    assert_eq!(phase_status(&o.result.unwrap(), "checks"), "skipped");
+}
+
+#[test]
+fn staged_checks_run_only_after_a_staged_rebuild() {
+    let env = with_check(
+        "[rebuild]\nstaged = true\n[checks]\ncommand = \"CHECKBIN\"\nwhen = \"staged\"\n",
+    );
+    let o = go(&env, "Foo-1.0-foss-2025a.eb\n", &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(calls(&env, "check.calls").is_empty());
+    assert_eq!(phase_status(&o.result.unwrap(), "checks"), "not configured");
+
+    install_module(&env, "Foo/1.0-foss-2025a.lua");
+    let o = go(&env, "Foo-1.0-foss-2025a.eb --rebuild\n", &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(calls(&env, "staged.calls").len(), 1);
+    assert_eq!(calls(&env, "check.calls").len(), 1);
+    let recorded = std::fs::read_to_string(env.dir.path().join("check.env")).unwrap();
+    assert!(
+        recorded.contains("EB_PIPELINE_CHECK_STAGED=1\n"),
+        "{recorded}"
+    );
+}
