@@ -46,7 +46,8 @@ cargo build --locked
 bash docs/examples/tutorial.sh
 #+end_src
 
-The =docs= job of the =ci= workflow runs every one of them.
+The =docs= job of the =ci= workflow runs every one of them but =install.sh=, which downloads release 0.3.0 and builds a clone of the checkout with =cargo install=.
+Run that one by hand when the install steps change, with a Rust toolchain of 1.90 or newer, as =RUSTUP_TOOLCHAIN=1.90.0 bash docs/examples/install.sh=.
 
 ** Build the documentation
 

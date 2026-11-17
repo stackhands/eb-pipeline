@@ -11,4 +11,5 @@ The title names the task.
 .. toctree::
    :maxdepth: 1
 
+   install
 #+end_export
