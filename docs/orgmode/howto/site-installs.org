@@ -1,0 +1,89 @@
+#+TITLE: Let users load what a target installs on top of EESSI
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Let users load what a target installs on top of EESSI
+
+Make what the targets of a site file install on top of the European Environment for Scientific Software Installations (EESSI) loadable by the users of each target's nodes, in their shells and in their jobs.
+The EESSI module adds a site tree to =MODULEPATH= from =EESSI_SITE_SOFTWARE_PREFIX= as it loads: =PREFIX/versions/RELEASE/software/linux/CPU_TARGET/modules/all=, for the CPU target it loads for, when that directory exists.
+Without the variable, it takes the =host_injections= tree of the EESSI repository instead, so a run that installed every line can leave users without any of it.
+
+** Before you start
+
+- A site file whose targets install on top of EESSI, with =[modules.eessi]= and =site_install = true=, as the =eessi-site= template of [[file:../reference/templates.org][The site file templates]] has.
+- A way to set a variable in the environment of users on the nodes before EESSI loads there, such as a file in =/etc/profile.d=.
+- For step 2, where eessi-arch-guard is the Slurm =TaskProlog=, a shell with EESSI loaded.
+
+The site file on this page builds for the =zen2= and =zen4= nodes of Example University, each with a site prefix of its own:
+
+#+INCLUDE: "site-installs/site.toml" src toml
+
+** Steps
+
+1. Read the prefix and the CPU target that each target's builds install for, and the tree that EESSI-extend installs them into:
+
+   #+begin_src bash
+   for t in $(eb-pipeline targets --site site.toml); do
+       eb-pipeline explain --site site.toml --target "$t" | grep -E "install_note|EESSI_SITE_SOFTWARE_PREFIX|EESSI_SOFTWARE_SUBDIR_OVERRIDE"
+   done
+   #+end_src
+
+   #+begin_example
+   install_note = "EESSI-extend replaces EASYBUILD_INSTALLPATH when it loads: /opt/site/zen2/versions/<release>/software/linux/x86_64/amd/zen2"
+   EESSI_SITE_SOFTWARE_PREFIX = "/opt/site/zen2"
+   EESSI_SOFTWARE_SUBDIR_OVERRIDE = "x86_64/amd/zen2"
+   install_note = "EESSI-extend replaces EASYBUILD_INSTALLPATH when it loads: /opt/site/zen4/versions/<release>/software/linux/x86_64/amd/zen4"
+   EESSI_SITE_SOFTWARE_PREFIX = "/opt/site/zen4"
+   EESSI_SOFTWARE_SUBDIR_OVERRIDE = "x86_64/amd/zen4"
+   #+end_example
+
+   =run= exports both variables to every command of a target: =EESSI_SITE_SOFTWARE_PREFIX= is its =site_prefix=, or =filesystems.install_root= when it sets none, and =EESSI_SOFTWARE_SUBDIR_OVERRIDE= is its =cpu_target=.
+   Users see what a target installed when their EESSI module loads with the same prefix, for the same CPU target.
+2. Check that the =cpu_target= of each target is the CPU target that jobs load on its nodes.
+   With eessi-arch-guard as the Slurm =TaskProlog=, that is the target the guard selects for a task, which can differ from the one EESSI selects on the same CPU; a task prints it, here on a =zen4= node:
+
+   #+begin_src bash
+   srun -p cpu -C zen4 -N 1 printenv EESSI_SOFTWARE_SUBDIR
+   #+end_src
+
+   It should print =x86_64/amd/zen4=.
+   Any other target means that =cpu_target= does not match the nodes: set it to the target that the task printed, and build the target's lists again, as a tree built for a CPU target that jobs do not load is on no user's =MODULEPATH=.
+3. Set the target's prefix before EESSI loads, in the environment that users get on its nodes, for example from a file in =/etc/profile.d= that runs before the one that loads EESSI; on the =zen4= nodes:
+
+   #+begin_src bash
+   export EESSI_SITE_SOFTWARE_PREFIX=/opt/site/zen4
+   #+end_src
+
+   A Slurm job starts, by default, with the environment of the shell that submitted it, so a job submitted with the prefix of one target keeps it on the nodes of another, where EESSI finds no tree under it.
+   Targets that share one =site_prefix= need one value on every node, as the tree under it is per CPU target already; with staged rebuilds, each of them then sets =software_root= and =modules_root= to its own tree, as =check= says.
+
+** Check that it worked
+
+In a job on a node of the target, the EESSI module names the site tree it took, and =module avail= lists its module directory:
+
+#+begin_src bash
+srun -p cpu -C zen4 -N 1 bash -c 'echo "$EESSI_SITE_SOFTWARE_PATH"; module -t avail 2>&1 | grep "^$EESSI_SITE_SOFTWARE_PATH"'
+#+end_src
+
+On a =zen4= node, the first line is the tree that the =install_note= of =zen4= names, with the EESSI release in place of =<release>=.
+The second line is the =modules/all= directory of that tree, with a colon after it, once the target has installed a module there.
+
+** If it fails
+
+| Message                                                                                   | Cause                                                                                                                   | What to do                                                                                |
+|-------------------------------------------------------------------------------------------+-------------------------------------------------------------------------------------------------------------------------+-------------------------------------------------------------------------------------------|
+| =EESSI_SITE_SOFTWARE_PATH= is under =/cvmfs/software.eessi.io/host_injections=            | =EESSI_SITE_SOFTWARE_PREFIX= was not set when EESSI loaded.                                                             | Set it before EESSI loads, as in step 3, and start a new shell.                           |
+| =EESSI_SITE_SOFTWARE_PATH= starts with the prefix of another target                       | The job kept the prefix of the shell that submitted it.                                                                 | Submit from a shell with the prefix of the target, or give the targets one =site_prefix=. |
+| =EESSI_SITE_SOFTWARE_PATH= ends in another CPU target than the =cpu_target= of the target | The task loaded EESSI for another CPU target than the one the target builds for.                                        | Set =cpu_target= to the target that the task prints, as in step 2, and build again.       |
+| No second line                                                                            | Nothing is installed in that tree: the target has not installed a module yet, or the prefix is not mounted on the node. | Compare the tree with the =install_note= of the target, and check the mount.              |
+| =Exited with exit code 1=, from =srun=, and no target                                     | The shell that ran =srun= had no EESSI loaded, so the task has no =EESSI_SOFTWARE_SUBDIR=.                              | Load EESSI first, as users do.                                                            |
+
+The output of step 1 comes from =docs/examples/site-installs.sh=; the other commands need a cluster with EESSI.
+
+** Related
+
+- [[file:../reference/environment.org][Environment variables]], for what =[modules.eessi]= exports
+- [[file:../reference/site-file.org][The site file]], for =site_prefix=, =cpu_target= and =[modules.eessi]=
+- [[file:../reference/templates.org][The site file templates]], for =eessi-site=
+- [[file:build-from-ci.org][Build a list on every target from continuous integration]]
+- The [[https://stackhands.github.io/eessi-arch-guard/][eessi-arch-guard documentation]], for the CPU target a task gets
