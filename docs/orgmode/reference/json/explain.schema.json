@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stackhands.github.io/eb-pipeline/reference/json/explain.schema.json",
+  "title": "eb-pipeline explain --format json",
+  "type": "object",
+  "required": ["site", "targets"],
+  "properties": {
+    "site": { "type": "object" },
+    "scheduler": { "type": "object" },
+    "targets": {
+      "type": "array",
+      "items": { "type": "object" }
+    }
+  }
+}

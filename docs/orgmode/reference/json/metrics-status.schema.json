@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stackhands.github.io/eb-pipeline/reference/json/metrics-status.schema.json",
+  "title": "eb-pipeline metrics --format json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "site",
+    "target",
+    "build_type",
+    "run_id",
+    "sharded",
+    "exit_code",
+    "ok",
+    "counts",
+    "phases"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "status" },
+    "site": { "type": "string" },
+    "target": { "type": "string" },
+    "build_type": { "type": "string" },
+    "run_id": { "type": "string" },
+    "sharded": { "type": "boolean" },
+    "exit_code": { "type": "integer" },
+    "ok": { "type": "boolean" },
+    "counts": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "phases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "status"],
+        "properties": {
+          "name": { "type": "string" },
+          "status": { "type": "string" }
+        }
+      }
+    }
+  }
+}

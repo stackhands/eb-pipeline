@@ -1,0 +1,1 @@
+`eb-pipeline check --format json` and `init --list --format json` add machine-readable stdout. JSON Schemas for check, template list, targets, status, metrics status, explain and plan live in `docs/orgmode/reference/json/`, with integration tests and a reference page that lists exit codes with JSON output.

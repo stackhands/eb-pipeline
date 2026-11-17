@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stackhands.github.io/eb-pipeline/reference/json/templates.schema.json",
+  "title": "eb-pipeline init --list --format json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "templates"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "templates" },
+    "templates": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "summary"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "summary": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

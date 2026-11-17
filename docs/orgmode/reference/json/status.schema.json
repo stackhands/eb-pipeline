@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stackhands.github.io/eb-pipeline/reference/json/status.schema.json",
+  "title": "eb-pipeline status --format json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "log_root", "runs"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "status" },
+    "log_root": { "type": "string" },
+    "runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["run", "dir"],
+        "properties": {
+          "run": { "type": "string" },
+          "dir": { "type": "string" },
+          "summary": { "type": "object" },
+          "error": { "type": "string" }
+        }
+      }
+    }
+  }
+}

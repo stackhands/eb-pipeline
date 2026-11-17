@@ -52,7 +52,7 @@ Options:
 
 Examples:
   eb-pipeline init --template small-cluster --out site.toml
-  eb-pipeline check --site site.toml
+  eb-pipeline check --site site.toml --format json
   eb-pipeline targets --site site.toml --format json
   eb-pipeline plan --site site.toml --list list.txt --target cpu --build-type production --out plan.json
   eb-pipeline run --site site.toml --list list.txt --target cpu --build-type production --result result.json
@@ -68,7 +68,8 @@ EB_PIPELINE__FILESYSTEMS__SCRATCH=/scratch/eb; the result is validated like the
 file.
 
 Output streams: stdout carries plan, explain, schema, init, status, targets and
-metrics, and run --dry-run or watch --dry-run output only. Events go to stderr
+metrics, check --format json, init --list --format json, and run --dry-run or
+watch --dry-run output only. Events go to stderr
 as `LEVEL [phase] target: message`. The result JSON goes to --result, and each
 run's summary to summary.json and summary.html in its run directory,
 <log_root>/<log-stamp>/. `metrics` exits 0 when it can read the file, including
@@ -135,6 +136,7 @@ An option with a variable in the table takes its value from that variable when t
 | =--site FILE=     | =EB_PIPELINE_SITE=      | The site file; required.                                                                                                                                                                                                           |
 | =--lists-dir DIR= | =EB_PIPELINE_LISTS_DIR= | A directory that must hold every file that the =build_lists= of a target names. A missing file is an error of the site file.                                                                                                       |
 | =--probe-tools=   |                         | Start =BIN --version= for each sibling tool that an enabled phase calls, and fail when one cannot start, prints no version, or prints one below the =min_version= of its =[site.tools]= table. Without it, =check= starts nothing. |
+| =--format FORMAT= |                         | =text=, the default, keeps stdout empty; =json= prints one check document. [[file:json-output.org][Machine-readable command output]] gives the schema and exit codes. |
 
 =check= writes =INFO [check] NAME: site file is valid= to stderr when the file is valid, where =NAME= is =site.name=.
 Before that line it writes a =WARN= line for each of these settings:
@@ -154,7 +156,8 @@ the key, its type, whether it is required or its default, and what it does.
 | Option            | Meaning                                                                                                                                                                      |
 |-------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | =--template NAME= | The template to print; required unless =--list= is given.                                                                                                                    |
-| =--list=          | Print the name and summary of each template, one per line, and nothing else.                                                                                                 |
+| =--list=          | Print the name and summary of each template. With =--format text=, one line per template; with =--format json=, one JSON document.                                                                 |
+| =--format FORMAT= | With =--list= only: =text=, the default, or =json=; see [[file:json-output.org][Machine-readable command output]].                                                                                 |
 | =--out FILE=      | Write the template to =FILE= instead of stdout, and write =INFO [init] -: wrote template NAME to FILE= to stderr. =-= is stdout. An existing =FILE= is refused, with exit 2. |
 
 [[file:templates.org][The site file templates]] shows each template.

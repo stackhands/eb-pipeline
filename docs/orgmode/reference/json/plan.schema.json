@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stackhands.github.io/eb-pipeline/reference/json/plan.schema.json",
+  "title": "eb-pipeline plan output",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "site",
+    "target",
+    "build_type",
+    "run_id",
+    "list",
+    "log_dir",
+    "lines",
+    "phases"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "plan" },
+    "site": { "type": "string" },
+    "target": { "type": "string" },
+    "build_type": { "type": "string" },
+    "run_id": { "type": "string" },
+    "list": { "type": "string" },
+    "log_dir": { "type": "string" },
+    "lines": { "type": "integer", "minimum": 0 },
+    "selected": { "type": "integer", "minimum": 0 },
+    "selected_list": { "type": "string" },
+    "phases": { "type": "array" },
+    "deselected": { "type": "array" }
+  }
+}

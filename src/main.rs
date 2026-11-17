@@ -4,7 +4,8 @@ use eb_pipeline::plan::{build_plan, read_units, Planner};
 use eb_pipeline::resolve::{explain, Scope};
 use eb_pipeline::run::{install_handlers, log, run, Options, RunResult};
 use eb_pipeline::{
-    easystack, eessi, metrics, notify, sbom, schema, site, summary, templates, tools, util, watch,
+    check_out, easystack, eessi, init_out, metrics, notify, sbom, schema, site, summary, templates,
+    tools, util, watch,
 };
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -12,7 +13,7 @@ use std::path::{Path, PathBuf};
 const ROOT_HELP: &str = "\
 Examples:
   eb-pipeline init --template small-cluster --out site.toml
-  eb-pipeline check --site site.toml
+  eb-pipeline check --site site.toml --format json
   eb-pipeline targets --site site.toml --format json
   eb-pipeline plan --site site.toml --list list.txt --target cpu --build-type production --out plan.json
   eb-pipeline run --site site.toml --list list.txt --target cpu --build-type production --result result.json
@@ -28,7 +29,8 @@ EB_PIPELINE__FILESYSTEMS__SCRATCH=/scratch/eb; the result is validated like the
 file.
 
 Output streams: stdout carries plan, explain, schema, init, status, targets and
-metrics, and run --dry-run or watch --dry-run output only. Events go to stderr
+metrics, check --format json, init --list --format json, and run --dry-run or
+watch --dry-run output only. Events go to stderr
 as `LEVEL [phase] target: message`. The result JSON goes to --result, and each
 run's summary to summary.json and summary.html in its run directory,
 <log_root>/<log-stamp>/. `metrics` exits 0 when it can read the file, including
@@ -79,6 +81,9 @@ enum Cmd {
         /// Run each needed tool's `--version` and enforce min_version.
         #[arg(long)]
         probe_tools: bool,
+        /// `text`: stderr only, no stdout; `json`: one JSON document on stdout.
+        #[arg(long, value_enum, default_value_t = TextOrJson::Text)]
+        format: TextOrJson,
     },
     /// Print the site file reference: every key, type, default and meaning.
     Schema,
@@ -90,6 +95,9 @@ enum Cmd {
         /// Print the template names and summaries.
         #[arg(long)]
         list: bool,
+        /// With `--list`: `text` prints one line per template; `json` prints one document.
+        #[arg(long, value_enum, default_value_t = TextOrJson::Text)]
+        format: TextOrJson,
         /// Write here; absent or `-` prints on stdout. An existing file is refused.
         #[arg(long)]
         out: Option<PathBuf>,
@@ -295,7 +303,35 @@ fn site_file(path: &Path) -> Option<String> {
         .and_then(|p| p.to_str().map(str::to_string))
 }
 
-fn cmd_check(site_path: &Path, lists_dir: Option<&Path>, probe: bool) -> Result<i32, Fail> {
+fn cmd_check(
+    site_path: &Path,
+    lists_dir: Option<&Path>,
+    probe: bool,
+    format: TextOrJson,
+) -> Result<i32, Fail> {
+    if matches!(format, TextOrJson::Json) {
+        let (doc, code) = check_out::document(site_path, lists_dir, probe)?;
+        let site_name = doc.get("site").and_then(|v| v.as_str()).unwrap_or("-");
+        if let Some(problems) = doc.get("problems").and_then(|v| v.as_array()) {
+            for p in problems {
+                if let Some(m) = p.as_str() {
+                    log("ERROR", "check", site_name, m);
+                }
+            }
+        }
+        if let Some(warns) = doc.get("warnings").and_then(|v| v.as_array()) {
+            for w in warns {
+                if let Some(m) = w.get("message").and_then(|v| v.as_str()) {
+                    log("WARN", "check", site_name, m);
+                }
+            }
+        }
+        write_json(&doc, None)?;
+        if code == exit::OK {
+            log("INFO", "check", site_name, "site file is valid");
+        }
+        return Ok(code);
+    }
     let s = load_valid(site_path, lists_dir)?;
     let m = &s.modules;
     if let Some(first) = m
@@ -413,10 +449,20 @@ fn cmd_metrics(path: &Path, format: StatusFormat) -> Result<i32, Fail> {
     Ok(exit::OK)
 }
 
-fn cmd_init(template: Option<&str>, list: bool, out: Option<&Path>) -> Result<i32, Fail> {
+fn cmd_init(
+    template: Option<&str>,
+    list: bool,
+    list_format: TextOrJson,
+    out: Option<&Path>,
+) -> Result<i32, Fail> {
     if list {
-        for t in templates::TEMPLATES {
-            println!("{:<16} {}", t.name, t.summary);
+        match list_format {
+            TextOrJson::Text => {
+                for t in templates::TEMPLATES {
+                    println!("{:<16} {}", t.name, t.summary);
+                }
+            }
+            TextOrJson::Json => write_json(&init_out::templates_json(), None)?,
         }
         return Ok(exit::OK);
     }
@@ -970,7 +1016,8 @@ fn main() {
             site,
             lists_dir,
             probe_tools,
-        } => cmd_check(site, lists_dir.as_deref(), *probe_tools),
+            format,
+        } => cmd_check(site, lists_dir.as_deref(), *probe_tools, *format),
         Cmd::Schema => {
             print!("{}", schema::reference());
             Ok(exit::OK)
@@ -978,8 +1025,9 @@ fn main() {
         Cmd::Init {
             template,
             list,
+            format,
             out,
-        } => cmd_init(template.as_deref(), *list, out.as_deref()),
+        } => cmd_init(template.as_deref(), *list, *format, out.as_deref()),
         Cmd::Explain {
             site,
             target,

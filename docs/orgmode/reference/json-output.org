@@ -1,0 +1,40 @@
+#+TITLE: Machine-readable command output
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Machine-readable command output
+
+Commands that scripts drive take =--format json= where the tables below say so.
+=plan= always writes JSON to stdout or =--out=.
+Each document has a =schema_version= and a =kind= when it is an object.
+The sibling binaries =eb-cvmfs=, =eb-junit=, =eb-retry-list=, =eb-shard-weights= and =eb-test-map= print text or another format only; this page covers =eb-pipeline=.
+
+** JSON Schema files
+
+Draft 2020-12 schemas live beside this page:
+
+| Command | Schema file | Notes |
+|---------+-------------+-------|
+| =check --format json= | =json/check.schema.json= | One object; =valid= is =false= and =problems= lists site errors while exit stays 2 |
+| =init --list --format json= | =json/templates.schema.json= | Built-in template names and summaries |
+| =targets --format json= | =json/targets.schema.json= | A JSON array of target names on one line |
+| =status --format json= | =json/status.schema.json= | Newest runs under the log root; [[file:run-summary.org][The run summary]] describes =summary= payloads |
+| =metrics --format json= | =json/metrics-status.schema.json= | Short status from a =result= file; Prometheus remains the default |
+| =explain --format json= | =json/explain.schema.json= | Resolved configuration per target |
+| =plan= | =json/plan.schema.json= | Full plan; [[file:plan-and-result.org][The plan and result files]] lists every key |
+
+** Exit codes with JSON on stdout
+
+Invalid arguments still exit 2 before any command runs; there is no JSON in that case.
+
+| Command | JSON on stdout | Exit 0 | Exit 1 | Exit 2 | Other |
+|---------+----------------+--------+--------+--------+-------|
+| =check --format json= | Always when the site path is given | Site file valid (warnings allowed) | — | Site file invalid, unreadable, or =--probe-tools= failed | Same as [[file:exit-status.org][Exit status]] without JSON |
+| =init --list --format json= | Always | Listed templates | — | Unknown option | — |
+| =targets --format json= | On success | Valid site | — | Invalid site or option | — |
+| =status --format json= | On success | Read log root (empty list allowed) | — | Invalid option or unreadable log root | — |
+| =metrics --format json= | When the result file parses | File read | — | Missing file, bad JSON, wrong =kind= | — |
+| =explain --format json= | On success | Resolved config | — | Invalid site or target | — |
+| =plan= | On success | Plan built | — | Invalid inputs or shard plan | 78 when only licence problems block =run=; =plan= itself exits 2 |
+
+=run --result= and =watch --result= write a result object documented in [[file:plan-and-result.org][The plan and result files]]; they are not printed on stdout.
