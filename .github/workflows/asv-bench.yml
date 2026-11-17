@@ -1,0 +1,81 @@
+name: asv-bench
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install ASV
+        run: python -m pip install --disable-pip-version-check asv
+
+      - name: Build baseline and head binaries
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git worktree add /tmp/eb-pipeline-base "$BASE_SHA"
+          git worktree add /tmp/eb-pipeline-head "$HEAD_SHA"
+          cargo build --release --locked --manifest-path /tmp/eb-pipeline-base/Cargo.toml
+          cargo build --release --locked --manifest-path /tmp/eb-pipeline-head/Cargo.toml
+          cp /tmp/eb-pipeline-base/target/release/eb-pipeline /tmp/eb-pipeline-base-bin
+          cp /tmp/eb-pipeline-head/target/release/eb-pipeline /tmp/eb-pipeline-head-bin
+          git worktree remove --force /tmp/eb-pipeline-base
+          git worktree remove --force /tmp/eb-pipeline-head
+
+      - name: Run ASV for baseline
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BENCH_EB_PIPELINE_BIN: /tmp/eb-pipeline-base-bin
+        run: |
+          set -euo pipefail
+          asv machine --yes
+          asv run -E "existing:$(which python)" --set-commit-hash "$BASE_SHA" --record-samples --quick
+
+      - name: Run ASV for pull request
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BENCH_EB_PIPELINE_BIN: /tmp/eb-pipeline-head-bin
+        run: |
+          set -euo pipefail
+          asv run -E "existing:$(which python)" --set-commit-hash "$HEAD_SHA" --record-samples --quick
+
+      - name: Write benchmark metadata
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p .asv/results
+          {
+            printf 'base_sha=%s\n' "$BASE_SHA"
+            printf 'main_sha=%s\n' "$BASE_SHA"
+            printf 'pr_sha=%s\n' "$HEAD_SHA"
+          } > .asv/results/metadata.txt
+
+      - uses: HaoZeke/asv-perch@v1.2.2
+        with:
+          github-token: ${{ github.token }}
+          results-path: .asv/results
+          metadata-file: .asv/results/metadata.txt

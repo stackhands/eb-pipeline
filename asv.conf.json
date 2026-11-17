@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "project": "eb-pipeline",
+  "project_url": "https://github.com/stackhands/eb-pipeline",
+  "repo": ".",
+  "branches": [
+    "main"
+  ],
+  "benchmark_dir": "benchmarks",
+  "results_dir": ".asv/results",
+  "environment_type": "existing",
+  "matrix": {},
+  "show_commit_url": "https://github.com/stackhands/eb-pipeline/commit/"
+}
