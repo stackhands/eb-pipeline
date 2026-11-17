@@ -1,12 +1,22 @@
 #!/bin/bash
 # The commands of the tutorial, docs/orgmode/tutorials/first-build-list.org,
-# in order, from "Install eb-pipeline" on; lib.sh puts the eb-pipeline of this
-# checkout where `cargo install` puts it. Checks the exit statuses and the
-# lines the page explains.
+# in order; lib.sh puts the eb-pipeline of this checkout where
+# `cargo install` puts it. Checks the exit statuses and the lines the page
+# explains. The page shows `cargo --version` of Rust 1.90.0, as in
+# RUSTUP_TOOLCHAIN=1.90.0 bash docs/examples/tutorial.sh.
 # shellcheck disable=SC2016 # commands stay quoted as the page shows them
+
+# lib.sh moves HOME and PATH; keep the toolchain of the user who runs this.
+cargo=$(command -v cargo)
+export RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}
+export CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}
 # shellcheck source-path=SCRIPTDIR source=lib.sh
 . "$(dirname -- "$0")/lib.sh"
 snippets=$pages/tutorials/first-build-list
+PATH=$PATH:$(dirname -- "$cargo")
+
+run 'cargo --version'
+expect_status 0
 
 run 'eb-pipeline --version'
 expect_status 0
