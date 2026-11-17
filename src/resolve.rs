@@ -498,12 +498,16 @@ impl<'a> Scope<'a> {
 /// environment, never through interpolation. The site's init is sourced
 /// without `-e` or `-u`, as a login shell sources it: EESSI's Lmod init
 /// reads variables it never sets. `module` and the command run under `-e`.
+/// The names are split with pathname expansion off, so that `module load`
+/// gets each one as written, and back on for `module load` itself.
 pub const MODULE_SCRIPT: &str =
     "if [ -n \"${EB_PIPELINE_SHELL_INIT:-}\" ]; then . \"$EB_PIPELINE_SHELL_INIT\"; fi
 set -e
 if [ -n \"${EB_PIPELINE_UNUSE_PATH:-}\" ]; then MODULEPATH=; export MODULEPATH; fi
 module purge
-for m in ${EB_PIPELINE_MODULES:-}; do module load \"$m\"; done
+set -f
+for m in ${EB_PIPELINE_MODULES:-}; do set +f; module load \"$m\"; done
+set +f
 exec \"$@\"";
 
 /// Group that applies to a package, if any. A version that does not parse

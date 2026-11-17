@@ -132,8 +132,10 @@ eb-pipeline run --site site.toml --list lists/zen4.list --target zen4 --build-ty
 set -e
 if [ -n "${EB_PIPELINE_UNUSE_PATH:-}" ]; then MODULEPATH=; export MODULEPATH; fi
 module purge
-for m in ${EB_PIPELINE_MODULES:-}; do module load "$m"; done
-exec "$@"' eb-pipeline eb Example-1.0-GCCcore-15.2.0.eb --tmp-logdir=/opt/site/logs/20261117_032712/zen4/easybuild-logs/Example-1.0-GCCcore-15.2.0
+set -f
+for m in ${EB_PIPELINE_MODULES:-}; do set +f; module load "$m"; done
+set +f
+exec "$@"' eb-pipeline eb Example-1.0-GCCcore-15.2.0.eb --tmp-logdir=/opt/site/logs/20261117_043420/zen4/easybuild-logs/Example-1.0-GCCcore-15.2.0
 ...
 # [caches] not configured
 [logs] TZ=UTC srun --job-name=example-production-logs -p cpu -N 1 --ntasks-per-node=1 -c 1 -t 15:00 eb-keep-logs rotate /opt/site/logs --compress-after 30 --delete-after 365 --lock-timeout 0

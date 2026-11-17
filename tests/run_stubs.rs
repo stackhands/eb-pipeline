@@ -2080,6 +2080,44 @@ fn a_command_that_runs_eb_pipeline_reads_the_site_file_of_the_run() {
     assert_eq!(file_text(&env, "targets.Foo-1.0-foss-2025a"), "cpu\n");
 }
 
+/// The module wrapper gives each name of `modules.init` to `module load` as
+/// written, in bash and in sh: a name with a `*` is not matched against the
+/// files it would name.
+#[test]
+fn the_module_wrapper_loads_each_name_as_written() {
+    for shell in ["bash", "sh"] {
+        let env = setup("");
+        let root = env.dir.path();
+        let r = root.display().to_string();
+        std::fs::create_dir(root.join("mods")).unwrap();
+        std::fs::write(root.join("mods/Example-1.0.lua"), "").unwrap();
+        std::fs::write(
+            root.join("module.sh"),
+            "module() { echo \"$*\" >> \"$STUB_DIR/module.calls\"; }\n",
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&env.site).unwrap().replace(
+            "[modules]\ninit = []",
+            &format!(
+                "[modules]\ninit = [\"{r}/mods/Example*\", \"Other/2.0\"]\nshell = \"{shell}\"\nshell_init = \"{r}/module.sh\""
+            ),
+        );
+        std::fs::write(&env.site, text).unwrap();
+        let o = go(&env, "Foo-1.0-foss-2025a.eb\n", &[]);
+        assert_eq!(o.code, 0, "{shell}: {}", o.stderr);
+        assert_eq!(
+            calls(&env, "module.calls"),
+            [
+                "purge".to_string(),
+                format!("load {r}/mods/Example*"),
+                "load Other/2.0".to_string()
+            ],
+            "{shell}"
+        );
+        assert_eq!(calls(&env, "eb.calls").len(), 1, "{shell}");
+    }
+}
+
 #[test]
 fn installed_modules_dirs_come_from_the_environment_at_run_time() {
     let site = "[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\ninstalled_modules_dirs = [\"@ROOT@/m\"]\ninstalled_modules_dirs_from_env = [\"STUB_MODS\", \"STUB_MODS2\"]\n";
