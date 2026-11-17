@@ -372,6 +372,7 @@ With =keep_failed=, each =eb= gets =--tmp-logdir=LOG_DIR/easybuild-logs/STEM=, a
 The =logs= phase starts =eb-keep-logs rotate LOG_ROOT --compress-after DAYS --delete-after DAYS=, with =TZ=UTC=, since the log directories are named in Coordinated Universal Time (UTC).
 A run rotates only when no other run under the log root is live: each run holds =LOG_ROOT/.eb-pipeline-rotate.lock= shared from its start, and rotates when it can take it alone; otherwise the =logs= phase is =skipped=.
 Where =eb-keep-logs --help= lists =--lock-timeout=, the rotate also gets =--lock-timeout 0=, and exits 75, recorded as =skipped=, while another rotate holds =LOG_ROOT/.eb-keep-logs-rotate.lock=.
+[[file:log-tree.org][The log tree and its locks]] lists the files of a run and the locks, and gives their order.
 
 ** =[rebuild]=
 
@@ -426,4 +427,5 @@ When the gate's problems are the only ones of the file, =run= exits 78; =check= 
 
 - [[file:cli.org][The eb-pipeline command]] and [[file:environment.org][Environment variables]]
 - [[file:exit-status.org][Exit status]]
+- [[file:log-tree.org][The log tree and its locks]]
 - The fields of the site file in [[file:../api/eb_pipeline/schema/index.html][eb_pipeline::schema]], whose doc comments are the text =eb-pipeline schema= prints.
