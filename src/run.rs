@@ -1193,6 +1193,53 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
     };
     st.phase("build", status, None, note);
 
+    // A site test command sees the tree the build left, including a staged swap.
+    let any_staged = match p.any_staged(lines) {
+        Ok(v) => v,
+        Err(f) => {
+            st.res.message = Some(f.msg);
+            return finish(st, Some(f.code));
+        }
+    };
+    match p.check_cmd(any_staged) {
+        Ok(Some(cmd)) => {
+            if !st.failed && !st.refused && !st.pending {
+                log("INFO", "checks", &target, "start");
+                match st.exec("checks", &cmd, &env, &log_dir.join("checks.log")) {
+                    Ok(ex) => {
+                        if ex.code == 0 {
+                            st.phase("checks", "ok", Some(0), None);
+                        } else {
+                            let msg = format!("check command exited {}", ex.code);
+                            log("ERROR", "checks", &target, &msg);
+                            st.phase("checks", "failed", Some(ex.code), Some(msg));
+                            st.failed = true;
+                        }
+                    }
+                    Err(f) => {
+                        st.res.message = Some(f.msg);
+                        return finish(st, Some(f.code));
+                    }
+                }
+                if let Some(c) = stop_if_signalled(&mut st, "checks") {
+                    return finish(st, Some(c));
+                }
+            } else {
+                st.phase(
+                    "checks",
+                    "skipped",
+                    None,
+                    Some("the build did not finish cleanly".into()),
+                );
+            }
+        }
+        Ok(None) => {}
+        Err(f) => {
+            st.res.message = Some(f.msg);
+            return finish(st, Some(f.code));
+        }
+    }
+
     // caches only after a clean build
     if !st.failed && !st.refused && !st.pending {
         match p.cache_cmd() {
