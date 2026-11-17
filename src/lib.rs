@@ -6,6 +6,7 @@ pub mod easystack;
 pub mod eessi;
 pub mod exit;
 pub mod from_commit;
+pub mod gap;
 pub mod lint;
 pub mod metrics;
 pub mod notify;

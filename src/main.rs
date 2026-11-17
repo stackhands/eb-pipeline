@@ -19,6 +19,7 @@ Examples:
   eb-pipeline init --template small-cluster --out site.toml
   eb-pipeline check --site site.toml
   eb-pipeline check --list stack.yml --check-from-commit --easyconfigs-repo DIR
+  eb-pipeline check --site site.toml --gap-out DIR --generation NAME --shadow
   eb-pipeline targets --site site.toml --format json
   eb-pipeline plan --site site.toml --list list.txt --target cpu --build-type production --out plan.json
   eb-pipeline run --site site.toml --list list.txt --target cpu --build-type production --result result.json
@@ -114,6 +115,8 @@ enum Cmd {
         /// EasyBuild release `X.Y.Z`. Overrides `eb-X.Y.Z` in the list file name.
         #[arg(long, requires = "check_from_commit")]
         easybuild_version: Option<String>,
+        #[command(flatten)]
+        gap: eb_pipeline::gap::GapArgs,
     },
     /// Print the site file reference: every key, type, default and meaning.
     Schema,
@@ -417,6 +420,11 @@ fn site_file(path: &Path) -> Option<String> {
         .and_then(|p| p.to_str().map(str::to_string))
 }
 
+struct OptInChecks<'a> {
+    from_commit: Option<(&'a Path, from_commit::Options<'a>)>,
+    gap: &'a eb_pipeline::gap::GapArgs,
+}
+
 fn cmd_check(
     site_path: Option<&Path>,
     lists_dir: Option<&Path>,
@@ -424,11 +432,11 @@ fn cmd_check(
     list: Option<&Path>,
     target: Option<&str>,
     stack_checks: &[stack_checks::StackCheck],
-    from_commit: Option<(&Path, from_commit::Options<'_>)>,
+    opt_in: OptInChecks<'_>,
 ) -> Result<i32, Fail> {
     let site = match site_path {
         Some(path) => Some(load_valid(path, lists_dir)?),
-        None if from_commit.is_none() || !stack_checks.is_empty() => {
+        None if opt_in.from_commit.is_none() || !stack_checks.is_empty() => {
             return Err(Fail::usage(
                 "pass --site or --check-from-commit with --list",
             ));
@@ -481,9 +489,10 @@ fn cmd_check(
                 stack_checks,
             )?;
         }
+        eb_pipeline::gap::run(s, opt_in.gap)?;
         log("INFO", "check", &s.site.name, "site file is valid");
     }
-    if let Some((list, opts)) = from_commit {
+    if let Some((list, opts)) = opt_in.from_commit {
         let fc = from_commit::run(site.as_ref(), list, &opts)?;
         if fc != exit::OK {
             code = fc;
@@ -1532,6 +1541,7 @@ fn main() {
             easyconfigs_repo,
             easyblocks_repo,
             easybuild_version,
+            gap,
         } => {
             let fc = check_from_commit.then(|| {
                 (
@@ -1550,7 +1560,10 @@ fn main() {
                 list.as_deref(),
                 target.as_deref(),
                 stack_checks,
-                fc,
+                OptInChecks {
+                    from_commit: fc,
+                    gap,
+                },
             )
         }
         Cmd::Schema => {

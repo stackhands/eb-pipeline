@@ -27,6 +27,7 @@ The title names the task.
    build-a-package-plan
    check-a-list-with-eb-stack
    audit-with-eb-stack
+   compare-a-site-layer
    check-oom-before-building
    resume-a-run
    attest-build-inputs

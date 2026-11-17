@@ -161,7 +161,7 @@ _eb__pipeline() {
             return 0
             ;;
         eb__subcmd__pipeline__subcmd__check)
-            opts="-h --site --lists-dir --probe-tools --list --target --stack-checks --check-from-commit --easyconfigs-repo --easyblocks-repo --easybuild-version --help"
+            opts="-h --site --lists-dir --probe-tools --list --target --stack-checks --check-from-commit --easyconfigs-repo --easyblocks-repo --easybuild-version --gap-out --generation --shadow --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -196,6 +196,14 @@ _eb__pipeline() {
                     return 0
                     ;;
                 --easybuild-version)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --gap-out)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --generation)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
