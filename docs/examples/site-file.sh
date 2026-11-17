@@ -55,6 +55,11 @@ run 'eb-pipeline check --site pbs.toml'
 expect_status 2
 expect_line 'ERROR [check] example: scheduler.kind: expected slurm or local, found `pbs`'
 
+sed 's/^init = \["EasyBuild"\]/init = ["module load EasyBuild"]/' site.toml >init.toml
+run 'eb-pipeline check --site init.toml'
+expect_status 2
+expect_line 'ERROR [check] example: modules.init: `module load EasyBuild` has white space; an entry is one module name, so give each module its own entry'
+
 sed '/^init = /a shell = "zsh"' site.toml >zsh.toml
 run 'eb-pipeline check --site zsh.toml'
 expect_status 2

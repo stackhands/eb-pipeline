@@ -426,7 +426,7 @@ doc_struct! {
     /// Environment modules.
     Modules {
         init: Vec<String> => ("array of string", "", true,
-            "Modules loaded, in order, after `module purge` in every EasyBuild phase and around `stack shard`. May be empty."),
+            "Modules loaded, in order, after `module purge` in every EasyBuild phase and around `stack shard`, one name per entry, without white space. May be empty."),
         #[serde(default)]
         unuse_path: bool => ("boolean", "false", false, "Clears MODULEPATH after `shell_init` and before loading `init`, so the first `init` module needs an absolute path."),
         #[serde(default = "d_shell")]

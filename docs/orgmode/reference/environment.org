@@ -125,7 +125,7 @@ When =modules.init= is not empty, =modules.unuse_path= is =true= or =modules.she
 1. =EB_PIPELINE_SHELL_INIT=: the file it sources first, when set.
 2. =EB_PIPELINE_UNUSE_PATH=: when set, it empties =MODULEPATH=.
 3. =EB_PIPELINE_MODULES=: it runs =module purge=, then =module load= for each name in it, in order, then the command.
-   It splits the variable at white space and gives each name to =module load= as written: a name with a pattern in it, such as =GCC/*=, is not matched against file names.
+   It splits the variable at white space, which =check= refuses in an entry of =modules.init=, and gives each name to =module load= as written: a name with a pattern in it, such as =GCC/*=, is not matched against file names.
 
 The wrapper is a script for a POSIX shell: =check= accepts =sh=, =bash=, =dash=, =ash=, =ksh=, =ksh93=, =mksh= and =yash= as =modules.shell=, by name or by path, and refuses any other.
 zsh would load the names of =EB_PIPELINE_MODULES= as one, since it does not split an unquoted variable, and csh, tcsh and fish cannot parse the script.

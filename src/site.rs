@@ -471,6 +471,16 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
             e.push("shards.easyconfigs: at least one tree is required when count >= 2".into());
         }
     }
+    for m in site
+        .modules
+        .init
+        .iter()
+        .filter(|m| m.contains(char::is_whitespace))
+    {
+        e.push(format!(
+            "modules.init: `{m}` has white space; an entry is one module name, so give each module its own entry"
+        ));
+    }
     let shell = &site.modules.shell;
     let shell_name = Path::new(shell).file_name().and_then(|n| n.to_str());
     if !shell_name.is_some_and(|n| MODULE_SHELLS.contains(&n)) {
