@@ -35,10 +35,10 @@ Clone the repository, check out its main branch, and install the program from it
 git clone https://github.com/stackhands/eb-pipeline.git
 cd eb-pipeline
 git checkout main
-cargo +1.90 install --locked --path .
+cargo +1.90 install --locked --path . --root ~/.local
 #+end_src
 
-Cargo builds =eb-pipeline= and installs it in the =bin= directory of its home, =~/.cargo/bin= unless =CARGO_HOME= names another, which rustup puts on your =PATH=.
+Cargo installs =eb-pipeline= and the companion commands =eb-retry-list=, =eb-shard-weights=, =eb-test-map=, =eb-junit= and =eb-cvmfs= in =~/.local/bin= when that directory is on your =PATH=, as [[file:../howto/install.org][Install eb-pipeline]] describes.
 Ask it for its version:
 
 #+begin_src bash

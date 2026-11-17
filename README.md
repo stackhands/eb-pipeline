@@ -65,6 +65,16 @@ cargo install --locked --path . --root ~/.local
 eb-pipeline --version
 ```
 
+That install puts six commands in `~/.local/bin`:
+
+```bash
+for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cvmfs; do
+  command -v "$cmd" && "$cmd" --help >/dev/null
+done
+```
+
+A release tarball ships `eb-pipeline` only; build from source for the companions.
+
 [Install eb-pipeline](docs/orgmode/howto/install.org) has the release binaries
 and what to do when the build fails.
 

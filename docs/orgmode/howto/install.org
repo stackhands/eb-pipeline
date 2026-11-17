@@ -54,6 +54,9 @@ Until the next release, install from source to have them.
    eb-pipeline
    #+end_example
 
+   Release 0.3.0 ships =eb-pipeline= only.
+   The companion commands =eb-retry-list=, =eb-shard-weights=, =eb-test-map=, =eb-junit= and =eb-cvmfs= need a source install below.
+
 3. Install the binary:
 
    #+begin_src bash
@@ -62,13 +65,24 @@ Until the next release, install from source to have them.
 
 ** Install from source
 
-In the checkout, build and install the binary into =~/.local/bin=, with the versions of the dependencies that =Cargo.lock= names:
+In the checkout, build and install every default binary into =~/.local/bin=, with the versions of the dependencies that =Cargo.lock= names.
+The root =--root ~/.local= matches [[file:../tutorials/first-build-list.org][Run your first build list]] and the README install line:
 
 #+begin_src bash
 cargo +1.90 install --locked --path . --root ~/.local
 #+end_src
 
 To install another commit, check it out first; to replace an eb-pipeline that is installed there, add =--force=.
+
+The install builds =eb-pipeline=, =eb-retry-list=, =eb-shard-weights=, =eb-test-map=, =eb-junit= and =eb-cvmfs=.
+Check that each command is on =PATH=:
+
+#+begin_src bash
+for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cvmfs; do
+  command -v "$cmd"
+  "$cmd" --help >/dev/null
+done
+#+end_src
 
 ** Check that it worked
 
