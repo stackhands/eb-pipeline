@@ -1,0 +1,1 @@
+Code and verbatim text that starts with `*` shows as written: the log rotation page showed `*.log` and `*.txt` as `\*.log` and `\*.txt`. `docs/export.el` writes such text as a plain reStructuredText literal, and `pixi run -e docs docbld` runs `docs/tools/test_export.py`, which exports a page of literals and checks each one.

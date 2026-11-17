@@ -1483,6 +1483,99 @@ fn a_target_name_is_a_directory_name() {
 }
 
 #[test]
+fn an_init_entry_is_one_module_name() {
+    let with_init = |init: &str| MINIMAL.replace("init = []", &format!("init = {init}"));
+    let errs = |init: &str| site::validate(&site::parse(&with_init(init)).unwrap(), None);
+    for ok in [
+        r#"["EasyBuild"]"#,
+        r#"["Core/Stack/2026", "EasyBuild/5.1.2", "/opt/site/modules/Extend/1.0"]"#,
+        r#"["<eessi-module>/<release>", "EasyBuild", "<eessi-extend-module>"]"#,
+    ] {
+        assert!(errs(ok).is_empty(), "{ok}: {:?}", errs(ok));
+    }
+    let refusal = |entry: &str| {
+        format!("modules.init: `{entry}` has white space; an entry is one module name, so give each module its own entry")
+    };
+    assert_eq!(
+        errs(r#"["Core/Stack/2026 EasyBuild", "Other/2.0", "module load Extend"]"#),
+        [
+            refusal("Core/Stack/2026 EasyBuild"),
+            refusal("module load Extend")
+        ]
+    );
+    for (toml, entry) in [
+        (r#""EasyBuild ""#, "EasyBuild "),
+        (r#""\tEasyBuild""#, "\tEasyBuild"),
+        (r#""Easy\u00A0Build""#, "Easy\u{a0}Build"),
+        (r#"" ""#, " "),
+    ] {
+        assert_eq!(errs(&format!("[{toml}]")), [refusal(entry)], "{toml}");
+    }
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("site.toml");
+    std::fs::write(&path, with_init(r#"["Core/Stack/2026 EasyBuild"]"#)).unwrap();
+    let o = bin().args(["check", "--site"]).arg(&path).output().unwrap();
+    let err = String::from_utf8(o.stderr).unwrap();
+    assert_eq!(o.status.code(), Some(2), "{err}");
+    assert!(
+        err.lines()
+            .any(|l| l == format!("ERROR [check] t: {}", refusal("Core/Stack/2026 EasyBuild"))),
+        "{err}"
+    );
+}
+
+#[test]
+fn the_module_shell_splits_the_names_of_init() {
+    let with_shell =
+        |shell: &str| MINIMAL.replace("init = []", &format!("init = []\nshell = {shell:?}"));
+    let errs = |shell: &str| site::validate(&site::parse(&with_shell(shell)).unwrap(), None);
+    for ok in [
+        "bash",
+        "sh",
+        "/bin/sh",
+        "/usr/local/bin/bash",
+        "dash",
+        "ksh",
+        "mksh",
+    ] {
+        assert!(errs(ok).is_empty(), "{ok}: {:?}", errs(ok));
+    }
+    let refusal = |shell: &str| {
+        format!("modules.shell: expected a POSIX shell that runs the module wrapper, one of sh, bash, dash, ash, ksh, ksh93, mksh or yash, by name or by path, found `{shell}`")
+    };
+    for bad in ["zsh", "/usr/bin/zsh", "fish", "csh", "tcsh", "bash -l", ""] {
+        assert_eq!(errs(bad), [refusal(bad)]);
+    }
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("site.toml");
+    std::fs::write(&path, with_shell("zsh")).unwrap();
+    let list = d.path().join("l.txt");
+    std::fs::write(&list, "Foo-1.0-foss-2025a.eb\n").unwrap();
+    for args in [
+        vec!["check", "--site"],
+        vec![
+            "plan",
+            "--target",
+            "cpu",
+            "--build-type",
+            "production",
+            "--list",
+            list.to_str().unwrap(),
+            "--site",
+        ],
+    ] {
+        let o = bin().args(&args).arg(&path).output().unwrap();
+        let err = String::from_utf8(o.stderr).unwrap();
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {err}");
+        assert!(
+            err.lines()
+                .any(|l| l == format!("ERROR [check] t: {}", refusal("zsh"))),
+            "{args:?}: {err}"
+        );
+    }
+}
+
+#[test]
 fn eessi_site_install_staged_targets_need_both_roots() {
     let errs = |text: &str| -> Vec<String> {
         site::validate(&site::parse(text).unwrap(), None)

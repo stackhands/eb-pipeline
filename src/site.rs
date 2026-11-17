@@ -1,7 +1,7 @@
 //! Loading and validating site files.
 
 use crate::exit::Fail;
-use crate::resolve::Scope;
+use crate::resolve::{Scope, MODULE_SHELLS};
 use crate::schema::*;
 use crate::util::parse_version;
 use std::collections::{BTreeMap, BTreeSet};
@@ -470,6 +470,27 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
         if s.enabled && s.count >= 2 && s.easyconfigs.is_empty() {
             e.push("shards.easyconfigs: at least one tree is required when count >= 2".into());
         }
+    }
+    for m in site
+        .modules
+        .init
+        .iter()
+        .filter(|m| m.contains(char::is_whitespace))
+    {
+        e.push(format!(
+            "modules.init: `{m}` has white space; an entry is one module name, so give each module its own entry"
+        ));
+    }
+    let shell = &site.modules.shell;
+    let shell_name = Path::new(shell).file_name().and_then(|n| n.to_str());
+    if !shell_name.is_some_and(|n| MODULE_SHELLS.contains(&n)) {
+        let (last, rest) = MODULE_SHELLS
+            .split_last()
+            .expect("MODULE_SHELLS is not empty");
+        e.push(format!(
+            "modules.shell: expected a POSIX shell that runs the module wrapper, one of {} or {last}, by name or by path, found `{shell}`",
+            rest.join(", ")
+        ));
     }
     // eb-staged-rebuild copies the one `target` of a ledger configuration into
     // every record it writes.

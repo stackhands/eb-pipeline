@@ -308,14 +308,14 @@ With =--disable-robot= in =extra_args=, a line fetches its own sources only: the
 
 ** =[modules]=
 
-| Key           | Type            | Default  | Meaning                                                                                                                                                                           |
-|---------------+-----------------+----------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| =init=        | array of string | required | The modules to load, in order, after =module purge=, before the shard, prefetch, build, =eb-keep-logs failed= and cache commands; may be empty.                                   |
-| =unuse_path=  | boolean         | =false=  | =true= empties =MODULEPATH= after =shell_init= and before =init= loads, so that the first module of =init= needs an absolute path; =check= warns when it has none.                |
-| =shell=       | string          | =bash=   | The shell that runs the module wrapper, which is a script for a POSIX shell, such as =bash= or =sh=.                                                                              |
-| =shell_init=  | string          | none     | A file to source before =module= is called, for a shell that does not define it. It is sourced without =set -e= and =set -u=; a =module= call that fails still stops the command. |
-| =eessi=       | table           | none     | The site layer of EESSI.                                                                                                                                                          |
-| =package_env= | table of tables | ={}=     | Variables per package name, =[modules.package_env.NAME]=, for the prefetch and build commands of the lines of that package.                                                       |
+| Key           | Type            | Default  | Meaning                                                                                                                                                                                                                                                       |
+|---------------+-----------------+----------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =init=        | array of string | required | The modules to load, in order, after =module purge=, before the shard, prefetch, build, =eb-keep-logs failed= and cache commands; may be empty. An entry is one module name, so =module load A B= is =["A", "B"]=; =check= refuses an entry with white space. |
+| =unuse_path=  | boolean         | =false=  | =true= empties =MODULEPATH= after =shell_init= and before =init= loads, so that the first module of =init= needs an absolute path; =check= warns when it has none.                                                                                            |
+| =shell=       | string          | =bash=   | The shell that runs the module wrapper, a script for a POSIX shell, by name or by path: =sh=, =bash=, =dash=, =ash=, =ksh=, =ksh93=, =mksh= or =yash=. =check= refuses any other, such as =zsh=, which does not split the names of =init=.                    |
+| =shell_init=  | string          | none     | A file to source before =module= is called, for a shell that does not define it. It is sourced without =set -e= and =set -u=; a =module= call that fails still stops the command.                                                                             |
+| =eessi=       | table           | none     | The site layer of EESSI.                                                                                                                                                                                                                                      |
+| =package_env= | table of tables | ={}=     | Variables per package name, =[modules.package_env.NAME]=, for the prefetch and build commands of the lines of that package.                                                                                                                                   |
 
 The module wrapper starts when =init= is not empty, =unuse_path= is =true= or =shell_init= is set; [[file:environment.org][Environment variables]] describes it.
 
