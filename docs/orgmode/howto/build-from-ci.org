@@ -91,10 +91,12 @@ INFO [build] zen2: Example-1.0-GCCcore-15.2.0: start
 INFO [build] zen2: Example-1.0-GCCcore-15.2.0: ok
 INFO [build] zen2: Broken-1.0-GCCcore-15.2.0: start
 ERROR [build] zen2: Broken-1.0-GCCcore-15.2.0: failed (exit 1)
+INFO [summary] zen2: summary.json and summary.html written in $WORK/site/logs/20261117_063532
 zen2: exit 1
 INFO [licences] zen4: not configured
 ...
 ERROR [build] zen4: Broken-1.0-GCCcore-15.2.0: failed (exit 1)
+INFO [summary] zen4: summary.json and summary.html written in $WORK/site/logs/20261117_063532
 zen4: exit 1
 exit 1
 #+end_example
@@ -111,6 +113,7 @@ result-zen4.json:  "exit_code": 1,
 #+end_example
 
 In GitHub Actions, each build job uploads its result file as the artifact =result-TARGET=.
+Each run also adds its target to the summary of its run directory, =LOG_ROOT/LOG_STAMP=, as [[file:../reference/run-summary.org][The run summary]] says.
 
 ** If it fails
 

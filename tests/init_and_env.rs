@@ -99,6 +99,7 @@ fn help_lists_dry_run_output_among_what_stdout_carries() {
         "init",
         "targets",
         "run --dry-run",
+        "watch --dry-run",
     ] {
         assert!(carried.contains(name), "{name} missing from {carried:?}");
     }

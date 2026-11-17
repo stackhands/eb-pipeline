@@ -163,6 +163,7 @@ INFO [build] cpu: Example-1.0-GCCcore-15.2.0: start
 INFO [build] cpu: Example-1.0-GCCcore-15.2.0: ok
 INFO [build] cpu: Broken-1.0-GCCcore-15.2.0: start
 ERROR [build] cpu: Broken-1.0-GCCcore-15.2.0: failed (exit 1)
+INFO [summary] cpu: summary.json and summary.html written in $WORK/logs/20261117_090000
 #+end_example
 
 #+begin_src bash
@@ -177,11 +178,13 @@ cat result.json
     "failed": 1,
     "success": 1
   },
-  "ended_at": "2026-11-17T03:07:42.086667400+00:00",
+  "duration_seconds": 0.083,
+  "ended_at": "2026-11-17T06:26:28.549551376+00:00",
   "exit_code": 1,
   "kind": "result",
   "lines": [
     {
+      "duration_seconds": 0.021,
       "easyconfig": "Example-1.0-GCCcore-15.2.0.eb",
       "exit_code": 0,
       "log": "$WORK/logs/20261117_090000/cpu/Example-1.0-GCCcore-15.2.0.stdout.log",
@@ -190,6 +193,7 @@ cat result.json
       "unit": "all"
     },
     {
+      "duration_seconds": 0.021,
       "easyconfig": "Broken-1.0-GCCcore-15.2.0.eb",
       "exit_code": 1,
       "log": "$WORK/logs/20261117_090000/cpu/Broken-1.0-GCCcore-15.2.0.stdout.log",
@@ -214,6 +218,7 @@ cat result.json
     },
 ...
     {
+      "duration_seconds": 0.041,
       "name": "build",
       "status": "failed"
     },
@@ -222,6 +227,7 @@ cat result.json
       "status": "not configured"
     },
     {
+      "duration_seconds": 0.041,
       "exit_code": 0,
       "name": "logs",
       "status": "ok"
@@ -231,46 +237,48 @@ cat result.json
   "schema_version": 1,
   "sharded": false,
   "site": "example",
-  "started_at": "2026-11-17T03:07:42.003465530+00:00",
+  "started_at": "2026-11-17T06:26:28.466225766+00:00",
   "target": "cpu"
 }
 #+end_example
 
-| Key              | Type    | Meaning                                                                                                                |
-|------------------+---------+------------------------------------------------------------------------------------------------------------------------|
-| =admission=      | array   | The admission of each unit that went through it, in order.                                                             |
-| =build_type=     | string  | The build type.                                                                                                        |
-| =counts=         | object  | The number of lines with each status, for the statuses that some line has. A deselected line counts for none.          |
-| =deselected=     | array   | The lines that the target's =[targets.select]= left out, as in the plan; only when there are some.                     |
-| =ended_at=       | string  | When the run ended, in Coordinated Universal Time (UTC): the date, the time to the nanosecond and the offset =+00:00=. |
-| =exit_code=      | integer | The exit status of the run.                                                                                            |
-| =interrupted_by= | string  | =SIGINT= or =SIGTERM=, when a signal stopped the run.                                                                  |
-| =kind=           | string  | =result=.                                                                                                              |
-| =lines=          | array   | Every line the run reached, in that order.                                                                             |
-| =list=           | string  | The build list, as =--list= names it.                                                                                  |
-| =log_dir=        | string  | =LOG_ROOT/LOG_STAMP/TARGET=, where the run wrote its logs.                                                             |
-| =message=        | string  | The error that stopped the run, when one did.                                                                          |
-| =not_configured= | array   | The phases that the site file leaves out, in pipeline order.                                                           |
-| =phases=         | array   | Every phase the run reached, in pipeline order from =preflight= to =logs=.                                             |
-| =run_id=         | string  | The run id.                                                                                                            |
-| =schema_version= | integer | =1=.                                                                                                                   |
-| =sharded=        | boolean | Whether the lines were built in the units of a shard plan.                                                             |
-| =site=           | string  | =site.name=.                                                                                                           |
-| =started_at=     | string  | When the run started, in the same form as =ended_at=.                                                                  |
-| =target=         | string  | The name of the target.                                                                                                |
+| Key                | Type    | Meaning                                                                                                                |
+|--------------------+---------+------------------------------------------------------------------------------------------------------------------------|
+| =admission=        | array   | The admission of each unit that went through it, in order.                                                             |
+| =build_type=       | string  | The build type.                                                                                                        |
+| =counts=           | object  | The number of lines with each status, for the statuses that some line has. A deselected line counts for none.          |
+| =deselected=       | array   | The lines that the target's =[targets.select]= left out, as in the plan; only when there are some.                     |
+| =duration_seconds= | number  | How long the run took, from its start to the writing of the result file, in seconds to the millisecond.                |
+| =ended_at=         | string  | When the run ended, in Coordinated Universal Time (UTC): the date, the time to the nanosecond and the offset =+00:00=. |
+| =exit_code=        | integer | The exit status of the run.                                                                                            |
+| =interrupted_by=   | string  | =SIGINT= or =SIGTERM=, when a signal stopped the run.                                                                  |
+| =kind=             | string  | =result=.                                                                                                              |
+| =lines=            | array   | Every line the run reached, in that order.                                                                             |
+| =list=             | string  | The build list, as =--list= names it.                                                                                  |
+| =log_dir=          | string  | =LOG_ROOT/LOG_STAMP/TARGET=, where the run wrote its logs.                                                             |
+| =message=          | string  | The error that stopped the run, when one did.                                                                          |
+| =not_configured=   | array   | The phases that the site file leaves out, in pipeline order.                                                           |
+| =phases=           | array   | Every phase the run reached, in pipeline order from =preflight= to =logs=.                                             |
+| =run_id=           | string  | The run id.                                                                                                            |
+| =schema_version=   | integer | =1=.                                                                                                                   |
+| =sharded=          | boolean | Whether the lines were built in the units of a shard plan.                                                             |
+| =site=             | string  | =site.name=.                                                                                                           |
+| =started_at=       | string  | When the run started, in the same form as =ended_at=.                                                                  |
+| =target=           | string  | The name of the target.                                                                                                |
 
 *** Each entry of =lines=
 
-| Key               | Type    | Meaning                                                                                                                           |
-|-------------------+---------+-----------------------------------------------------------------------------------------------------------------------------------|
-| =easyconfig=      | string  | The easyconfig of the line.                                                                                                       |
-| =exit_code=       | integer | The exit status the line counts as; absent for a line that did not run.                                                           |
-| =log=             | string  | The log of the line's command.                                                                                                    |
-| =note=            | string  | Why the line came to its status, when that needs saying. A line that went through eb-staged-rebuild has one, whatever its status. |
-| =phase=           | string  | =build=, or =sources= when the prefetch of its sources failed.                                                                    |
-| =status=          | string  | =success=, =failed=, =refused=, =pending= or =skipped=.                                                                           |
-| =translated_from= | integer | The command's own exit status, when =exit_code= translates it, as 78 does eb-staged-rebuild's 2.                                  |
-| =unit=            | string  | The unit of the line: =all=, =cpu-prerequisites=, =prelude= or the name of a shard.                                               |
+| Key                | Type    | Meaning                                                                                                                                                           |
+|--------------------+---------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =duration_seconds= | number  | How long the line's command ran, in seconds to the millisecond: its build, or the prefetch of its sources when that failed; absent for a line that did not start. |
+| =easyconfig=       | string  | The easyconfig of the line.                                                                                                                                       |
+| =exit_code=        | integer | The exit status the line counts as; absent for a line that did not run.                                                                                           |
+| =log=              | string  | The log of the line's command.                                                                                                                                    |
+| =note=             | string  | Why the line came to its status, when that needs saying. A line that went through eb-staged-rebuild has one, whatever its status.                                 |
+| =phase=            | string  | =build=, or =sources= when the prefetch of its sources failed.                                                                                                    |
+| =status=           | string  | =success=, =failed=, =refused=, =pending= or =skipped=.                                                                                                           |
+| =translated_from=  | integer | The command's own exit status, when =exit_code= translates it, as 78 does eb-staged-rebuild's 2.                                                                  |
+| =unit=             | string  | The unit of the line: =all=, =cpu-prerequisites=, =prelude= or the name of a shard.                                                                               |
 
 | Status    | Meaning                                                                                                               |
 |-----------+-----------------------------------------------------------------------------------------------------------------------|
@@ -282,12 +290,16 @@ cat result.json
 
 *** Each entry of =phases=
 
-| Key         | Type    | Meaning                                                   |
-|-------------+---------+-----------------------------------------------------------|
-| =exit_code= | integer | The exit status behind the status, when there is one.     |
-| =name=      | string  | The phase.                                                |
-| =note=      | string  | Why the phase came to its status, when that needs saying. |
-| =status=    | string  | What the phase came to.                                   |
+| Key                | Type    | Meaning                                                                                                                                 |
+|--------------------+---------+-----------------------------------------------------------------------------------------------------------------------------------------|
+| =duration_seconds= | number  | How long the commands of the phase ran, added up, in seconds to the millisecond; absent for a phase that ran none, such as =preflight=. |
+| =exit_code=        | integer | The exit status behind the status, when there is one.                                                                                   |
+| =name=             | string  | The phase.                                                                                                                              |
+| =note=             | string  | Why the phase came to its status, when that needs saying.                                                                               |
+| =status=           | string  | What the phase came to.                                                                                                                 |
+
+=admission= and =build= take turns unit by unit, and the =duration_seconds= of each counts only its own commands.
+That of =logs= counts =eb-keep-logs failed= after a failed line as well as =eb-keep-logs rotate=.
 
 | Status           | Meaning                                                                                                                                                                                                                                           |
 |------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -312,4 +324,5 @@ cat result.json
 
 - [[file:cli.org][The eb-pipeline command]]
 - [[file:exit-status.org][Exit status]]
+- [[file:run-summary.org][The run summary]], which =run= writes in the run directory whether or not it has =--result=
 - [[file:../api/eb_pipeline/plan/struct.Plan.html][eb_pipeline::plan::Plan]] and [[file:../api/eb_pipeline/run/struct.RunResult.html][eb_pipeline::run::RunResult]], the types behind the two files.

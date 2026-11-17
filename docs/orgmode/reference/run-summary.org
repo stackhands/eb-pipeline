@@ -1,0 +1,413 @@
+#+TITLE: The run summary
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* The run summary
+
+=eb-pipeline run= adds its target to the summary of its run directory, =LOG_ROOT/LOG_STAMP=, after its last phase, with or without =--result=: =summary.json= for programs and =summary.html= for people.
+The rebuild of =eb-pipeline watch= adds its target in the same way.
+=summary.json= is an object in JavaScript Object Notation (JSON), with the keys of every object in sorted order and =schema_version= 1.
+=run --dry-run= writes no summary, and neither does a run that an error in its input stops before it starts, which writes no result file either.
+[[file:../howto/follow-runs.org][Follow runs through their summaries]] puts the summary to use, with =status=, jq and a webhook.
+The examples on this page come from =docs/examples/summary.sh=, which runs both targets of the site file of [[file:../howto/build-from-ci.org][Build a list on every target from continuous integration]] with the =local= scheduler, no modules, its paths under a work directory, and the stand-in for =eb= of the tutorial, which fails the lines whose easyconfig starts with =Broken-=.
+
+** Targets that share a log stamp
+
+The runs that share a log stamp, given as =--log-stamp= or =EB_PIPELINE_LOG_STAMP=, share a run directory and its summary.
+Here =zen2= builds a list of two lines, the second of which fails, and =zen4= a list of one:
+
+#+begin_src bash
+eb-pipeline run --site site.toml --list build.list --target zen2 --build-type production --log-stamp 20261117_090000; echo "exit $?"
+eb-pipeline run --site site.toml --list example.list --target zen4 --build-type production --log-stamp 20261117_090000; echo "exit $?"
+#+end_src
+
+#+begin_example
+INFO [licences] zen2: not configured
+INFO [shard] zen2: not configured
+INFO [sources] zen2: not configured
+INFO [admission] zen2: not configured
+INFO [caches] zen2: not configured
+INFO [logs] zen2: not configured
+INFO [build] zen2: Example-1.0-GCCcore-15.2.0: start
+INFO [build] zen2: Example-1.0-GCCcore-15.2.0: ok
+INFO [build] zen2: Broken-1.0-GCCcore-15.2.0: start
+ERROR [build] zen2: Broken-1.0-GCCcore-15.2.0: failed (exit 1)
+INFO [summary] zen2: summary.json and summary.html written in $WORK/site/logs/20261117_090000
+exit 1
+INFO [licences] zen4: not configured
+...
+INFO [build] zen4: Example-1.0-GCCcore-15.2.0: ok
+INFO [summary] zen4: summary.json and summary.html written in $WORK/site/logs/20261117_090000
+exit 0
+#+end_example
+
+#+begin_src bash
+ls -A site/logs/20261117_090000
+#+end_src
+
+#+begin_example
+.summary.lock
+summary.html
+summary.json
+zen2
+zen4
+#+end_example
+
+Each run takes the lock =.summary.lock= of the run directory, reads =summary.json=, replaces the entry of its own target and keeps the others, and writes both files anew through a rename, so that a reader never sees half of one.
+A later run of the same target with the same stamp replaces that target's entry.
+A =summary.json= with another =schema_version=, or one that does not parse, is replaced.
+
+A summary that cannot be written is a warning, and the run exits as it would have without it.
+Here a directory is in the way of =summary.json=:
+
+#+begin_src bash
+mkdir -p site/logs/20261117_100000/summary.json
+eb-pipeline run --site site.toml --list example.list --target zen4 --build-type production --log-stamp 20261117_100000; echo "exit $?"
+#+end_src
+
+#+begin_example
+INFO [licences] zen4: not configured
+...
+WARN [summary] zen4: no summary written: $WORK/site/logs/20261117_100000/summary.json: Is a directory (os error 21)
+exit 0
+#+end_example
+
+** summary.json
+
+#+begin_src bash
+cat site/logs/20261117_090000/summary.json
+#+end_src
+
+#+begin_example
+{
+  "exit_code": 1,
+  "kind": "summary",
+  "run": "20261117_090000",
+  "schema_version": 1,
+  "site": "example",
+  "status": "failed",
+  "targets": [
+    {
+      "build_type": "production",
+      "command": "run",
+      "counts": {
+        "failed": 1,
+        "success": 1
+      },
+      "duration_seconds": 0.042,
+      "ended_at": "2026-11-17T06:48:31.833249380+00:00",
+      "exit_code": 1,
+      "list": "build.list",
+      "log_dir": "$WORK/site/logs/20261117_090000/zen2",
+      "name": "zen2",
+      "packages": [
+        {
+          "duration_seconds": 0.021,
+          "easyconfig": "Example-1.0-GCCcore-15.2.0.eb",
+          "exit_code": 0,
+          "log": "$WORK/site/logs/20261117_090000/zen2/Example-1.0-GCCcore-15.2.0.stdout.log",
+          "module": "Example/1.0-GCCcore-15.2.0",
+          "phase": "build",
+          "status": "success",
+          "unit": "all"
+        },
+        {
+          "duration_seconds": 0.021,
+          "easyconfig": "Broken-1.0-GCCcore-15.2.0.eb",
+          "exit_code": 1,
+          "log": "$WORK/site/logs/20261117_090000/zen2/Broken-1.0-GCCcore-15.2.0.stdout.log",
+          "module": "Broken/1.0-GCCcore-15.2.0",
+          "phase": "build",
+          "status": "failed",
+          "unit": "all"
+        }
+      ],
+      "phases": [
+        {
+          "name": "preflight",
+          "status": "ok"
+        },
+...
+        {
+          "duration_seconds": 0.041,
+          "name": "build",
+          "status": "failed"
+        },
+...
+      ],
+      "run_id": "20261117_090000",
+      "started_at": "2026-11-17T06:48:31.791640166+00:00",
+      "status": "failed"
+    },
+    {
+      "build_type": "production",
+      "command": "run",
+      "counts": {
+        "success": 1
+      },
+      "duration_seconds": 0.021,
+      "ended_at": "2026-11-17T06:48:31.856785185+00:00",
+      "exit_code": 0,
+      "list": "example.list",
+      "log_dir": "$WORK/site/logs/20261117_090000/zen4",
+      "name": "zen4",
+...
+      "run_id": "20261117_090000",
+      "started_at": "2026-11-17T06:48:31.836041801+00:00",
+      "status": "success"
+    }
+  ],
+  "tool": "eb-pipeline 0.3.0",
+  "updated_at": "2026-11-17T06:48:31.856935881+00:00"
+}
+#+end_example
+
+| Key              | Type    | Meaning                                                                                                                                                                            |
+|------------------+---------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =exit_code=      | integer | The exit statuses of the targets as one: a signal first, 130 before 143, then 2, 1, 78, 75 and 0, the order in which [[file:exit-status.org][Exit status]] ranks those of one run. |
+| =kind=           | string  | =summary=.                                                                                                                                                                         |
+| =run=            | string  | The name of the run directory, its =LOG_STAMP=.                                                                                                                                    |
+| =schema_version= | integer | =1=.                                                                                                                                                                               |
+| =site=           | string  | =site.name=.                                                                                                                                                                       |
+| =status=         | string  | What =exit_code= stands for, as for a target.                                                                                                                                      |
+| =targets=        | array   | One entry for each target that ran in the run directory, by name.                                                                                                                  |
+| =tool=           | string  | =eb-pipeline VERSION=, the eb-pipeline that wrote the file last.                                                                                                                   |
+| =updated_at=     | string  | When the file was written last, in the form of =started_at= in the result file.                                                                                                    |
+
+*** Each entry of =targets=
+
+| Key                | Type    | Meaning                                                                                                                       |
+|--------------------+---------+-------------------------------------------------------------------------------------------------------------------------------|
+| =build_type=       | string  | The build type.                                                                                                               |
+| =command=          | string  | =run=, or =watch= for the rebuild of =eb-pipeline watch=.                                                                     |
+| =counts=           | object  | The number of packages with each status, for the statuses that some package has.                                              |
+| =deselected=       | array   | The easyconfigs of the lines that the target's =[targets.select]= left out; only when there are some.                         |
+| =duration_seconds= | number  | How long the run took, as in the result file.                                                                                 |
+| =ended_at=         | string  | When the run ended, as in the result file.                                                                                    |
+| =exit_code=        | integer | The exit status of the run.                                                                                                   |
+| =interrupted_by=   | string  | =SIGINT= or =SIGTERM=, when a signal stopped the run.                                                                         |
+| =list=             | string  | The build list, as =--list= names it; =LOG_DIR/watch.list= for the rebuild of a watch.                                        |
+| =log_dir=          | string  | =LOG_ROOT/LOG_STAMP/TARGET=, where the run wrote its logs.                                                                    |
+| =message=          | string  | The error that stopped the run, when one did.                                                                                 |
+| =name=             | string  | The name of the target.                                                                                                       |
+| =packages=         | array   | Every line the run reached, in that order.                                                                                    |
+| =phases=           | array   | Every phase that the run reached and every phase that the site file leaves out, in pipeline order from =preflight= to =logs=. |
+| =result=           | string  | The result file, as =--result= names it; only when the run had one.                                                           |
+| =run_id=           | string  | The run id.                                                                                                                   |
+| =started_at=       | string  | When the run started, as in the result file.                                                                                  |
+| =status=           | string  | What =exit_code= stands for.                                                                                                  |
+| =watch=            | object  | The plan of the watch, as [[file:watch.org][The watch state and plan]] gives it; only for the rebuild of a watch.             |
+
+| Status        |                                    Exit status |
+|---------------+------------------------------------------------|
+| =success=     |                                              0 |
+| =failed=      | 1, or any status that this table does not name |
+| =usage=       |                                              2 |
+| =pending=     |                                             75 |
+| =refused=     |                                             78 |
+| =interrupted= |                                     130 or 143 |
+
+*** Each entry of =phases=
+
+| Key                | Type    | Meaning                                                                                                    |
+|--------------------+---------+------------------------------------------------------------------------------------------------------------|
+| =duration_seconds= | number  | How long the commands of the phase ran, as in the result file; absent for a phase that ran none.           |
+| =exit_code=        | integer | The exit status behind the status, when there is one.                                                      |
+| =name=             | string  | The phase.                                                                                                 |
+| =reason=           | string  | The =note= of the phase in the result file, when it has one.                                               |
+| =status=           | string  | The status of the phase in the result file, or =not configured= for a phase that the site file leaves out. |
+
+*** Each entry of =packages=
+
+| Key                | Type    | Meaning                                                                                           |
+|--------------------+---------+---------------------------------------------------------------------------------------------------|
+| =duration_seconds= | number  | How long the line's command ran, as in the result file; absent for a line that did not start.     |
+| =easyconfig=       | string  | The easyconfig of the line.                                                                       |
+| =exit_code=        | integer | The exit status the line counts as; absent for a line that did not run.                           |
+| =log=              | string  | The log of the line's command.                                                                    |
+| =module=           | string  | =NAME/VERSION=, the module that the file name of the easyconfig gives; absent when it gives none. |
+| =phase=            | string  | =build=, or =sources= when the prefetch of its sources failed.                                    |
+| =reason=           | string  | The =note= of the line in the result file, when it has one.                                       |
+| =status=           | string  | =success=, =failed=, =refused=, =pending= or =skipped=, as in the result file.                    |
+| =unit=             | string  | The unit of the line: =all=, =cpu-prerequisites=, =prelude= or the name of a shard.               |
+
+A reader ignores the keys that it does not know: a later version 1 may add keys, and a change that removes or renames one raises =schema_version=.
+
+** summary.html
+
+The page shows the same summary: a table of the targets, then the phases and the packages of each target, and for the rebuild of a watch its plan, folded.
+Each status is written out as well as coloured, and the colours follow the reader's light or dark preference.
+The page has no script and fetches nothing, and every value on it is escaped.
+Its links are relative: to =summary.json=, to the entry of each target, and to the log of each package under the run directory, so that the page keeps working when the run directory is copied or served elsewhere.
+A log outside the run directory is named but not linked.
+
+#+begin_src bash
+grep -o "<title>.*</title>" site/logs/20261117_090000/summary.html
+grep -o "href=\"[^\"]*\"" site/logs/20261117_090000/summary.html | sort -u
+#+end_src
+
+#+begin_example
+<title>eb-pipeline run 20261117_090000: failed</title>
+href="#target-zen2"
+href="#target-zen4"
+href="summary.json"
+href="zen2/Broken-1.0-GCCcore-15.2.0.stdout.log"
+href="zen2/Example-1.0-GCCcore-15.2.0.stdout.log"
+href="zen4/Example-1.0-GCCcore-15.2.0.stdout.log"
+#+end_example
+
+=eb-keep-logs rotate= gzips the =*.log= and =*.txt= files of old runs and leaves the two files as they are, so the links of an old page name each log as the run wrote it, before it gained =.gz=.
+
+** Reading the last runs
+
+=eb-pipeline status= prints the newest runs under the log root from their summaries; [[file:cli.org][The eb-pipeline command]] lists its options.
+
+#+begin_src bash
+eb-pipeline status --site site.toml
+#+end_src
+
+#+begin_example
+20261117_090000  failed (exit 1)  $WORK/site/logs/20261117_090000/summary.html
+  zen2  run  failed   exit 1          0.0 s  1 failed, 1 success; build failed
+  zen4  run  success  exit 0          0.0 s  1 success
+#+end_example
+
+Each run is a line with its status, its exit status and its page, then a line for each target with its command, status, exit status and duration, the number of packages with each status, and the phases that came to neither =ok= nor =not configured=, such as =logs skipped (exit 75)= for a rotation left to another.
+A run directory without =summary.json=, of a run that is still going or that ended before it wrote one, is the line =LOG_STAMP  no summary.json: the run is still going, or ended before writing one=, and one whose summary cannot be read names the error.
+With =--target=, =status= shows only the runs that have a log directory for that target, and only its entry in each; the line of a run keeps the status of the whole run.
+When the log root holds no run, =status= prints nothing on stdout, writes =INFO [status] -: no runs under LOG_ROOT= to stderr, and exits 0.
+
+=--format json= prints one document:
+
+#+begin_src bash
+eb-pipeline status --site site.toml --target zen4 --format json
+#+end_src
+
+#+begin_example
+{
+  "kind": "status",
+  "log_root": "$WORK/site/logs",
+  "runs": [
+    {
+      "dir": "$WORK/site/logs/20261117_090000",
+      "run": "20261117_090000",
+      "summary": {
+        "exit_code": 1,
+        "kind": "summary",
+        "run": "20261117_090000",
+        "schema_version": 1,
+        "site": "example",
+        "status": "failed",
+        "targets": [
+          {
+            "build_type": "production",
+            "command": "run",
+...
+            "name": "zen4",
+...
+            "status": "success"
+          }
+        ],
+        "tool": "eb-pipeline 0.3.0",
+        "updated_at": "2026-11-17T06:48:31.856935881+00:00"
+      }
+    }
+  ],
+  "schema_version": 1
+}
+#+end_example
+
+| Key              | Type    | Meaning                 |
+|------------------+---------+-------------------------|
+| =kind=           | string  | =status=.               |
+| =log_root=       | string  | =filesystems.log_root=. |
+| =runs=           | array   | The runs, newest first. |
+| =schema_version= | integer | =1=.                    |
+
+*** Each entry of =runs=
+
+| Key       | Type   | Meaning                                                                                |
+|-----------+--------+----------------------------------------------------------------------------------------|
+| =dir=     | string | The run directory.                                                                     |
+| =error=   | string | Why the run has no summary to show, in place of =summary=.                             |
+| =run=     | string | The name of the run directory, its =LOG_STAMP=.                                        |
+| =summary= | object | The run's =summary.json=, with only the entry of the target when =--target= names one. |
+
+** Sending it to a webhook
+
+With a =[notify]= table in the site file, a run POSTs the =summary.json= of its run directory to a webhook once it has written it, with every target that the summary holds; [[file:site-file.org][The site file]] lists the keys of the table.
+Here the URL is in a variable, and =when = "problems"= sends nothing after a run that exits 0:
+
+#+begin_src bash
+sed -n "/^\[notify\]/,\$p" notify.toml
+#+end_src
+
+#+begin_example
+[notify]
+webhook_env = "SUMMARY_WEBHOOK"
+when = "problems"
+#+end_example
+
+#+begin_src bash
+export SUMMARY_WEBHOOK=https://hooks.example.org/build/XXXX
+eb-pipeline run --site notify.toml --list build.list --target zen2 --build-type production --log-stamp 20261117_110000; echo "exit $?"
+eb-pipeline run --site notify.toml --list example.list --target zen4 --build-type production --log-stamp 20261117_110000; echo "exit $?"
+#+end_src
+
+#+begin_example
+INFO [licences] zen2: not configured
+...
+ERROR [build] zen2: Broken-1.0-GCCcore-15.2.0: failed (exit 1)
+INFO [summary] zen2: summary.json and summary.html written in $WORK/site/logs/20261117_110000
+INFO [notify] zen2: summary.json posted to https://hooks.example.org/...
+exit 1
+INFO [licences] zen4: not configured
+...
+INFO [summary] zen4: summary.json and summary.html written in $WORK/site/logs/20261117_110000
+INFO [notify] zen4: the run exited 0 and notify.when is problems; nothing sent
+exit 0
+#+end_example
+
+The URL is a secret: eb-pipeline prints only its scheme and its host, and curl reads it on its standard input, so that it is in the arguments of no process.
+The stand-in for curl wrote its arguments, then what it read:
+
+#+begin_src bash
+cat curl.log
+#+end_src
+
+#+begin_example
+curl --silent --show-error --fail --max-time 10 --request POST --header Content-Type: application/json --header Expect: --data-binary @$WORK/site/logs/20261117_110000/summary.json --config -
+url = "https://hooks.example.org/build/XXXX"
+#+end_example
+
+A POST that fails, or that takes longer than =notify.timeout_seconds=, is a warning that repeats what curl printed without the user, the path or the query of the URL, and the run exits as it would have without it:
+
+#+begin_src bash
+CURL_FAIL=500 eb-pipeline run --site notify.toml --list build.list --target zen2 --build-type production --log-stamp 20261117_120000; echo "exit $?"
+#+end_src
+
+#+begin_example
+INFO [licences] zen2: not configured
+...
+INFO [summary] zen2: summary.json and summary.html written in $WORK/site/logs/20261117_120000
+WARN [notify] zen2: POST of summary.json to https://hooks.example.org/... failed: curl exited 22: curl: (22) The requested URL returned error: 500
+exit 1
+#+end_example
+
+| Message                                                                            | When                                                                                                         |
+|------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------|
+| =INFO [notify] TARGET: summary.json posted to URL=                                 | curl exited 0.                                                                                               |
+| =INFO [notify] TARGET: the run exited 0 and notify.when is problems; nothing sent= | =when= is =problems= and the run exited 0.                                                                   |
+| =WARN [notify] TARGET: NAME is unset or empty; nothing sent=                       | The variable that =webhook_env= names holds no URL.                                                          |
+| =WARN [notify] TARGET: the URL in NAME REASON; nothing sent=                       | The variable that =webhook_env= names holds a URL that =check= would refuse in =webhook=; =REASON= says why. |
+| =WARN [notify] TARGET: POST of summary.json to URL failed: REASON=                 | curl could not start, or exited with a status other than 0.                                                  |
+
+=URL= is the scheme and the host of the URL, followed by =/...=.
+
+** See also
+
+- [[file:../howto/follow-runs.org][Follow runs through their summaries]]
+- [[file:plan-and-result.org][The plan and result files]], for the statuses of a phase and a line, and what =duration_seconds= counts
+- [[file:log-tree.org][The log tree and its locks]]
+- [[file:exit-status.org][Exit status]]
+- [[file:../api/eb_pipeline/summary/struct.Summary.html][eb_pipeline::summary::Summary]], the type behind =summary.json=

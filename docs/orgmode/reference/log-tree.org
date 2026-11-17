@@ -5,7 +5,8 @@
 * The log tree and its locks
 
 A run writes its logs under =filesystems.log_root=, =LOG_ROOT= on this page, in a directory of its own for each target.
-It takes locks in the log root, and in the state root of eb-staged-rebuild and the admission lock when the site file uses them.
+It takes locks in the log root, and in the state root of eb-staged-rebuild, the admission lock and the watch state when the site file uses them.
+The rebuild of =eb-pipeline watch= is a run like any other, with two files more.
 
 ** The log directory
 
@@ -24,26 +25,31 @@ find logs | sort
 logs
 logs/.eb-pipeline-rotate.lock
 logs/20261117_090000
+logs/20261117_090000/.summary.lock
 logs/20261117_090000/cpu
 logs/20261117_090000/cpu/Broken-1.0-GCCcore-15.2.0.keep-logs.log
 logs/20261117_090000/cpu/Broken-1.0-GCCcore-15.2.0.stdout.log
 logs/20261117_090000/cpu/Example-1.0-GCCcore-15.2.0.stdout.log
 logs/20261117_090000/cpu/rotate.log
+logs/20261117_090000/summary.html
+logs/20261117_090000/summary.json
 #+end_example
 
-| File                            | Phase          | What it holds                                                                                              |
-|---------------------------------+----------------+------------------------------------------------------------------------------------------------------------|
-| =LOG_DIR/selected-TARGET.list=  | before =shard= | The lines that =[targets.select]= keeps, which =stack shard= reads.                                        |
-| =LOG_DIR/easystack-TARGET.list= | before =shard= | The lines of the easystack given as =--list=, which =stack shard= reads; not with =[targets.select]=.      |
-| =LOG_DIR/shard.log=             | =shard=        | The output of =stack shard=.                                                                               |
-| =LOG_DIR/STEM.fetch.log=        | =sources=      | The output of the prefetch of the line's sources.                                                          |
-| =LOG_DIR/admission-UNIT.N.log=  | =admission=    | The output of attempt =N= of =stack admit= for the unit, counting from 1.                                  |
-| =LOG_DIR/STEM.stdout.log=       | =build=        | The output of the line's =eb= or =eb-staged-rebuild run=; the =log= of the line in the result file.        |
-| =LOG_DIR/easybuild-logs/STEM/=  | =build=        | The logs of EasyBuild itself, which =eb= writes there with =--tmp-logdir= when =[logs] keep_failed= is on. |
-| =LOG_DIR/STEM.keep-logs.log=    | =build=        | The output of =eb-keep-logs failed= after the line failed.                                                 |
-| =LOG_DIR/caches.log=            | =caches=       | The output of the cache command.                                                                           |
-| =LOG_DIR/rotate.log=            | =logs=         | The output of =eb-keep-logs rotate=.                                                                       |
-| =LOG_DIR/PHASE/=                | routed         | The directory ={phase_dir}= names, made before a command whose route arguments or shares use it.           |
+| File                            | Phase              | What it holds                                                                                              |
+|---------------------------------+--------------------+------------------------------------------------------------------------------------------------------------|
+| =LOG_DIR/watch.list=            | before =preflight= | For the rebuild of =watch=, the list that it runs.                                                         |
+| =LOG_DIR/watch-plan.json=       | before =preflight= | For the rebuild of =watch=, its plan.                                                                      |
+| =LOG_DIR/selected-TARGET.list=  | before =shard=     | The lines that =[targets.select]= keeps, which =stack shard= reads.                                        |
+| =LOG_DIR/easystack-TARGET.list= | before =shard=     | The lines of the easystack given as =--list=, which =stack shard= reads; not with =[targets.select]=.      |
+| =LOG_DIR/shard.log=             | =shard=            | The output of =stack shard=.                                                                               |
+| =LOG_DIR/STEM.fetch.log=        | =sources=          | The output of the prefetch of the line's sources.                                                          |
+| =LOG_DIR/admission-UNIT.N.log=  | =admission=        | The output of attempt =N= of =stack admit= for the unit, counting from 1.                                  |
+| =LOG_DIR/STEM.stdout.log=       | =build=            | The output of the line's =eb= or =eb-staged-rebuild run=; the =log= of the line in the result file.        |
+| =LOG_DIR/easybuild-logs/STEM/=  | =build=            | The logs of EasyBuild itself, which =eb= writes there with =--tmp-logdir= when =[logs] keep_failed= is on. |
+| =LOG_DIR/STEM.keep-logs.log=    | =build=            | The output of =eb-keep-logs failed= after the line failed.                                                 |
+| =LOG_DIR/caches.log=            | =caches=           | The output of the cache command.                                                                           |
+| =LOG_DIR/rotate.log=            | =logs=             | The output of =eb-keep-logs rotate=.                                                                       |
+| =LOG_DIR/PHASE/=                | routed             | The directory ={phase_dir}= names, made before a command whose route arguments or shares use it.           |
 
 =STEM= is the easyconfig file name without =.eb=, with =.2=, =.3= and so on added when the list repeats a line, and =UNIT= is =all=, =cpu-prerequisites=, =prelude= or the name of a shard.
 Each log holds the standard output and the standard error of its command, which starts with no standard input, and =run= creates it anew when the command starts.
@@ -51,24 +57,32 @@ A command that cannot start leaves one line in its log, =cannot start PROGRAM: E
 
 ** The log root
 
-| File                                 | What it is                                                                                              |
-|--------------------------------------+---------------------------------------------------------------------------------------------------------|
-| =LOG_ROOT/LOG_STAMP/=                | The directories of the runs with that stamp, one per target.                                            |
-| =LOG_ROOT/.eb-pipeline-rotate.lock=  | The rotation lock of eb-pipeline; the first run with =[logs.rotate]= creates it.                        |
-| =LOG_ROOT/.eb-keep-logs-rotate.lock= | The rotation lock of eb-keep-logs, which an =eb-keep-logs rotate= that takes a lock of its own creates. |
+| File                                 | What it is                                                                                                                              |
+|--------------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------|
+| =LOG_ROOT/LOG_STAMP/=                | The directories of the runs with that stamp, one per target.                                                                            |
+| =LOG_ROOT/LOG_STAMP/summary.json=    | The summary of the runs with that stamp, which each of them updates as it ends; [[file:run-summary.org][The run summary]] describes it. |
+| =LOG_ROOT/LOG_STAMP/summary.html=    | The same summary, as a page to open in a browser.                                                                                       |
+| =LOG_ROOT/LOG_STAMP/.summary.lock=   | The lock a run holds while it updates the summary.                                                                                      |
+| =LOG_ROOT/.eb-pipeline-rotate.lock=  | The rotation lock of eb-pipeline; the first run with =[logs.rotate]= creates it.                                                        |
+| =LOG_ROOT/.eb-keep-logs-rotate.lock= | The rotation lock of eb-keep-logs, which an =eb-keep-logs rotate= that takes a lock of its own creates.                                 |
 
 =eb-keep-logs rotate= compresses and deletes the run directories by the age of their stamp, and keeps files of its own in the tree; the [[https://stackhands.github.io/eb-keep-logs/][eb-keep-logs documentation]] describes them.
 
 ** Locks
 
-| Lock                                 | Taken by                                                                                           | How                                                                                                             | While another holder has it                                                                                                                                                |
-|--------------------------------------+----------------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| =LOG_ROOT/.eb-pipeline-rotate.lock=  | =run= with =[logs.rotate]=, and a rotation outside a run that takes it with =flock(1)=             | =flock=: shared from the end of =preflight= to the end of the run, then alone for the rotation, without waiting | A run that starts waits while another holds it alone, as a rotation does. A run that cannot take it alone at its end leaves =logs= =skipped=.                              |
-| =LOG_ROOT/.eb-keep-logs-rotate.lock= | =eb-keep-logs rotate=, where its =--help= lists =--lock-timeout=; eb-keep-logs 0.2.1 takes no lock | =flock=, alone, from before it lists the log root until it exits                                                | It waits up to =--lock-timeout= seconds, 600 unless given, then exits 75 having changed nothing. =run= passes =--lock-timeout 0=, and records exit 75 as =logs= =skipped=. |
-| =STATE_ROOT/.lock=                   | =eb-staged-rebuild run=, for a staged line                                                         | Alone, for the whole of its build and publish                                                                   | It waits up to =rebuild.lock_timeout= seconds, then exits 2, and the line is =refused=.                                                                                    |
-| =admission.lock=                     | =stack admit=, and =run= when it removes the reservation of an admitted job                        | =flock=, or a POSIX record lock over the whole file, as =admission.lock_kind= says                              | =run= waits for it.                                                                                                                                                        |
+| Lock                                 | Taken by                                                                                           | How                                                                                                                                        | While another holder has it                                                                                                                                                |
+|--------------------------------------+----------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =LOG_ROOT/.eb-pipeline-rotate.lock=  | =run= with =[logs.rotate]=, and a rotation outside a run that takes it with =flock(1)=             | =flock=: shared from the end of =preflight= to the end of the run, then alone for the rotation, without waiting                            | A run that starts waits while another holds it alone, as a rotation does. A run that cannot take it alone at its end leaves =logs= =skipped=.                              |
+| =LOG_ROOT/.eb-keep-logs-rotate.lock= | =eb-keep-logs rotate=, where its =--help= lists =--lock-timeout=; eb-keep-logs 0.2.1 takes no lock | =flock=, alone, from before it lists the log root until it exits                                                                           | It waits up to =--lock-timeout= seconds, 600 unless given, then exits 75 having changed nothing. =run= passes =--lock-timeout 0=, and records exit 75 as =logs= =skipped=. |
+| =STATE_ROOT/.lock=                   | =eb-staged-rebuild run=, for a staged line                                                         | Alone, for the whole of its build and publish                                                                                              | It waits up to =rebuild.lock_timeout= seconds, then exits 2, and the line is =refused=.                                                                                    |
+| =admission.lock=                     | =stack admit=, and =run= when it removes the reservation of an admitted job                        | =flock=, or a POSIX record lock over the whole file, as =admission.lock_kind= says                                                         | =run= waits for it.                                                                                                                                                        |
+| =LOG_ROOT/LOG_STAMP/.summary.lock=   | =run=, after its last phase                                                                        | =flock=, alone, while it reads =summary.json= and writes both files, holding no other lock                                                 | It waits for it.                                                                                                                                                           |
+| =STATE_DIR/TARGET.lock=              | =run= with =[watch]=, after its last phase and before the summary, and =watch=                     | =flock=, alone, while it reads =STATE_DIR/TARGET.json= and writes it, holding no other lock but, in =watch=, =STATE_DIR/TARGET.watch.lock= | It waits for it.                                                                                                                                                           |
+| =STATE_DIR/TARGET.watch.lock=        | =watch=                                                                                            | =flock=, alone, from its start to its end, without waiting                                                                                 | =watch= exits 75.                                                                                                                                                          |
 
 =STATE_ROOT= is =rebuild.state_root=, else the =EB_STAGED_REBUILD_STATE_ROOT= that eb-staged-rebuild sees, else =.eb-staged-rebuild= beside the software tree.
+=STATE_DIR= is =watch.state_dir=; [[file:watch.org][The watch state and plan]] describes =STATE_DIR/TARGET.json= and the plan.
+A record and =watch= work in =SCRATCH/eb-pipeline-watch/TARGET/LOG_STAMP/=, where =SCRATCH= is =filesystems.scratch=, and remove their work directory there when they succeed; =watch --dry-run= leaves the files of eb-stack in it.
 =flock= locks hold between nodes only where the filesystem carries them between nodes.
 When a run cannot take its rotation lock at all, it logs =WARN [logs] TARGET: cannot lock PATH: ERROR; the rotation does not wait for other runs= and rotates without it.
 
@@ -86,5 +100,7 @@ A run waits for the first lock only at its start, before it holds any other, and
 
 - [[file:site-file.org][The site file]], for =[logs]=, =[rebuild]= and =[admission]=
 - [[file:plan-and-result.org][The plan and result files]], for the statuses of the =logs= phase and of a line
+- [[file:run-summary.org][The run summary]], for =summary.json= and =summary.html=
+- [[file:watch.org][The watch state and plan]], for the record and the rebuild of =watch=
 - [[file:exit-status.org][Exit status]]
 - [[file:../explanation/log-rotation.org][Why the rotation takes two locks]], for why the locks are taken as they are

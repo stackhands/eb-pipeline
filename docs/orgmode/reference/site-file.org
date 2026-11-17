@@ -31,6 +31,7 @@ It is one file in Tom's Obvious Minimal Language (TOML), named by =--site=.
 | =filesystems.tmp=                                                      | ={job_dir}=                                                                                                     |
 | =filesystems.job_dir=                                                  | ={job}=, ={user}=                                                                                               |
 | the entries of =filesystems.source_paths=, =rebuild.state_root=        | ={target}=                                                                                                      |
+| =watch.state_dir=                                                      | ={target}=                                                                                                      |
 | =targets.route.args=, the values of =targets.route.env=                | ={phase_dir}=, ={log_dir}=, ={work_dir}=, ={target}=, ={phase}=, ={runtime_root}=, ={shares_ro}=, ={shares_rw}= |
 | the entries of =targets.route.shares_ro= and =targets.route.shares_rw= | ={phase_dir}=, ={log_dir}=, ={work_dir}=, ={target}=, ={phase}=                                                 |
 
@@ -74,7 +75,7 @@ build_path = "{job_dir}/build"
 The job id and the user are known only inside the job.
 =plan= and =explain= show =EASYBUILD_BUILDPATH= with ={job_dir}= in it, and =EB_PIPELINE_JOB_DIR= with ={job}= and ={user}=.
 Each command that a job starts first runs a wrapper that replaces them, then checks that the directory exists and that the job can write to it, and otherwise exits 1 before the command starts.
-So every job that a run starts needs the directory, whatever its phase.
+So every job that a run or =watch= starts needs the directory, whatever its phase.
 =check= refuses a =job_dir= without ={job}=, a =job_dir= with a scheduler other than =slurm=, ={job_dir}= in the other paths, and ={work_dir}= in a route when =build_path= has ={job_dir}=, as the route starts before the job.
 
 ** Top level
@@ -96,6 +97,8 @@ So every job that a run starts needs the directory, whatever its phase.
 | =logs=           | table          | none     | Keeping the logs of a failed line, and rotating the log tree.                   |
 | =rebuild=        | table          | none     | Rebuilding installed software in a staged tree, with eb-staged-rebuild.         |
 | =licences=       | table          | none     | The licence gate.                                                               |
+| =notify=         | table          | none     | Sending the summary of each run to a webhook.                                   |
+| =watch=          | table          | none     | Recording what each install was built against in EESSI.                         |
 
 ** =[site]=
 
@@ -445,6 +448,41 @@ When the gate's problems are the only ones of the file, =run= exits 78; =check= 
 | Key        | Type            | Default | Meaning                                                                |
 |------------+-----------------+---------+------------------------------------------------------------------------|
 | =software= | array of string | =[]=    | The package names that each need a group, a threshold or an exemption. |
+
+** =[notify]=
+
+| Key               | Type    | Default  | Meaning                                                                                                                                          |
+|-------------------+---------+----------+--------------------------------------------------------------------------------------------------------------------------------------------------|
+| =enabled=         | boolean | =true=   | =false= sends nothing.                                                                                                                           |
+| =webhook=         | string  | none     | The =http://= or =https://= URL that each run POSTs the =summary.json= of its run directory to, once it has written it; set it or =webhook_env=. |
+| =webhook_env=     | string  | none     | The variable that holds the URL, read when the run ends, which keeps the URL out of the site file; set it or =webhook=.                          |
+| =when=            | string  | =always= | =always=, or =problems= to POST only after a run that exits with a status other than 0.                                                          |
+| =timeout_seconds= | integer | =10=     | The longest the POST may take, in seconds, as =curl --max-time=; at least 1.                                                                     |
+| =curl=            | string  | =curl=   | The curl that sends the POST.                                                                                                                    |
+
+The URL is a secret: eb-pipeline prints its scheme and its host only, and no message of =check= repeats it.
+Each run that sends the summary starts =curl --silent --show-error --fail --max-time TIMEOUT_SECONDS --request POST --header "Content-Type: application/json" --header "Expect:" --data-binary @SUMMARY --config -=, where =SUMMARY= is the =summary.json= of the run directory, and writes =url = "URL"= on its standard input, so that the URL is in the arguments of no process.
+=check= refuses both =webhook= and =webhook_env=, neither of them unless =enabled= is =false=, a =webhook= that does not start with =http://= or =https://=, names no host, or holds a space, a quote, a backslash or a control character, and a =webhook_env= that is not a variable name.
+A run checks the URL in the variable of =webhook_env= the same way when it ends.
+A run that writes no summary, such as =run --dry-run=, sends nothing.
+A POST that cannot start, fails or runs out of time is a =WARN= line, and the run exits as it would have without the table; [[file:run-summary.org][The run summary]] shows the lines that a run writes.
+
+** =[watch]=
+
+With the table, each =run= records what every install it builds was built against in EESSI, with the EESSI modules that eb-stack says the install depends on, and =watch= rebuilds the recorded installs that a change of EESSI reaches; [[file:watch.org][The watch state and plan]] says how.
+
+| Key              | Type            | Default                                      | Meaning                                                                                                                                                                                                                                    |
+|------------------+-----------------+----------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =enabled=        | boolean         | =true=                                       | =false= records nothing, and =watch= exits 78.                                                                                                                                                                                             |
+| =state_dir=      | string          | =<install prefix>/.eb-pipeline-watch=        | The directory of =TARGET.json=, the record of the target, and of its lock; ={target}= is the name of the target.                                                                                                                           |
+| =repository=     | string          | =EESSI_CVMFS_REPO=                           | The directory whose CVMFS =user.revision= attribute a record reads, in place of the =EESSI_CVMFS_REPO= of the module environment.                                                                                                          |
+| =modules_dirs=   | array of string | =EESSI_MODULEPATH=, =EESSI_MODULEPATH_ACCEL= | The EESSI module trees, in order, in place of the ones that the module environment sets.                                                                                                                                                   |
+| =easyconfigs=    | array of string | =$EBROOTEASYBUILD/easybuild/easyconfigs=     | The easyconfig trees that =watch= gives =eb-stack stack shard= under those of EESSI and of the target, in which it finds the easyconfig of an EESSI module that vanished; the default reads =EBROOTEASYBUILD= from the module environment. |
+| =rebuild_review= | boolean         | =true=                                       | Whether =watch= rebuilds an install when a dependency that =eb-stack rebuild-set= classes =review= changed or vanished; =false= keeps the install, with a =WARN= line.                                                                     |
+
+The paths are absolute, which =check= checks.
+The install prefix is the =site_prefix= of the target, else =filesystems.install_root=.
+A record that fails is a =WARN= line, and the run exits as it would have without the table.
 
 ** See also
 

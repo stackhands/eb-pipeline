@@ -683,6 +683,46 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
             }
         }
     }
+    if let Some(n) = &site.notify {
+        match (&n.webhook, &n.webhook_env) {
+            (Some(_), Some(_)) => e.push("notify: set webhook or webhook_env, not both".into()),
+            (None, None) if n.enabled => e.push("notify: set webhook or webhook_env".into()),
+            _ => {}
+        }
+        // The URL is a secret: no message here repeats it.
+        if let Some(Err(why)) = n.webhook.as_deref().map(crate::notify::check_url) {
+            e.push(format!("notify.webhook: {why}"));
+        }
+        if let Some(v) = n.webhook_env.as_deref().filter(|v| !env_name_ok(v)) {
+            e.push(format!("notify.webhook_env: `{v}` is not a variable name"));
+        }
+        if n.when != "always" && n.when != "problems" {
+            e.push(format!(
+                "notify.when: expected always or problems, found `{}`",
+                n.when
+            ));
+        }
+        if n.timeout_seconds == 0 {
+            e.push("notify.timeout_seconds: must be at least 1".into());
+        }
+        if n.curl.is_empty() {
+            e.push("notify.curl: must not be empty".into());
+        }
+    }
+    if let Some(w) = &site.watch {
+        if let Some(s) = &w.state_dir {
+            check_placeholders("watch.state_dir", s, PER_TARGET, &mut e);
+        }
+        let paths = w.state_dir.iter().map(|p| ("state_dir", p));
+        let paths = paths.chain(w.repository.iter().map(|p| ("repository", p)));
+        let paths = paths.chain(w.modules_dirs.iter().map(|p| ("modules_dirs", p)));
+        let paths = paths.chain(w.easyconfigs.iter().map(|p| ("easyconfigs", p)));
+        for (key, p) in paths {
+            if !p.starts_with('/') {
+                e.push(format!("watch.{key}: `{p}` is not an absolute path"));
+            }
+        }
+    }
     e
 }
 
@@ -720,6 +760,14 @@ impl Site {
     /// `[modules.eessi]` when active.
     pub fn eessi_on(&self) -> Option<&Eessi> {
         self.modules.eessi.as_ref().filter(|e| e.enabled)
+    }
+    /// `[notify]` when active.
+    pub fn notify_on(&self) -> Option<&Notify> {
+        self.notify.as_ref().filter(|n| n.enabled)
+    }
+    /// `[watch]` when active.
+    pub fn watch_on(&self) -> Option<&Watch> {
+        self.watch.as_ref().filter(|w| w.enabled)
     }
     /// The target called `name`.
     ///

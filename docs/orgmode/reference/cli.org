@@ -16,8 +16,10 @@ eb-pipeline schema
 eb-pipeline init [OPTIONS]
 eb-pipeline explain [OPTIONS] --site <SITE>
 eb-pipeline targets [OPTIONS] --site <SITE>
+eb-pipeline status [OPTIONS] --site <SITE>
 eb-pipeline plan [OPTIONS] --site <SITE> --list <LIST> --target <TARGET> --build-type <BUILD_TYPE>
 eb-pipeline run [OPTIONS] --site <SITE> --list <LIST> --target <TARGET> --build-type <BUILD_TYPE>
+eb-pipeline watch [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>
 #+end_example
 
 =eb-pipeline --help= prints:
@@ -33,8 +35,10 @@ Commands:
   init     Write a starter site file from a built-in template
   explain  Print the resolved configuration of one or all targets
   targets  Print the target names in file order, for a CI matrix or a shell loop
+  status   Print the last runs under the log root, newest first, from their summaries
   plan     Compute phases, launch lines, environments and tool calls without executing
   run      Execute the plan's phases as subprocesses
+  watch    Rebuild the recorded installs an EESSI change reaches, in dependency order
   help     Print this message or the help of the given subcommand(s)
 
 Options:
@@ -50,6 +54,7 @@ Examples:
   eb-pipeline targets --site site.toml --format json
   eb-pipeline plan --site site.toml --list list.txt --target cpu --build-type production --out plan.json
   eb-pipeline run --site site.toml --list list.txt --target cpu --build-type production --result result.json
+  eb-pipeline watch --site site.toml --target cpu --build-type production --dry-run
 
 Configuration: every flag above falls back to an EB_PIPELINE_<FLAG> variable
 (EB_PIPELINE_SITE, EB_PIPELINE_LIST, EB_PIPELINE_TARGET, EB_PIPELINE_BUILD_TYPE,
@@ -58,9 +63,10 @@ command line wins. EB_PIPELINE__SECTION__KEY=value sets one site file value, for
 example EB_PIPELINE__FILESYSTEMS__SCRATCH=/scratch/eb; the result is validated
 like the file.
 
-Output streams: stdout carries plan, explain, schema, init, targets and run --dry-run
-output only. Events go to stderr as `LEVEL [phase] target: message`. The result JSON
-goes to --result.
+Output streams: stdout carries plan, explain, schema, init, status, targets and run
+--dry-run or watch --dry-run output only. Events go to stderr as `LEVEL [phase]
+target: message`. The result JSON goes to --result, and each run's summary to
+summary.json and summary.html in its run directory, <log_root>/<log-stamp>/.
 
 Exit codes:
    0  all requested work completed
@@ -96,16 +102,18 @@ eb-pipeline 0.3.0
 The first argument names the command.
 No command takes an argument other than its options.
 
-| Command   | What it does                                                                                                                                        |
-|-----------+-----------------------------------------------------------------------------------------------------------------------------------------------------|
-| =check=   | Read the site file, check it against every rule of [[file:site-file.org][The site file]], and print warnings about settings that are valid but probably wrong.              |
-| =schema=  | Print every key of the site file with its type, its default and what it does, section by section.                                                   |
-| =init=    | Print a built-in template site file, or write it to a new file.                                                                                     |
-| =explain= | Print what each target resolves to: paths, launch lines and the environment of its commands.                                                        |
-| =targets= | Print the names of the targets in the order of the site file.                                                                                       |
-| =plan=    | Print the plan of a run as JavaScript Object Notation (JSON): its phases and every command with its launch line and environment. It starts nothing. |
-| =run=     | Run the phases of the plan, one command at a time, and write the result file.                                                                       |
-| =help=    | Print the help of the program, or of the command it names.                                                                                          |
+| Command   | What it does                                                                                                                                                                                                        |
+|-----------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =check=   | Read the site file, check it against every rule of [[file:site-file.org][The site file]], and print warnings about settings that are valid but probably wrong.                                                                              |
+| =schema=  | Print every key of the site file with its type, its default and what it does, section by section.                                                                                                                   |
+| =init=    | Print a built-in template site file, or write it to a new file.                                                                                                                                                     |
+| =explain= | Print what each target resolves to: paths, launch lines and the environment of its commands.                                                                                                                        |
+| =targets= | Print the names of the targets in the order of the site file.                                                                                                                                                       |
+| =status=  | Print the last runs under the log root, newest first, from the summary of each run directory.                                                                                                                       |
+| =plan=    | Print the plan of a run as JavaScript Object Notation (JSON): its phases and every command with its launch line and environment. It starts nothing.                                                                 |
+| =run=     | Run the phases of the plan, one command at a time, write the result file, and add the run to the summary of its run directory.                                                                                      |
+| =watch=   | Compare what each recorded install of a target was built against in EESSI with the EESSI that its module environment loads now, and rebuild the installs that a change reaches, in the order of their dependencies. |
+| =help=    | Print the help of the program, or of the command it names.                                                                                                                                                          |
 
 ** Options
 
@@ -164,6 +172,18 @@ It shows =<run-id>= and =<log-stamp>= where a run puts its own.
 | =--site FILE=     | =EB_PIPELINE_SITE= | The site file; required.                                                                            |
 | =--format FORMAT= |                    | =text=, the default, prints one name per line; =json= prints a JSON array of the names on one line. |
 
+*** status
+
+| Option            | Variable             | Meaning                                                                                             |
+|-------------------+----------------------+-----------------------------------------------------------------------------------------------------|
+| =--site FILE=     | =EB_PIPELINE_SITE=   | The site file; required.                                                                            |
+| =--target NAME=   | =EB_PIPELINE_TARGET= | Only the runs that have a log directory for the target, with only its entry; every run when absent. |
+| =--last N=        |                      | How many runs to print, from 1 to 65535; 10 when absent. Any other value is refused, with exit 2.   |
+| =--format FORMAT= |                      | =text=, the default, prints a line per run and a line per target; =json= prints one JSON document.  |
+
+=status= reads the directories under =filesystems.log_root= whose names are log stamps, newest first, and leaves out every other entry.
+[[file:run-summary.org][The run summary]] shows what it prints.
+
 *** plan
 
 | Option              | Variable                 | Meaning                                                                                                                                                                          |
@@ -184,12 +204,29 @@ It shows =<run-id>= and =<log-stamp>= where a run puts its own.
 | Option          | Meaning                                                                                                                                                                                     |
 |-----------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | =--result FILE= | Write the result file to =FILE= when the run ends. Without it, no result file is written. An error in the input, which stops the run before it starts, leaves an existing =FILE= as it was. |
-| =--dry-run=     | Print each command of the plan on stdout and start nothing. No result file is written, even with =--result=.                                                                                |
+| =--dry-run=     | Print each command of the plan on stdout and start nothing. No result file or summary is written, even with =--result=.                                                                     |
 
 =--run-id= defaults to the log stamp, and =--log-stamp= to the UTC time at which the run starts, taken once.
 A line that =eb-staged-rebuild= builds passes =RUN_ID-STEM= as its run id, where =STEM= is the easyconfig file name without =.eb=, with =.2=, =.3= and so on added when the list repeats the line.
 
 With =--dry-run=, a planned command prints as =[PHASE] COMMAND= and a phase that starts nothing as =# [PHASE] STATUS=.
+
+*** watch
+
+| Option              | Variable                 | Meaning                                                                                                                                                       |
+|---------------------+--------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =--site FILE=       | =EB_PIPELINE_SITE=       | The site file; required. It needs a =[watch]= table.                                                                                                          |
+| =--target NAME=     | =EB_PIPELINE_TARGET=     | The target whose record to compare; required.                                                                                                                 |
+| =--build-type NAME= | =EB_PIPELINE_BUILD_TYPE= | The build type of the rebuild; required.                                                                                                                      |
+| =--run-id ID=       | =EB_PIPELINE_RUN_ID=     | The run id of the rebuild; the log stamp when absent.                                                                                                         |
+| =--log-stamp STAMP= | =EB_PIPELINE_LOG_STAMP=  | The run directory of the rebuild under the log root, as for =run=; the UTC time at which =watch= starts when absent. Any other value is refused, with exit 2. |
+| =--dry-run=         |                          | Print the plan on stdout, and rebuild and record nothing.                                                                                                     |
+| =--adopt=           |                          | Record each install in the module tree of the target against the EESSI loaded now, in place of the record, and rebuild nothing.                               |
+| =--plan-out FILE=   |                          | Write the plan to =FILE= in JSON.                                                                                                                             |
+| =--result FILE=     |                          | Write the result file of the rebuild to =FILE=. Without it, or without a rebuild, no result file is written.                                                  |
+
+Without =--dry-run=, =watch= prints the plan to stderr, then runs the rebuild list through the phases of the site file, as =run= runs a build list.
+[[file:watch.org][The watch state and plan]] says what =watch= compares, what its plan holds and how it rebuilds.
 
 ** Environment
 
@@ -201,32 +238,36 @@ Each option in the tables above that names a variable reads it when the option i
 
 | Status | Meaning                                                                                                                                                                                                                                                      |
 |--------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-|      0 | All requested work completed.                                                                                                                                                                                                                                |
-|      1 | =run=: a line or a phase failed. =plan=: the shard plan could not be read. Any command: an output file could not be written.                                                                                                                                 |
+|      0 | All requested work completed. =watch=: also nothing to rebuild.                                                                                                                                                                                              |
+|      1 | =run=: a line or a phase failed. =watch=: the rebuild failed, or an eb-stack call, the record or the state file did. =plan=: the shard plan could not be read. =status=: the log root could not be read. Any command: an output file could not be written.   |
 |      2 | A usage error, an invalid site file, an unknown target, a list that cannot be read, is empty or has a quote that is not closed, an easystack that gives no lines as written, a tool below its =min_version=, or an =init --out= file that cannot be created. |
-|     75 | =run=: a resource was busy or a step is pending; run it again.                                                                                                                                                                                               |
-|     78 | =run=: a precondition, admission or =eb-staged-rebuild= refused.                                                                                                                                                                                             |
-|    130 | =run=: interrupted by =SIGINT=.                                                                                                                                                                                                                              |
-|    143 | =run=: interrupted by =SIGTERM=.                                                                                                                                                                                                                             |
+|     75 | =run=: a resource was busy or a step is pending; run it again. =watch=: another watch of the target runs, its module environment did not load, or EESSI cannot be read.                                                                                      |
+|     78 | =run=: a precondition, admission or =eb-staged-rebuild= refused. =watch=: no =[watch]=, no EESSI, another EESSI version, no eb-stack, or no easyconfig tree for a vanished module.                                                                           |
+|    130 | =run= and =watch=: interrupted by =SIGINT=.                                                                                                                                                                                                                  |
+|    143 | =run= and =watch=: interrupted by =SIGTERM=.                                                                                                                                                                                                                 |
 
-The commands other than =run= exit 0, 1 or 2.
+The commands other than =run= and =watch= exit 0, 1 or 2.
+The rebuild of =watch= exits as a run would, and =watch= exits with its status.
 [[file:exit-status.org][Exit status]] has the cases behind each status, how =run= picks one when several apply, and how it reads the exit statuses of the tools it starts.
 
 ** Files
 
-| File                            | Use                                                                                                                                                                                                                                                                                                                   |
-|---------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| the site file, =--site=         | Everything about the site; [[file:site-file.org][The site file]] lists its keys.                                                                                                                                                                                                                                                              |
-| the build list, =--list=        | One easyconfig per line, followed by the options =eb= gets for it, as =Name-version-toolchain.eb [eb options]=. Blank lines and lines that start with =#= are skipped. A =.yml= or =.yaml= file is an EasyBuild easystack instead, each of whose =easyconfigs= entries is a line, as [[file:../howto/from-eb-stack.org][Build what eb-stack plans]] shows. |
-| the plan, =plan --out=          | What =plan= prints; [[file:plan-and-result.org][The plan and result files]] lists its keys.                                                                                                                                                                                                                                                         |
-| the result file, =run --result= | What the run did, line by line and phase by phase; [[file:plan-and-result.org][The plan and result files]] lists its keys.                                                                                                                                                                                                                          |
-| =LOG_ROOT/LOG_STAMP/TARGET/=    | The log directory of a run, under =filesystems.log_root=; [[file:log-tree.org][The log tree and its locks]] lists its files.                                                                                                                                                                                                                 |
+| File                              | Use                                                                                                                                                                                                                                                                                                                   |
+|-----------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| the site file, =--site=           | Everything about the site; [[file:site-file.org][The site file]] lists its keys.                                                                                                                                                                                                                                                              |
+| the build list, =--list=          | One easyconfig per line, followed by the options =eb= gets for it, as =Name-version-toolchain.eb [eb options]=. Blank lines and lines that start with =#= are skipped. A =.yml= or =.yaml= file is an EasyBuild easystack instead, each of whose =easyconfigs= entries is a line, as [[file:../howto/from-eb-stack.org][Build what eb-stack plans]] shows. |
+| the plan, =plan --out=            | What =plan= prints; [[file:plan-and-result.org][The plan and result files]] lists its keys.                                                                                                                                                                                                                                                         |
+| the result file, =run --result=   | What the run did, line by line and phase by phase; [[file:plan-and-result.org][The plan and result files]] lists its keys.                                                                                                                                                                                                                          |
+| =LOG_ROOT/LOG_STAMP/TARGET/=      | The log directory of a run, under =filesystems.log_root=; [[file:log-tree.org][The log tree and its locks]] lists its files.                                                                                                                                                                                                                 |
+| =LOG_ROOT/LOG_STAMP/summary.json= | The summary of the runs with that log stamp, which each =run= updates and =status= reads, with =summary.html= beside it; [[file:run-summary.org][The run summary]] lists its keys.                                                                                                                                                              |
+| =STATE_DIR/TARGET.json=           | With =[watch]=, what each install of the target that a run or =watch= built was built against in EESSI, which =watch= compares with EESSI now; [[file:watch.org][The watch state and plan]] lists its keys.                                                                                                                               |
+| the plan, =watch --plan-out=      | What =watch= found for each recorded install and the list it rebuilds; [[file:watch.org][The watch state and plan]] lists its keys.                                                                                                                                                                                                       |
 
 A list line is split into words as a shell splits them, with single and double quotes.
 
 ** See also
 
 - [[file:../tutorials/first-build-list.org][Run your first build list]]
-- [[file:site-file.org][The site file]] and [[file:plan-and-result.org][The plan and result files]]
+- [[file:site-file.org][The site file]], [[file:plan-and-result.org][The plan and result files]] and [[file:run-summary.org][The run summary]]
 - [[file:environment.org][Environment variables]] and [[file:exit-status.org][Exit status]]
 - The [[file:api.org][API]] of the =eb_pipeline= library, which the command is built on.

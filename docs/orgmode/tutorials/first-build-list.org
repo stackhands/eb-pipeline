@@ -147,10 +147,12 @@ INFO [build] cpu: Example-1.0-GCCcore-15.2.0: start
 INFO [build] cpu: Example-1.0-GCCcore-15.2.0: ok
 INFO [build] cpu: zlib-1.3.1-GCCcore-15.2.0: start
 INFO [build] cpu: zlib-1.3.1-GCCcore-15.2.0: ok
+INFO [summary] cpu: summary.json and summary.html written in $WORK/logs/20261117_063709
 0
 #+end_example
 
 eb-pipeline reports on standard error as it goes, one line per event, and exits with status 0 when every line built.
+The last line names the run's directory under =logs=, where it left a summary of the run: =summary.json=, and =summary.html= to open in a browser.
 
 ** Read the result file
 
@@ -167,29 +169,32 @@ cat result.json
   "counts": {
     "success": 2
   },
-  "ended_at": "2026-11-17T02:40:48.852371271+00:00",
+  "duration_seconds": 0.041,
+  "ended_at": "2026-11-17T06:37:09.716900855+00:00",
   "exit_code": 0,
   "kind": "result",
   "lines": [
     {
+      "duration_seconds": 0.02,
       "easyconfig": "Example-1.0-GCCcore-15.2.0.eb",
       "exit_code": 0,
-      "log": "$WORK/logs/20261117_024048/cpu/Example-1.0-GCCcore-15.2.0.stdout.log",
+      "log": "$WORK/logs/20261117_063709/cpu/Example-1.0-GCCcore-15.2.0.stdout.log",
       "phase": "build",
       "status": "success",
       "unit": "all"
     },
     {
+      "duration_seconds": 0.02,
       "easyconfig": "zlib-1.3.1-GCCcore-15.2.0.eb",
       "exit_code": 0,
-      "log": "$WORK/logs/20261117_024048/cpu/zlib-1.3.1-GCCcore-15.2.0.stdout.log",
+      "log": "$WORK/logs/20261117_063709/cpu/zlib-1.3.1-GCCcore-15.2.0.stdout.log",
       "phase": "build",
       "status": "success",
       "unit": "all"
     }
   ],
   "list": "build.list",
-  "log_dir": "$WORK/logs/20261117_024048/cpu",
+  "log_dir": "$WORK/logs/20261117_063709/cpu",
   "not_configured": [
     "licences",
     "shard",
@@ -205,24 +210,25 @@ cat result.json
     },
 ...
     {
+      "duration_seconds": 0.041,
       "name": "build",
       "status": "ok"
     },
 ...
   ],
-  "run_id": "20261117_024048",
+  "run_id": "20261117_063709",
   "schema_version": 1,
   "sharded": false,
   "site": "example",
-  "started_at": "2026-11-17T02:40:48.811313154+00:00",
+  "started_at": "2026-11-17T06:37:09.675709548+00:00",
   "target": "cpu"
 }
 #+end_example
 
 - =exit_code= is the status eb-pipeline exited with, and =counts= counts the lines by status.
-- =lines= has an entry for each line, with its =status= and the =log= that its =eb= wrote to.
+- =lines= has an entry for each line, with its =status=, the =log= that its =eb= wrote to, and the =duration_seconds= it ran for.
 - =phases= has every phase of the run in order, and =not_configured= names the ones the site file leaves out.
-- =20261117_024048= is the time the run started, in Coordinated Universal Time (UTC), so yours differs.
+- =20261117_063709= is the time the run started, in Coordinated Universal Time (UTC), so yours differs.
   It names the run's log directory, and it is the =run_id= too, as no =--run-id= gave another.
 
 ** Read the log of a line
@@ -272,6 +278,7 @@ INFO [build] cpu: Broken-1.0-GCCcore-15.2.0: start
 ERROR [build] cpu: Broken-1.0-GCCcore-15.2.0: failed (exit 1)
 INFO [build] cpu: zlib-1.3.1-GCCcore-15.2.0: start
 INFO [build] cpu: zlib-1.3.1-GCCcore-15.2.0: ok
+INFO [summary] cpu: summary.json and summary.html written in $WORK/logs/20261117_063710
 1
 #+end_example
 

@@ -141,6 +141,18 @@ impl<'a> Scope<'a> {
         r.state_root.as_deref().map(|s| self.per_target(s))
     }
 
+    /// Directory of the target's watch state, when `[watch]` is on.
+    pub fn watch_state_dir(&self) -> Option<String> {
+        let w = self.site.watch_on()?;
+        Some(match &w.state_dir {
+            Some(d) => self.per_target(d),
+            None => format!(
+                "{}/.eb-pipeline-watch",
+                self.install_prefix().trim_end_matches('/')
+            ),
+        })
+    }
+
     /// A site path with `{target}` expanded to the target's name.
     fn per_target(&self, path: &str) -> String {
         path.replace("{target}", &self.target.name)

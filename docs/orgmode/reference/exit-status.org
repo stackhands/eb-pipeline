@@ -26,10 +26,11 @@ An error that ends a command is written to stderr as =ERROR [main] -: MESSAGE=.
 
 *** 0
 
-- =check=, =schema=, =init=, =explain=, =targets= and =plan= did what they were asked.
+- =check=, =schema=, =init=, =explain=, =targets=, =status= and =plan= did what they were asked; =status= also when the log root holds no run.
 - =run --dry-run= printed its commands.
 - =run=: no line failed, was refused or is pending, and no phase failed.
   A deselected line, a phase that is not configured, an =unsharded= shard phase and a =logs= phase that another rotation made =skipped= all leave the status at 0.
+- =watch=: no install is recorded, EESSI is as recorded, or no recorded install needs a rebuild; =--dry-run= printed the plan, or =--adopt= recorded the installs; or the rebuild exited 0.
 
 *** 1
 
@@ -41,8 +42,11 @@ An error that ends a command is written to stderr as =ERROR [main] -: MESSAGE=.
 - =run=: =eb-keep-logs rotate= exited with a status other than 0 and 75.
 - =run=: a log file, a log directory, the list of selected lines or the result file could not be written.
 - =plan=: the shard plan given to =--shard-plan= could not be read, or the plan could not be written to =--out=.
+- =status=: the log root could not be read.
+- =watch=: the rebuild exited 1; an eb-stack call failed, or what it wrote could not be read; or the record, the state file, the plan or the rebuild list could not be read or written.
 
 A failed =eb-keep-logs failed= after a failed line leaves the status as it is, with a =WARN= line.
+So does a run summary that cannot be written, or sent to the webhook of =[notify]=, as [[file:run-summary.org][The run summary]] says, and a record of =[watch]= that fails, as [[file:watch.org][The watch state and plan]] says.
 
 *** 2
 
@@ -55,10 +59,13 @@ A failed =eb-keep-logs failed= after a failed line leaves the status as it is, w
   =check --probe-tools= also checks the tools without a =min_version=.
 - =init=: the template is unknown, or the =--out= file cannot be created, as when it exists.
 - =run=: =eb-stack stack shard= or =eb-stack stack admit= exited 2.
+- =watch=: eb-stack prints a version below its =min_version=.
 
 *** 75
 
 - =run=: =eb-staged-rebuild run= exited 75 for a line; the line is =pending=.
+- =watch=: another watch of the target holds =STATE_DIR/TARGET.watch.lock=, the module environment of the target did not load, or the EESSI repository or one of its module trees cannot be read.
+- =watch=: the rebuild exited 75.
 
 *** 78
 
@@ -73,10 +80,14 @@ A failed =eb-keep-logs failed= after a failed line leaves the status as it is, w
 
 The refusals before the first build leave every line unbuilt.
 
+- =watch=: the site file has no =[watch]= table, or it is off; the module environment loads no EESSI; recorded installs were built against another EESSI version or CPU subdirectory; eb-stack cannot be started; or a dependency vanished from EESSI, and no easyconfig tree is there to plan its build from.
+- =watch=: the rebuild exited 78.
+
 *** 130 and 143
 
 =run= passes the signal to the running command and waits for it to end.
-It starts no other command, records the phase as =interrupted=, writes the result file and exits 130 for =SIGINT= or 143 for =SIGTERM=.
+It starts no other command, records the phase as =interrupted=, writes the result file and the run summary, and exits 130 for =SIGINT= or 143 for =SIGTERM=.
+The rebuild of =watch= does the same, and =watch= then changes no record.
 
 ** When several apply
 
@@ -89,6 +100,7 @@ Otherwise the first of these that applies is the status of the run:
 4. none of these: 0.
 
 A run in which one line failed and another was refused exits 1.
+=watch= exits with the status of its rebuild.
 
 ** Exit statuses of the tools a run starts
 

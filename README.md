@@ -7,9 +7,10 @@ file and a build list into an ordered set of subprocesses, so a continuous
 integration (CI) system (Jenkins, GitLab CI, a cron job) becomes a thin caller
 that passes a list and a target and reads an exit code and a result file.
 
-It starts [eb-stack](https://github.com/stackhands/eb-stack) for `stack shard`
-and `stack admit`, [eb-keep-logs](https://github.com/stackhands/eb-keep-logs)
-for `failed` and `rotate`, and
+It starts [eb-stack](https://github.com/stackhands/eb-stack) for `stack shard`,
+`stack admit` and `rebuild-set`,
+[eb-keep-logs](https://github.com/stackhands/eb-keep-logs) for `failed` and
+`rotate`, and
 [eb-staged-rebuild](https://github.com/stackhands/eb-staged-rebuild) for `run`,
 and never links them in. Nothing about a site lives in this repository: the
 templates carry placeholders only, and a test rejects any template value that
@@ -29,7 +30,9 @@ looks site-specific.
   [rotate the log tree](docs/orgmode/howto/rotate-logs.org),
   [rebuild installed software through eb-staged-rebuild](docs/orgmode/howto/staged-rebuilds.org),
   [build some lines of a list on some targets only](docs/orgmode/howto/select-lines.org),
-  [build what eb-stack plans](docs/orgmode/howto/from-eb-stack.org).
+  [build what eb-stack plans](docs/orgmode/howto/from-eb-stack.org),
+  [follow runs through their summaries](docs/orgmode/howto/follow-runs.org),
+  [rebuild what an EESSI change reaches](docs/orgmode/howto/rebuild-when-eessi-changes.org).
 - Explanation: [why one site file drives the build](docs/orgmode/explanation/design.org),
   [how a run goes through its phases](docs/orgmode/explanation/phases.org),
   [why the rotation takes two locks](docs/orgmode/explanation/log-rotation.org),
@@ -37,6 +40,8 @@ looks site-specific.
 - Reference: [the eb-pipeline command](docs/orgmode/reference/cli.org),
   [the site file](docs/orgmode/reference/site-file.org),
   [the plan and result files](docs/orgmode/reference/plan-and-result.org),
+  [the run summary](docs/orgmode/reference/run-summary.org),
+  [the watch state and plan](docs/orgmode/reference/watch.org),
   [the log tree and its locks](docs/orgmode/reference/log-tree.org),
   [the site file templates](docs/orgmode/reference/templates.org),
   [environment variables](docs/orgmode/reference/environment.org),

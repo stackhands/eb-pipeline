@@ -97,6 +97,7 @@ INFO [logs] zen2: not configured
 INFO [build] zen2: 1 line(s) deselected for this target
 INFO [build] zen2: Example-1.0-GCCcore-15.2.0: start
 INFO [build] zen2: Example-1.0-GCCcore-15.2.0: ok
+INFO [summary] zen2: summary.json and summary.html written in $WORK/site/logs/20261117_090000
 exit 0
 #+end_example
 

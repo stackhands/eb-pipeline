@@ -14,7 +14,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 static SIGNAL: AtomicI32 = AtomicI32::new(0);
 
@@ -41,6 +41,17 @@ fn interrupted() -> Option<i32> {
         0 => None,
         s => Some(s),
     }
+}
+
+/// The exit code of a SIGINT or SIGTERM received since `install_handlers`.
+pub fn signal_exit() -> Option<i32> {
+    interrupted().map(|s| {
+        if s == libc::SIGINT {
+            exit::SIGINT
+        } else {
+            exit::SIGTERM
+        }
+    })
 }
 
 /// The wait before the next admission attempt. It starts at `wait_seconds`
@@ -76,6 +87,11 @@ pub fn log(level: &str, phase: &str, target: &str, msg: &str) {
     eprintln!("{level} [{phase}] {target}: {msg}");
 }
 
+/// Seconds, to the millisecond.
+pub fn seconds(d: Duration) -> f64 {
+    (d.as_secs_f64() * 1000.0).round() / 1000.0
+}
+
 /// What one phase came to.
 #[derive(Debug, Serialize, Clone)]
 pub struct PhaseResult {
@@ -90,6 +106,9 @@ pub struct PhaseResult {
     /// Why the phase came to its status, when that needs saying.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Time the phase's commands ran; absent for a phase that ran none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<f64>,
 }
 
 /// What one build list line came to.
@@ -116,6 +135,9 @@ pub struct LineResult {
     /// Why the line came to its status, when that needs saying.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Time the line's command ran; absent for a line that did not start.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<f64>,
 }
 
 /// What one unit's admission came to.
@@ -155,6 +177,8 @@ pub struct RunResult {
     pub started_at: String,
     /// When the run ended, in RFC 3339, in UTC.
     pub ended_at: String,
+    /// Time from the start of the run to its result, to the millisecond.
+    pub duration_seconds: f64,
     /// The process exit code.
     pub exit_code: i32,
     /// Whether the lines were built in the units of a shard plan.
@@ -183,6 +207,7 @@ pub struct RunResult {
 struct Exec {
     code: i32,
     log: PathBuf,
+    elapsed: Duration,
 }
 
 /// Run one command to completion with output in a log file. A signal that
@@ -212,6 +237,7 @@ fn exec(cmd: &Cmd, base_env: &BTreeMap<String, String>, log: &Path) -> Result<Ex
         .stdin(Stdio::null())
         .stdout(Stdio::from(out))
         .stderr(Stdio::from(err));
+    let started = Instant::now();
     let mut child = match c.spawn() {
         Ok(ch) => ch,
         Err(e) => {
@@ -219,6 +245,7 @@ fn exec(cmd: &Cmd, base_env: &BTreeMap<String, String>, log: &Path) -> Result<Ex
             return Ok(Exec {
                 code: 127,
                 log: log.to_path_buf(),
+                elapsed: started.elapsed(),
             });
         }
     };
@@ -249,7 +276,18 @@ fn exec(cmd: &Cmd, base_env: &BTreeMap<String, String>, log: &Path) -> Result<Ex
     Ok(Exec {
         code,
         log: log.to_path_buf(),
+        elapsed: started.elapsed(),
     })
+}
+
+/// Run `cmd` as a phase runs its commands, output in `log`, and return its
+/// exit code: 127 when it cannot start.
+pub fn exec_logged(
+    cmd: &Cmd,
+    base_env: &BTreeMap<String, String>,
+    log: &Path,
+) -> Result<i32, Fail> {
+    exec(cmd, base_env, log).map(|e| e.code)
 }
 
 fn last_json_line(path: &Path) -> Option<String> {
@@ -465,6 +503,9 @@ struct State {
     forced_code: Option<i32>,
     /// Released when the admitted unit ends, or by `finish`.
     reservation: Option<Reservation>,
+    began: Instant,
+    /// Time each phase's commands ran.
+    spent: BTreeMap<String, Duration>,
 }
 
 impl State {
@@ -474,7 +515,21 @@ impl State {
             status: status.into(),
             exit_code: code,
             note,
+            duration_seconds: self.spent.get(name).copied().map(seconds),
         });
+    }
+
+    /// `exec`, with the command's time counted towards `phase`.
+    fn exec(
+        &mut self,
+        phase: &str,
+        cmd: &Cmd,
+        env: &BTreeMap<String, String>,
+        log: &Path,
+    ) -> Result<Exec, Fail> {
+        let ex = exec(cmd, env, log)?;
+        *self.spent.entry(phase.to_string()).or_default() += ex.elapsed;
+        Ok(ex)
     }
 }
 
@@ -499,6 +554,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
             log_dir: p.scope.log_dir(),
             started_at: chrono::Utc::now().to_rfc3339(),
             ended_at: String::new(),
+            duration_seconds: 0.0,
             exit_code: 0,
             sharded: false,
             counts: BTreeMap::new(),
@@ -515,6 +571,8 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
         failed: false,
         forced_code: None,
         reservation: None,
+        began: Instant::now(),
+        spent: BTreeMap::new(),
     };
 
     let plan = match build_plan(p, lines, None) {
@@ -681,7 +739,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                     &target,
                     &format!("planning {} shards", sh.count),
                 );
-                let ex = match exec(&cmd, &env, &log_dir.join("shard.log")) {
+                let ex = match st.exec("shard", &cmd, &env, &log_dir.join("shard.log")) {
                     Ok(e) => e,
                     Err(f) => {
                         st.res.message = Some(f.msg);
@@ -792,7 +850,12 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                         return finish(st, Some(f.code));
                     }
                 };
-                let ex = match exec(&cmd, &env, &log_dir.join(format!("{s}.fetch.log"))) {
+                let ex = match st.exec(
+                    "sources",
+                    &cmd,
+                    &env,
+                    &log_dir.join(format!("{s}.fetch.log")),
+                ) {
                     Ok(e) => e,
                     Err(f) => {
                         st.res.message = Some(f.msg);
@@ -820,6 +883,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                         translated_from: None,
                         log: ex.log.display().to_string(),
                         note: Some("source fetch failed; line not built".into()),
+                        duration_seconds: Some(seconds(ex.elapsed)),
                     });
                     st.failed = true;
                 }
@@ -851,6 +915,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                     translated_from: None,
                     log: p.log_stdout(s),
                     note: Some("an earlier unit was refused".into()),
+                    duration_seconds: None,
                 });
             }
             continue;
@@ -868,7 +933,8 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
             let mut wait = capped_wait(a.wait_seconds, a.max_wait_seconds);
             let outcome = loop {
                 attempt += 1;
-                let ex = match exec(
+                let ex = match st.exec(
+                    "admission",
                     &cmd,
                     &env,
                     &log_dir.join(format!("admission-{}.{attempt}.log", u.name)),
@@ -966,6 +1032,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                             translated_from: None,
                             log: p.log_stdout(s),
                             note: Some("admission refused".into()),
+                            duration_seconds: None,
                         });
                     }
                     continue;
@@ -996,7 +1063,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                 log("WARN", "build", &target, &format!("{s}: {w}"));
             }
             log("INFO", "build", &target, &format!("{s}: start"));
-            let ex = match exec(&cmd, &env, Path::new(&p.log_stdout(s))) {
+            let ex = match st.exec("build", &cmd, &env, Path::new(&p.log_stdout(s))) {
                 Ok(e) => e,
                 Err(f) => {
                     st.res.message = Some(f.msg);
@@ -1012,6 +1079,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                 translated_from: None,
                 log: ex.log.display().to_string(),
                 note: staged.then(|| "ran through eb-staged-rebuild".into()),
+                duration_seconds: Some(seconds(ex.elapsed)),
             };
             if ex.code != 0 {
                 let outcome = if staged {
@@ -1058,7 +1126,12 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                 );
                 if interrupted().is_none() && keep_failed && lr.status == "failed" {
                     if let Ok(kc) = p.keep_failed_cmd(s, &ex.code.to_string()) {
-                        let kx = exec(&kc, &env, &log_dir.join(format!("{s}.keep-logs.log")));
+                        let kx = st.exec(
+                            "logs",
+                            &kc,
+                            &env,
+                            &log_dir.join(format!("{s}.keep-logs.log")),
+                        );
                         match kx {
                             Ok(k) if k.code == 0 => {}
                             Ok(k) => log(
@@ -1119,7 +1192,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
         match p.cache_cmd() {
             Ok(Some(cmd)) => {
                 log("INFO", "caches", &target, "start");
-                match exec(&cmd, &env, &log_dir.join("caches.log")) {
+                match st.exec("caches", &cmd, &env, &log_dir.join("caches.log")) {
                     Ok(ex) => {
                         if ex.code == 0 {
                             st.phase("caches", "ok", Some(0), None);
@@ -1193,7 +1266,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                         p.rotate_cmd(false).ok().flatten().unwrap_or(cmd)
                     }
                 };
-                match exec(&cmd, &env, &log_dir.join("rotate.log")) {
+                match st.exec("logs", &cmd, &env, &log_dir.join("rotate.log")) {
                     Ok(ex) => match map_rotate(ex.code) {
                         RotateOutcome::Ok => st.phase("logs", "ok", Some(0), note),
                         RotateOutcome::Locked => {
@@ -1252,6 +1325,7 @@ fn note_skipped(
                 translated_from: None,
                 log: p.log_stdout(s),
                 note: Some("interrupted before this line started".into()),
+                duration_seconds: None,
             });
         }
     }
@@ -1291,6 +1365,7 @@ fn finish(mut st: State, forced: Option<i32>) -> RunResult {
         release(r, &st.res.target);
     }
     st.res.ended_at = chrono::Utc::now().to_rfc3339();
+    st.res.duration_seconds = seconds(st.began.elapsed());
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for l in &st.res.lines {
         *counts.entry(l.status.clone()).or_default() += 1;

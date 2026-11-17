@@ -80,3 +80,5 @@ jobs:
           bash docs/examples/staged.sh
           bash docs/examples/select.sh
           bash docs/examples/from-eb-stack.sh
+          bash docs/examples/summary.sh
+          bash docs/examples/watch.sh

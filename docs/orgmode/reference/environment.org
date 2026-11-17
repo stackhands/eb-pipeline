@@ -4,24 +4,24 @@
 
 * Environment variables
 
-The variables =eb-pipeline= reads in place of an option or a site file value, the ones a run reads because the site file names them, and the ones it sets for the commands it starts.
+The variables =eb-pipeline= reads in place of an option or a site file value, the ones a run reads because the site file names them or from the module environment, and the ones it sets for the commands it starts.
 
 ** Options
 
 An option that is not on the command line takes its value from its variable.
 An option on the command line wins.
 
-| Variable                 | Option         | Commands                                     |
-|--------------------------+----------------+----------------------------------------------|
-| =EB_PIPELINE_SITE=       | =--site=       | =check=, =explain=, =targets=, =plan=, =run= |
-| =EB_PIPELINE_LIST=       | =--list=       | =plan=, =run=                                |
-| =EB_PIPELINE_TARGET=     | =--target=     | =explain=, =plan=, =run=                     |
-| =EB_PIPELINE_BUILD_TYPE= | =--build-type= | =explain=, =plan=, =run=                     |
-| =EB_PIPELINE_RUN_ID=     | =--run-id=     | =plan=, =run=                                |
-| =EB_PIPELINE_LOG_STAMP=  | =--log-stamp=  | =plan=, =run=                                |
-| =EB_PIPELINE_LISTS_DIR=  | =--lists-dir=  | =check=                                      |
+| Variable                 | Option         | Commands                                                        |
+|--------------------------+----------------+-----------------------------------------------------------------|
+| =EB_PIPELINE_SITE=       | =--site=       | =check=, =explain=, =targets=, =status=, =plan=, =run=, =watch= |
+| =EB_PIPELINE_LIST=       | =--list=       | =plan=, =run=                                                   |
+| =EB_PIPELINE_TARGET=     | =--target=     | =explain=, =status=, =plan=, =run=, =watch=                     |
+| =EB_PIPELINE_BUILD_TYPE= | =--build-type= | =explain=, =plan=, =run=, =watch=                               |
+| =EB_PIPELINE_RUN_ID=     | =--run-id=     | =plan=, =run=, =watch=                                          |
+| =EB_PIPELINE_LOG_STAMP=  | =--log-stamp=  | =plan=, =run=, =watch=                                          |
+| =EB_PIPELINE_LISTS_DIR=  | =--lists-dir=  | =check=                                                         |
 
-=--out=, =--result=, =--shard-plan=, =--format=, =--dry-run= and =--probe-tools= have no variable.
+=--out=, =--result=, =--shard-plan=, =--format=, =--last=, =--dry-run=, =--probe-tools=, =--adopt= and =--plan-out= have no variable.
 
 ** Site file values
 
@@ -44,14 +44,31 @@ Since every part is lowercased, these variables cannot set a key that has an upp
 
 ** Read during a run
 
-The site file names these variables; =run= reads them before the first build.
-=plan= and =run --dry-run= show =${NAME}= in their place.
+The site file names these variables.
+=run= reads the first three before the first build, and =plan= and =run --dry-run= show =${NAME}= in their place; it reads the one of =notify.webhook_env= once it has written the summary.
 
-| Variable                                                           | Use                                                                                                                                                                                    |
-|--------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| the one named by =admission.job_id_env=, =SLURM_JOB_ID= by default | The job id that =eb-stack stack admit= reserves for. With admission on, =run= refuses with exit 78 before any build when it is unset or not a positive integer without a leading zero. |
-| the one named by =targets.route.receipt_digest_env=                | A digest that the routed commands get as =EB_PIPELINE_ROUTE_RECEIPT_DIGEST=. =run= refuses with exit 78 when it is unset or empty.                                                     |
-| each one named in =shards.installed_modules_dirs_from_env=         | Module trees, separated by =:=, added to =shards.installed_modules_dirs=. =run= refuses with exit 78 when one is unset; an empty one adds nothing.                                     |
+| Variable                                                           | Use                                                                                                                                                                                                        |
+|--------------------------------------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| the one named by =admission.job_id_env=, =SLURM_JOB_ID= by default | The job id that =eb-stack stack admit= reserves for. With admission on, =run= refuses with exit 78 before any build when it is unset or not a positive integer without a leading zero.                     |
+| the one named by =targets.route.receipt_digest_env=                | A digest that the routed commands get as =EB_PIPELINE_ROUTE_RECEIPT_DIGEST=. =run= refuses with exit 78 when it is unset or empty.                                                                         |
+| each one named in =shards.installed_modules_dirs_from_env=         | Module trees, separated by =:=, added to =shards.installed_modules_dirs=. =run= refuses with exit 78 when one is unset; an empty one adds nothing.                                                         |
+| the one named by =notify.webhook_env=                              | The URL that =run= POSTs the summary to. When it is unset, empty, or a URL that =check= would refuse in =notify.webhook=, the run sends nothing and writes a =WARN= line; its exit status stays as it was. |
+
+** Read from the module environment
+
+With =[watch]= on, a run that records its installs, and =watch=, run =env -0= in the module environment of the target, as a run starts its other commands, and read these variables from what it writes, which EESSI and EasyBuild set as they load:
+
+| Variable                 | Use                                                                                                              |
+|--------------------------+------------------------------------------------------------------------------------------------------------------|
+| =EESSI_VERSION=          | The EESSI version, such as =2023.06=; required.                                                                  |
+| =EESSI_SOFTWARE_SUBDIR=  | The CPU subdirectory, such as =x86_64/amd/zen4=; required.                                                       |
+| =EESSI_CVMFS_REPO=       | The repository whose revision is read, unless =watch.repository= is set.                                         |
+| =EESSI_MODULEPATH=       | The EESSI module tree, unless =watch.modules_dirs= is set.                                                       |
+| =EESSI_MODULEPATH_ACCEL= | The EESSI module tree for the accelerator, after the other, unless =watch.modules_dirs= is set.                  |
+| =EBROOTEASYBUILD=        | For =watch=, the install of EasyBuild, whose =easybuild/easyconfigs= tree is the default of =watch.easyconfigs=. |
+
+Without =watch.modules_dirs=, =EESSI_MODULEPATH= or =EESSI_MODULEPATH_ACCEL= is required.
+A record without a required one is a =WARN= line, and the run exits as it would have without =[watch]=; =watch= without one exits 78. [[file:watch.org][The watch state and plan]] gives the lines.
 
 ** Set for the commands of a run
 
@@ -121,7 +138,7 @@ Some commands get more variables, set over those above.
 
 *** The module wrapper
 
-When =modules.init= is not empty, =modules.unuse_path= is =true= or =modules.shell_init= is set, the shard, prefetch, build, keep-failed and cache commands start through =modules.shell=, which reads three of the variables above:
+When =modules.init= is not empty, =modules.unuse_path= is =true= or =modules.shell_init= is set, the shard, prefetch, build, keep-failed and cache commands, and the commands of a record of =[watch]= and of =watch=, start through =modules.shell=, which reads three of the variables above:
 
 1. =EB_PIPELINE_SHELL_INIT=: the file it sources first, when set.
 2. =EB_PIPELINE_UNUSE_PATH=: when set, it empties =MODULEPATH=.
@@ -134,7 +151,7 @@ The admit and rotate commands start without it.
 
 *** The job directory wrapper
 
-When =filesystems.job_dir= is set, every command that =run= starts with =scheduler.launch= starts first, inside its job, through =modules.shell= with a script that reads three of the variables above:
+When =filesystems.job_dir= is set, every command that =run= or =watch= starts with =scheduler.launch= starts first, inside its job, through =modules.shell= with a script that reads three of the variables above:
 
 1. =EB_PIPELINE_JOB_DIR=: it replaces ={job}= with =SLURM_JOB_ID=, and ={user}= with =SLURM_JOB_USER=, else with what =id -un= prints, and exits 1 unless the result is a directory that the job can write to.
    It then sets the variable to that directory.

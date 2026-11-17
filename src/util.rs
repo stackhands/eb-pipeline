@@ -35,7 +35,9 @@ pub fn split_args(s: &str) -> Result<Vec<String>, Fail> {
 }
 
 /// Quote `a` for a shell, or for a build list line: as it is when it holds
-/// only characters a shell leaves alone, else in single quotes.
+/// only characters a shell leaves alone, else in single quotes. A single
+/// quote in `a` is written `'"'"'`, which a shell and `split_args` both read
+/// back.
 pub fn quote(a: &str) -> String {
     if !a.is_empty()
         && a.chars()
@@ -43,7 +45,7 @@ pub fn quote(a: &str) -> String {
     {
         a.to_string()
     } else {
-        format!("'{}'", a.replace('\'', "'\\''"))
+        format!("'{}'", a.replace('\'', "'\"'\"'"))
     }
 }
 
@@ -154,6 +156,26 @@ mod tests {
             vec!["-p", "batch", "--comment", "a b", ""]
         );
         assert!(split_args("'open").is_err());
+    }
+
+    #[test]
+    fn a_quoted_word_reads_back_as_itself() {
+        for a in [
+            "--try-amend=configopts=-DA=OFF -DB=OFF",
+            "it's",
+            "a\"b'c",
+            "",
+            "--rebuild",
+        ] {
+            assert_eq!(split_args(&quote(a)).unwrap(), [a], "{}", quote(a));
+            let o = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("printf %s {}", quote(a)))
+                .output()
+                .unwrap();
+            assert_eq!(String::from_utf8_lossy(&o.stdout), a, "{}", quote(a));
+        }
+        assert_eq!(quote("--rebuild"), "--rebuild");
     }
 
     #[test]
