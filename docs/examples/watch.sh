@@ -64,7 +64,6 @@ revision() {
 }
 
 eessi_init 2023.06
-eessi_init 2025.06
 eessi_module CMake 3.27.6-GCCcore-13.2.0
 eessi_module OpenSSL 1.1
 eessi_module libevent 2.1.12-GCCcore-13.2.0
@@ -190,10 +189,12 @@ run 'eb-pipeline watch --site site.toml --target zen4 --build-type production --
 expect_status 0
 expect_line 'EESSI 2023.06 x86_64/amd/zen4 at revision 32664, as recorded: 2 recorded installs, 0 to rebuild, 0 kept, 2 unaffected, 0 gone'
 
+eessi_init 2025.06
 sed 's#2023\.06#2025.06#g' site.toml >eessi-2025.06.toml
 run 'eb-pipeline watch --site eessi-2025.06.toml --target zen4 --build-type production --log-stamp 20261117_140000 --dry-run'
 expect_status 78
 expect_line 'hiredis/1.2.0-GCCcore-13.2.0  built against EESSI 2023.06 x86_64/amd/zen4'
+rm -rf "$repo/versions/2025.06"
 
 run 'eb-pipeline watch --site site.toml --target zen4 --build-type production --log-stamp 20261117_150000 --adopt --dry-run'
 expect_status 0
