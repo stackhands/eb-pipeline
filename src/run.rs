@@ -6,7 +6,7 @@ use crate::plan::{
     PHASES,
 };
 use crate::resolve::Role;
-use crate::tools::{map_staged, StagedOutcome};
+use crate::tools::{map_rotate, map_staged, RotateOutcome, StagedOutcome};
 use crate::util::ListLine;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -1131,13 +1131,23 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                     log("WARN", "logs", &target, &msg);
                 }
                 match exec(&cmd, &env, &log_dir.join("rotate.log")) {
-                    Ok(ex) if ex.code == 0 => st.phase("logs", "ok", Some(0), None),
-                    Ok(ex) => {
-                        let msg = format!("eb-keep-logs rotate exited {}", ex.code);
-                        log("ERROR", "logs", &target, &msg);
-                        st.phase("logs", "failed", Some(ex.code), Some(msg));
-                        st.failed = true;
-                    }
+                    Ok(ex) => match map_rotate(ex.code) {
+                        RotateOutcome::Ok => st.phase("logs", "ok", Some(0), None),
+                        RotateOutcome::Locked => {
+                            let msg = format!(
+                                "eb-keep-logs rotate exited 75: another rotate holds {}, and this one changed nothing; the rotation is left to it",
+                                p.keep_logs_lock().display()
+                            );
+                            log("INFO", "logs", &target, &format!("rotation skipped: {msg}"));
+                            st.phase("logs", "skipped", Some(ex.code), Some(msg));
+                        }
+                        RotateOutcome::Failed => {
+                            let msg = format!("eb-keep-logs rotate exited {}", ex.code);
+                            log("ERROR", "logs", &target, &msg);
+                            st.phase("logs", "failed", Some(ex.code), Some(msg));
+                            st.failed = true;
+                        }
+                    },
                     Err(f) => {
                         st.res.message = Some(f.msg);
                         return finish(st, Some(f.code));

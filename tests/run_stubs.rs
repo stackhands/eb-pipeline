@@ -1579,6 +1579,63 @@ rm -f "$D/rotating"
     assert!(calls(&env, "keeplogs.overlap").is_empty());
 }
 
+/// An eb-keep-logs `rotate` that exits with `STUB_ROTATE_EXIT`, saying what
+/// eb-keep-logs says when another rotate holds its lock.
+const ROTATE_EXITS: &str = r#"#!/bin/sh
+case "$1" in --version) echo "eb-keep-logs 0.2.0"; exit 0;; esac
+echo "$*" >> "$STUB_DIR/keeplogs.calls"
+[ "$1" = rotate ] || exit 0
+echo "eb-keep-logs: another rotate holds the lock $2/.eb-keep-logs-rotate.lock; gave up after 600 s (--lock-timeout)" >&2
+exit "${STUB_ROTATE_EXIT:?}"
+"#;
+
+/// eb-keep-logs exits 75 when another rotate of the tree holds its lock past
+/// `--lock-timeout`, and has then changed nothing.
+#[test]
+fn a_rotate_that_waits_out_the_lock_of_another_is_skipped() {
+    let env = setup(ROTATE);
+    write_exec(&env.stubs.join("eb-keep-logs"), ROTATE_EXITS);
+    let r = env.dir.path().display().to_string();
+    let o = go(&env, LIST, &[("STUB_ROTATE_EXIT", "75")]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let why = format!(
+        "eb-keep-logs rotate exited 75: another rotate holds {r}/logs/.eb-keep-logs-rotate.lock, and this one changed nothing; the rotation is left to it"
+    );
+    let res = o.result.unwrap();
+    let logs = result_phase(&res, "logs");
+    assert_eq!(logs["status"], "skipped");
+    assert_eq!(logs["exit_code"], 75);
+    assert_eq!(logs["note"], why);
+    assert_eq!(res["exit_code"], 0);
+    assert!(
+        o.stderr
+            .contains(&format!("INFO [logs] cpu: rotation skipped: {why}\n")),
+        "{}",
+        o.stderr
+    );
+    assert!(!o.stderr.contains("ERROR"), "{}", o.stderr);
+}
+
+#[test]
+fn a_rotate_that_exits_otherwise_fails_the_run() {
+    for code in [1, 2] {
+        let env = setup(ROTATE);
+        write_exec(&env.stubs.join("eb-keep-logs"), ROTATE_EXITS);
+        let o = go(&env, LIST, &[("STUB_ROTATE_EXIT", &code.to_string())]);
+        assert_eq!(o.code, 1, "{code}: {}", o.stderr);
+        let msg = format!("eb-keep-logs rotate exited {code}");
+        let logs = result_phase(o.result.as_ref().unwrap(), "logs").clone();
+        assert_eq!(logs["status"], "failed", "{code}");
+        assert_eq!(logs["exit_code"], code, "{code}");
+        assert_eq!(logs["note"], msg, "{code}");
+        assert!(
+            o.stderr.contains(&format!("ERROR [logs] cpu: {msg}\n")),
+            "{code}: {}",
+            o.stderr
+        );
+    }
+}
+
 /// Put `frag` straight after the `cpu` target's name.
 fn with_cpu_target(env: &Env, frag: &str) {
     let text = std::fs::read_to_string(&env.site)

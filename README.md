@@ -217,8 +217,8 @@ allocated task, so give each role a task count; the templates use
   build, with `EB_PIPELINE_CACHE_*` in the environment.
 - `logs`: `eb-keep-logs rotate` on `filesystems.log_root`. `[logs.rotate]` needs
   `compress_after_days`, passed as `--compress-after`; `delete_after_days`,
-  passed as `--delete-after`, must be greater. eb-keep-logs takes no lock
-  and passes over at most the run that it writes into itself: two
+  passed as `--delete-after`, must be greater. eb-keep-logs 0.2.1 takes no
+  lock and passes over at most the run that it writes into itself: two
   rotations at once lose each other's updates to a run's `.licensed-logs`,
   and a rotation compresses the logs of a run that is still writing them once
   that run's log stamp is a day old in UTC, as it is for a target that
@@ -228,7 +228,12 @@ allocated task, so give each role a task count; the templates use
   `skipped` and the rotation is left to a run that ends alone; a run that
   starts while another rotates waits for it. The lock is a `flock`, so it
   holds between nodes only where the log root's filesystem carries `flock`
-  between them.
+  between them. An eb-keep-logs that takes a lock of its own holds
+  `<log_root>/.eb-keep-logs-rotate.lock` for the whole rotation, and exits 75
+  when another rotate holds it past `--lock-timeout`, 600 seconds unless
+  given, having changed nothing. `logs` is then `skipped`, with a note that
+  names that lock, and the rotation is left to the rotate that holds it. Any
+  other non-zero exit of `rotate` is `failed`.
 
 ### Per-target line selection
 
@@ -388,6 +393,8 @@ Sibling tool codes are mapped explicitly:
 | eb-staged-rebuild `run` | 2 | refusal there, such as a lock still held when `--lock-timeout` runs out; the line is recorded as `refused` with `translated_from = 2` and the run ends with 78 |
 | eb-staged-rebuild `run` | 75 | pending; the line is recorded as `pending`, exit 75 |
 | eb-staged-rebuild `run` | other non-zero | failed |
+| eb-keep-logs `rotate` | 75 | another rotate holds `<log_root>/.eb-keep-logs-rotate.lock`, and this one changed nothing; `logs` is recorded as `skipped` and the run's code is unchanged |
+| eb-keep-logs `rotate` | other non-zero | `logs` failed, exit 1 |
 
 SIGTERM and SIGINT are forwarded to the running child. The driver starts no
 further child, writes the result file, and exits 143 or 130.

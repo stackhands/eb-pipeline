@@ -137,3 +137,21 @@ pub fn map_staged(code: i32) -> StagedOutcome {
         _ => StagedOutcome::Failed,
     }
 }
+
+/// Outcome of an `eb-keep-logs rotate` exit code.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum RotateOutcome {
+    Ok,
+    /// Exit 75: another rotate of the tree held eb-keep-logs' lock past
+    /// `--lock-timeout`, and this one changed nothing.
+    Locked,
+    Failed,
+}
+
+pub fn map_rotate(code: i32) -> RotateOutcome {
+    match code {
+        0 => RotateOutcome::Ok,
+        75 => RotateOutcome::Locked,
+        _ => RotateOutcome::Failed,
+    }
+}

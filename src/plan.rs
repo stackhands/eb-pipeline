@@ -661,6 +661,12 @@ impl<'a> Planner<'a> {
         Some(PathBuf::from(&self.site().filesystems.log_root).join(".eb-pipeline-rotate.lock"))
     }
 
+    /// `<log_root>/.eb-keep-logs-rotate.lock`, which `eb-keep-logs rotate`
+    /// holds alone for the whole rotation where it takes a lock of its own.
+    pub fn keep_logs_lock(&self) -> PathBuf {
+        PathBuf::from(&self.site().filesystems.log_root).join(".eb-keep-logs-rotate.lock")
+    }
+
     pub fn cache_cmd(&self) -> Result<Option<Cmd>, Fail> {
         let Some(c) = self.site().caches_on() else {
             return Ok(None);

@@ -34,6 +34,9 @@ Sibling tool codes are mapped explicitly:
                     unsharded; the run continues
   eb-staged-rebuild 2 is a refusal there; the driver records it as refused
                     (exit 78), 75 as pending (exit 75), any other non-zero as failed
+  eb-keep-logs      rotate 75 means another rotate holds the log root's lock;
+                    the logs phase is recorded as skipped, any other non-zero
+                    as failed
 A signal (130, 143) or a usage error (2) ends the run with that code. Otherwise,
 when several apply: 1, then 78, then 75, then 0. Codes are never summed.";
 
