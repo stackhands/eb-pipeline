@@ -1,0 +1,13 @@
+eb-shard-weights: build an `eb-stack stack shard --weights` table from run durations.
+
+  eb-shard-weights (--result FILE... | --summary FILE... | --log-root DIR [--last N])
+                   [--target NAME] [--existing FILE] [--mode max|latest|mean] [--out FILE]
+
+Reads `duration_seconds` of succeeded `build` lines from `eb-pipeline` result
+or summary files (or the newest runs under `--log-root`), maps each easyconfig
+to `Name/Version`, and writes sorted `MODULE<TAB>SECONDS` lines rounded up to
+whole seconds for `eb-stack stack shard --weights` and `[shards] weights`.
+
+Failed, refused, pending, skipped, and source-fetch lines are ignored.
+`--existing` preserves modules not seen in the new runs and updates the rest
+according to `--mode` (`max`, `latest`, or `mean`; default `max`).

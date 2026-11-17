@@ -115,6 +115,15 @@ result-zen4.json:  "exit_code": 1,
 In GitHub Actions, each build job uploads its result file as the artifact =result-TARGET=.
 Each run also adds its target to the summary of its run directory, =LOG_ROOT/LOG_STAMP=, as [[file:../reference/run-summary.org][The run summary]] says.
 
+** Update shard weights from completed runs
+
+When =[shards]= is set in the site file, =eb-stack stack shard= balances shards by longest processing time first using the file named by =[shards] weights=.
+=eb-shard-weights= reads =duration_seconds= of succeeded =build= lines from recent runs under =log_root= (or from =--result= and =--summary= files), keeps existing weights for modules not built in those runs, and writes the tab-separated table =eb-stack stack shard --weights= reads:
+
+#+begin_src bash
+eb-shard-weights --log-root site/logs --target zen4 --existing weights-zen4.tsv --out weights-zen4.tsv
+#+end_src
+
 ** If it fails
 
 | Message                                                                                   | Cause                                                                                                          | What to do                                                                                                         |
