@@ -1843,10 +1843,14 @@ fn eessi_template_roots_sit_under_the_eessi_extend_path() {
         );
         let note = t["install_note"].as_str().unwrap();
         assert!(note.contains(&format!("loads: {base}")), "{note}");
+        let mut install = format!("{base}<cpu_target>");
+        if t["accel_target"].as_str().is_some_and(|v| !v.is_empty()) {
+            install.push_str("/<accel_target>");
+        }
         let sw = t["software_root"].as_str().unwrap();
         let md = t["modules_root"].as_str().unwrap();
-        assert!(sw.starts_with(&base) && sw.ends_with("/software"), "{sw}");
-        assert!(md.starts_with(&base) && md.ends_with("/modules"), "{md}");
+        assert_eq!(sw, format!("{install}/software"));
+        assert_eq!(md, format!("{install}/modules"));
     }
 }
 
