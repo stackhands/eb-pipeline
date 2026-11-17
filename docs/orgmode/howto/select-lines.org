@@ -1,0 +1,132 @@
+#+TITLE: Build some lines of a list on some targets only
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Build some lines of a list on some targets only
+
+Keep one build list for every target of a site file, and mark the lines that only some targets build.
+
+** Before you start
+
+- A site file with a target for each node type, such as the one in [[file:build-from-ci.org][Build a list on every target from CI]].
+- A build list that every target builds.
+
+The output on this page comes from =docs/examples/select.sh=.
+It adds the table of step 1 to each target of the site file of [[file:build-from-ci.org][Build a list on every target from CI]], with the target's own token, and runs the dry runs and the run below on a copy of that file with the =local= scheduler, its paths under =$WORK= and the stand-in =eb= of the [[file:../tutorials/first-build-list.org][tutorial]].
+
+** Steps
+
+1. Pick a long option for the selection, such as =--only-targets=, and add a =[targets.select]= table to the table of each target, after its =[targets.phases]=, with the token of that target; for =zen4=:
+
+   #+begin_src toml
+   [targets.select]
+   option = "--only-targets"
+   value = "zen4"
+   strip = true
+   #+end_src
+
+   =strip = true= removes the option from a line before =eb= gets it, as the option is for eb-pipeline, not for EasyBuild.
+   A line without the option builds on every target; =when_absent = "none"= builds it on none.
+2. Check the site file:
+
+   #+begin_src bash
+   eb-pipeline check --site site.toml
+   #+end_src
+
+   #+begin_example
+   INFO [check] example: site file is valid
+   #+end_example
+
+3. Give the lines for some targets only the option, with their tokens after it, such as =--only-targets=zen2,zen4= or =--only-targets zen2,zen4=:
+
+   #+begin_src bash
+   cat build.list
+   #+end_src
+
+   #+begin_example
+   Example-1.0-GCCcore-15.2.0.eb
+   Example-2.0-GCCcore-15.2.0.eb --only-targets=zen4
+   #+end_example
+
+4. Check what each target builds:
+
+   #+begin_src bash
+   eb-pipeline run --site site.toml --list build.list --target zen4 --build-type production --dry-run | grep "^\[build\]"
+   eb-pipeline run --site site.toml --list build.list --target zen2 --build-type production --dry-run | grep "^\[build\]"
+   #+end_src
+
+   #+begin_example
+   INFO [run] zen4: dry run: nothing executed
+   [build] eb Example-1.0-GCCcore-15.2.0.eb
+   [build] eb Example-2.0-GCCcore-15.2.0.eb
+   INFO [run] zen2: dry run: nothing executed
+   [build] eb Example-1.0-GCCcore-15.2.0.eb
+   #+end_example
+
+   =zen4= builds both lines and =zen2= the first, and =eb= gets no =--only-targets=.
+   The plan of a target lists the lines it leaves out under =deselected=:
+
+   #+begin_src bash
+   eb-pipeline plan --site site.toml --list build.list --target zen2 --build-type production | grep -A5 "\"deselected\""
+   #+end_src
+
+   #+begin_example
+     "deselected": [
+       {
+         "easyconfig": "Example-2.0-GCCcore-15.2.0.eb",
+         "unit": "all"
+       }
+     ],
+   #+end_example
+
+** Check that it worked
+
+A run says how many lines it left out:
+
+#+begin_src bash
+eb-pipeline run --site site.toml --list build.list --target zen2 --build-type production --log-stamp 20261117_090000 --result result.json; echo "exit $?"
+#+end_src
+
+#+begin_example
+INFO [licences] zen2: not configured
+INFO [shard] zen2: not configured
+INFO [sources] zen2: not configured
+INFO [admission] zen2: not configured
+INFO [caches] zen2: not configured
+INFO [logs] zen2: not configured
+INFO [build] zen2: 1 line(s) deselected for this target
+INFO [build] zen2: Example-1.0-GCCcore-15.2.0: start
+INFO [build] zen2: Example-1.0-GCCcore-15.2.0: ok
+exit 0
+#+end_example
+
+It writes the lines it keeps, with =strip= applied, to =selected-TARGET.list= in its log directory, which =stack shard= gets when the list is sharded, and its result file lists the others under =deselected=, in no status count:
+
+#+begin_src bash
+cat $WORK/site/logs/20261117_090000/zen2/selected-zen2.list
+grep -A4 "\"deselected\"" result.json
+#+end_src
+
+#+begin_example
+Example-1.0-GCCcore-15.2.0.eb
+  "deselected": [
+    {
+      "easyconfig": "Example-2.0-GCCcore-15.2.0.eb",
+      "unit": "all"
+    }
+#+end_example
+
+** If it fails
+
+| Message                                                                                                                                                             | Cause                                                             | What to do                                                 |
+|---------------------------------------------------------------------------------------------------------------------------------------------------------------------+-------------------------------------------------------------------+------------------------------------------------------------|
+| =ERROR [check] example: targets.zen2.select.option: expected a long option with its leading dashes, such as `--name`, found `only-targets`; write `--only-targets`= | The option has no leading dashes.                                 | Write it with them, as the message says.                   |
+| A line is under =deselected= in the plan of every target                                                                                                            | Its option names the token of no target, as a typing error would. | Correct the token in the build list.                       |
+| A line without the option is under =deselected=                                                                                                                     | The target sets =when_absent = "none"=.                           | Set =when_absent = "all"=, or name the target in the line. |
+| The =[build]= line of a dry run passes the option to =eb=                                                                                                           | The target sets no =strip = true=.                                | Set =strip = true=.                                        |
+
+** Related
+
+- [[file:../reference/site-file.org][The site file]], for =[targets.select]=
+- [[file:../reference/plan-and-result.org][The plan and result files]], for =deselected=
+- [[file:../reference/log-tree.org][The log tree and its locks]], for =selected-TARGET.list=

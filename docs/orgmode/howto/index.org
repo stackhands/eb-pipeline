@@ -16,4 +16,5 @@ The title names the task.
    build-from-ci
    rotate-logs
    staged-rebuilds
+   select-lines
 #+end_export
