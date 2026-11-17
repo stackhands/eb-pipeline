@@ -263,37 +263,11 @@ fn a_record_that_fails_keeps_its_work_directory_but_not_the_environment() {
     }
 }
 
-/// A stand-in for srun, and for the prolog and epilog of its node: each job
-/// is the next job of alice, in a directory under `local/` that goes when
-/// the job ends. A job of the phase that STUB_NO_JOB_DIR names gets none;
-/// the job of `eb-stack rebuild-set` counts as phase `rebuild-set`.
-const SRUN: &str = r#"#!/bin/sh
-D="${STUB_DIR:?}"
-job=$(( $(cat "$D/srun.jobs" 2>/dev/null || echo 0) + 1 ))
-echo "$job" > "$D/srun.jobs"
-phase=
-while [ $# -gt 0 ]; do
-  case $1 in
-    --job-name=*) phase=${1##*-} ;;
-    -*) ;;
-    *) break ;;
-  esac
-  shift
-done
-for a; do [ "$a" = rebuild-set ] && phase=rebuild-set; done
-dir="$D/local/alice.$job"
-[ -n "${STUB_NO_JOB_DIR:-}" ] && [ "$phase" = "$STUB_NO_JOB_DIR" ] || mkdir -p "$dir"
-SLURM_JOB_ID=$job SLURM_JOB_USER=alice "$@"
-code=$?
-rm -rf "$dir"
-exit "$code"
-"#;
-
 #[test]
 fn a_record_that_its_job_directory_stops_quotes_why_and_fails_as_any_record_does() {
     let t = setup(WATCH);
     eessi(&t);
-    let local = with_job_dirs(&t, SRUN);
+    let local = with_job_dirs(&t, JOB_DIR_SRUN);
     let vars = eessi_vars(&t, "2023.06");
     let o = run(
         &t,
@@ -353,7 +327,7 @@ fn a_record_that_its_job_directory_stops_quotes_why_and_fails_as_any_record_does
 fn a_rebuild_set_that_its_job_directory_stops_quotes_why() {
     let t = setup(WATCH);
     eessi(&t);
-    let local = with_job_dirs(&t, SRUN);
+    let local = with_job_dirs(&t, JOB_DIR_SRUN);
     let vars = eessi_vars(&t, "2023.06");
     // The probe's job has a directory; the next job, that of rebuild-set,
     // has none.

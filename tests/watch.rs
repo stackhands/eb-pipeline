@@ -637,6 +637,40 @@ fn a_probe_that_its_job_directory_stops_quotes_why() {
 }
 
 #[test]
+fn a_stack_shard_that_its_job_directory_stops_quotes_why() {
+    let t = built("");
+    let local = with_job_dirs(&t, JOB_DIR_SRUN);
+    let vars = eessi_vars(&t, "2023.06");
+    change(&t);
+    // The jobs of the probe and of rebuild-set have a directory; the next
+    // job, that of stack shard, has none.
+    let mut no_dir = with(&vars);
+    no_dir.push(("STUB_NO_JOB_DIR", "shard"));
+    let o = watch(&t, LATER, &["--dry-run"], &no_dir);
+    let err = stderr(&o);
+    assert_eq!(code(&o), 1, "{err}");
+    let job = std::fs::read_to_string(t.root().join("srun.jobs")).unwrap();
+    let job = job.trim();
+    let log = t
+        .root()
+        .join("scratch/eb-pipeline-watch/cpu")
+        .join(LATER)
+        .join("plan/order.log");
+    let want = format!(
+        "ERROR [main] -: eb-stack stack shard exited 1; its output is in {}: \"eb-pipeline: job {job} has no directory {}/alice.{job} that it can write to, which filesystems.job_dir names\"\n",
+        log.display(),
+        local.display()
+    );
+    assert!(err.ends_with(&want), "{want} does not end\n{err}");
+    let calls = t.calls("ebstack");
+    assert!(calls.contains("cascade.changed"), "{calls}");
+    assert!(
+        !calls.lines().any(|l| l.starts_with("stack shard")),
+        "{calls}"
+    );
+}
+
+#[test]
 fn adopt_records_the_installs_no_run_recorded() {
     let t = setup(WATCH);
     stack(&t);

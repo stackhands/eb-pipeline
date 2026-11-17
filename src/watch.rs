@@ -987,8 +987,9 @@ pub fn order(
         return Err(Fail::new(
             exit::FAILED,
             format!(
-                "eb-stack stack shard exited {code}; its output is in {}",
-                log_path.display()
+                "eb-stack stack shard exited {code}; its output is in {}{}",
+                log_path.display(),
+                refusal_quote(&log_path)
             ),
         ));
     }

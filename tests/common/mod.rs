@@ -207,6 +207,33 @@ pub fn write_exec(path: &Path, text: &str) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+/// A stand-in for srun, and for the prolog and epilog of its node: each job
+/// is the next job of alice, in a directory under `local/` that goes when
+/// the job ends. A job of the phase that STUB_NO_JOB_DIR names gets none;
+/// the jobs of `eb-stack rebuild-set` and `eb-stack stack shard` count as
+/// phases `rebuild-set` and `shard`.
+pub const JOB_DIR_SRUN: &str = r#"#!/bin/sh
+D="${STUB_DIR:?}"
+job=$(( $(cat "$D/srun.jobs" 2>/dev/null || echo 0) + 1 ))
+echo "$job" > "$D/srun.jobs"
+phase=
+while [ $# -gt 0 ]; do
+  case $1 in
+    --job-name=*) phase=${1##*-} ;;
+    -*) ;;
+    *) break ;;
+  esac
+  shift
+done
+for a; do case $a in rebuild-set|shard) phase=$a ;; esac; done
+dir="$D/local/alice.$job"
+[ -n "${STUB_NO_JOB_DIR:-}" ] && [ "$phase" = "$STUB_NO_JOB_DIR" ] || mkdir -p "$dir"
+SLURM_JOB_ID=$job SLURM_JOB_USER=alice "$@"
+code=$?
+rm -rf "$dir"
+exit "$code"
+"#;
+
 /// Start each command of the site through `srun`, a stand-in for srun, with
 /// `build_path` in the job's directory under `local/`, which is returned.
 pub fn with_job_dirs(t: &T, srun: &str) -> PathBuf {
