@@ -497,5 +497,579 @@ fn docs_name_eb_retry_list() {
         assert!(page.contains("--result"), "{rel}");
         assert!(page.contains("--summary"), "{rel}");
         assert!(page.contains("--list"), "{rel}");
+        assert!(page.contains("--classify"), "{rel}");
+        assert!(page.contains("sub_class"), "{rel}");
+        assert!(page.contains("--node"), "{rel}");
+        assert!(page.contains("--drop-oom"), "{rel}");
     }
+    let from_eb_stack = std::fs::read_to_string(root.join("howto/from-eb-stack.org")).unwrap();
+    assert!(from_eb_stack.contains("stack bot-classify"));
+    assert!(from_eb_stack.contains("stack oom"));
+}
+
+/// `eb-stack` stub that records every argv and answers both subcommands.
+fn stub_both(path: &Path) {
+    write_exec(
+        path,
+        r#"#!/bin/sh
+printf '%s\n' "$*" >> "$CALLS"
+case "$2" in
+  bot-classify)
+    class=$(cat "$4")
+    printf '{"jobs":[{"class":"real-failure","sub_class":"%s"}]}\n' "$class"
+    ;;
+  oom)
+    easystack=
+    prev=
+    for arg in "$@"; do
+      if [ "$prev" = --easystack ]; then
+        easystack=$arg
+      fi
+      prev=$arg
+    done
+    printf 'EASYSTACK\n' >> "$CALLS"
+    cat "$easystack" >> "$CALLS"
+    if grep -q 'Big.eb' "$easystack"; then
+      printf '%s\n' 'Big.eb may run out of memory on x86_64/amd/zen4 (label): 10.0 GiB, the job has 1.0 GiB'
+      printf '%s\n' 'oom=1 fits=0 builds=1 nodes=1'
+    elif grep -q 'Parent.eb' "$easystack"; then
+      printf '%s\n' 'Dep.eb may run out of memory on x86_64/amd/zen4 (label): 9.0 GiB, the job has 1.0 GiB (required by Parent.eb)'
+      printf '%s\n' 'oom=1 fits=0 builds=1 nodes=1'
+    else
+      printf '%s\n' 'oom=0 fits=1 builds=1 nodes=1'
+    fi
+    ;;
+  *)
+    echo "unexpected $*" >&2
+    exit 9
+    ;;
+esac
+"#,
+    );
+}
+
+fn class_fixture(dir: &Path, entries: &[(&str, &str)]) -> (std::path::PathBuf, std::path::PathBuf) {
+    let list = dir.join("build.list");
+    let result = dir.join("result.json");
+    let mut list_text = String::new();
+    let mut lines = String::from("[\n");
+    for (i, (name, class)) in entries.iter().enumerate() {
+        list_text.push_str(name);
+        list_text.push_str(" --robot\n");
+        let log = dir.join(format!("{class}.log"));
+        std::fs::write(&log, class).unwrap();
+        if i > 0 {
+            lines.push_str(",\n");
+        }
+        lines.push_str(&format!(
+            r#"  {{"easyconfig":"{name}","status":"failed","log":"{}"}}"#,
+            log.display()
+        ));
+    }
+    lines.push_str("\n]\n");
+    std::fs::write(&list, list_text).unwrap();
+    std::fs::write(
+        &result,
+        format!(
+            r#"{{"kind":"result","exit_code":1,"lines":{lines}}}"#,
+            lines = lines
+        ),
+    )
+    .unwrap();
+    (list, result)
+}
+
+#[test]
+fn class_keeps_only_the_named_eb_stack_classes() {
+    let dir = tempfile::tempdir().unwrap();
+    let (list, result) = class_fixture(
+        dir.path(),
+        &[
+            ("Fetch.eb", "source"),
+            ("Interrupted.eb", "interrupted"),
+            ("Compile.eb", "compile"),
+        ],
+    );
+    let calls = dir.path().join("calls");
+    let bin_dir = dir.path().join("bin");
+    std::fs::create_dir(&bin_dir).unwrap();
+    stub_both(&bin_dir.join("eb-stack"));
+    let path = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let o = bin()
+        .args(["--result"])
+        .arg(&result)
+        .args(["--list"])
+        .arg(&list)
+        .args(["--classify", "--class", "source,checksum"])
+        .env("PATH", &path)
+        .env("CALLS", &calls)
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(
+        o.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(String::from_utf8(o.stdout).unwrap(), "Fetch.eb --robot\n");
+    let calls = std::fs::read_to_string(&calls).unwrap();
+    assert_eq!(calls.lines().count(), 3);
+    assert!(calls
+        .lines()
+        .all(|line| line.starts_with("stack bot-classify --json ")));
+}
+
+#[test]
+fn class_matches_the_top_level_class_as_well_as_the_sub_class() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = dir.path().join("build.list");
+    let result = dir.path().join("result.json");
+    let log = dir.path().join("infra.log");
+    let bin_dir = dir.path().join("bin");
+    std::fs::create_dir(&bin_dir).unwrap();
+    std::fs::write(&list, "Infra.eb\n").unwrap();
+    std::fs::write(&log, "infra").unwrap();
+    std::fs::write(
+        &result,
+        format!(
+            r#"{{"kind":"result","exit_code":1,"lines":[{{"easyconfig":"Infra.eb","status":"failed","log":"{}"}}]}}"#,
+            log.display()
+        ),
+    )
+    .unwrap();
+    write_exec(
+        &bin_dir.join("eb-stack"),
+        r#"#!/bin/sh
+printf '{"jobs":[{"class":"infra","sub_class":"scheduler"}]}\n'
+"#,
+    );
+    let o = bin()
+        .args(["--result"])
+        .arg(&result)
+        .args(["--list"])
+        .arg(&list)
+        .args(["--classify", "--class", "infra"])
+        .env("PATH", &bin_dir)
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(String::from_utf8(o.stdout).unwrap(), "Infra.eb\n");
+}
+
+#[test]
+fn node_warns_without_dropping_unless_drop_oom_is_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let (list, result) = class_fixture(
+        dir.path(),
+        &[("Big.eb", "timeout"), ("Small.eb", "timeout")],
+    );
+    let calls = dir.path().join("calls");
+    let bin_dir = dir.path().join("bin");
+    std::fs::create_dir(&bin_dir).unwrap();
+    stub_both(&bin_dir.join("eb-stack"));
+    let path = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let easyconfigs = dir.path().join("easyconfigs");
+    std::fs::create_dir(&easyconfigs).unwrap();
+    let run = |extra: &[&str]| {
+        std::fs::write(&calls, "").unwrap();
+        bin()
+            .args(["--result"])
+            .arg(&result)
+            .args(["--list"])
+            .arg(&list)
+            .args(["--classify", "--node", "8:1024:x86_64/amd/zen4"])
+            .args(extra)
+            .env("PATH", &path)
+            .env("CALLS", &calls)
+            .output()
+            .unwrap()
+    };
+    let o = run(&[
+        "--easyconfigs",
+        easyconfigs.to_str().unwrap(),
+        "--arch",
+        "x86_64/amd/zen4",
+    ]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(o.stdout.clone()).unwrap(),
+        "Big.eb --robot\nSmall.eb --robot\n"
+    );
+    let stderr = String::from_utf8(o.stderr).unwrap();
+    assert!(
+        stderr.contains("Big.eb may run out of memory on x86_64/amd/zen4"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("Small.eb"), "{stderr}");
+    let calls_text = std::fs::read_to_string(&calls).unwrap();
+    let oom = calls_text
+        .lines()
+        .find(|line| line.starts_with("stack oom "))
+        .expect("oom call");
+    let easystack = oom
+        .split_whitespace()
+        .skip_while(|word| *word != "--easystack")
+        .nth(1)
+        .expect("easystack path");
+    assert_eq!(
+        oom,
+        format!(
+            "stack oom --node 8:1024:x86_64/amd/zen4 --easystack {easystack} --easyconfigs {} --arch x86_64/amd/zen4",
+            easyconfigs.display()
+        )
+    );
+    assert!(
+        calls_text.contains("Big.eb") && calls_text.contains("Small.eb"),
+        "{calls_text}"
+    );
+    assert!(
+        !std::path::Path::new(easystack).exists(),
+        "temporary easystack was left behind"
+    );
+
+    let o = run(&["--drop-oom"]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(String::from_utf8(o.stdout).unwrap(), "Small.eb --robot\n");
+    assert!(String::from_utf8_lossy(&o.stderr).contains("may run out of memory"));
+}
+
+#[test]
+fn drop_oom_removes_a_line_that_requires_a_build_eb_stack_warns_about() {
+    let dir = tempfile::tempdir().unwrap();
+    let (list, result) = class_fixture(dir.path(), &[("Parent.eb", "resource")]);
+    let bin_dir = dir.path().join("bin");
+    std::fs::create_dir(&bin_dir).unwrap();
+    stub_both(&bin_dir.join("eb-stack"));
+    let path = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let o = bin()
+        .args(["--result"])
+        .arg(&result)
+        .args(["--list"])
+        .arg(&list)
+        .args(["--classify", "--node", "4:2048", "--drop-oom"])
+        .env("PATH", &path)
+        .env("CALLS", dir.path().join("calls"))
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(String::from_utf8(o.stdout).unwrap(), "");
+    assert!(String::from_utf8_lossy(&o.stderr).contains("required by Parent.eb"));
+}
+
+#[test]
+fn node_options_without_classify_or_node_are_usage_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = dir.path().join("build.list");
+    let result = dir.path().join("result.json");
+    std::fs::write(&list, "Foo.eb\n").unwrap();
+    std::fs::write(
+        &result,
+        r#"{"kind":"result","exit_code":1,"lines":[{"easyconfig":"Foo.eb","status":"failed"}]}"#,
+    )
+    .unwrap();
+    let list = list.to_str().unwrap();
+    let result = result.to_str().unwrap();
+    let cases = [
+        (
+            vec!["--result", result, "--list", list, "--class", "timeout"],
+            "--class requires --classify",
+        ),
+        (
+            vec!["--result", result, "--list", list, "--node", "8:1024"],
+            "--node requires --classify",
+        ),
+        (
+            vec!["--result", result, "--list", list, "--drop-oom"],
+            "--drop-oom requires --classify",
+        ),
+        (
+            vec![
+                "--result",
+                result,
+                "--list",
+                list,
+                "--classify",
+                "--drop-oom",
+            ],
+            "--drop-oom requires --node",
+        ),
+        (
+            vec![
+                "--result",
+                result,
+                "--list",
+                list,
+                "--classify",
+                "--easyconfigs",
+                "/tmp/ecs",
+            ],
+            "--easyconfigs requires --node",
+        ),
+        (
+            vec![
+                "--result",
+                result,
+                "--list",
+                list,
+                "--arch",
+                "x86_64/amd/zen4",
+            ],
+            "--arch requires --classify",
+        ),
+        (
+            vec![
+                "--result",
+                result,
+                "--list",
+                list,
+                "--classify",
+                "--node",
+                "0:1024",
+            ],
+            "needs positive cores and memory",
+        ),
+        (
+            vec![
+                "--result",
+                result,
+                "--list",
+                list,
+                "--classify",
+                "--class",
+                "timeout,",
+            ],
+            "--class needs a class name",
+        ),
+    ];
+    for (args, message) in cases {
+        let o = bin().args(&args).output().unwrap();
+        assert_eq!(
+            o.status.code(),
+            Some(2),
+            "args={args:?} stderr={}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&o.stderr).contains(message),
+            "args={args:?} stderr={}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        assert!(o.stdout.is_empty(), "args={args:?}");
+    }
+}
+
+#[test]
+fn oom_failures_and_a_count_mismatch_write_no_retry_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let (list, result) = class_fixture(dir.path(), &[("Big.eb", "timeout")]);
+    let bin_dir = dir.path().join("bin");
+    std::fs::create_dir(&bin_dir).unwrap();
+    for (script, message) in [
+        (
+            r#"#!/bin/sh
+if [ "$2" = bot-classify ]; then
+  printf '{"jobs":[{"sub_class":"timeout"}]}\n'
+else
+  echo 'oom table unreadable' >&2
+  exit 4
+fi
+"#,
+            "oom table unreadable",
+        ),
+        (
+            r#"#!/bin/sh
+if [ "$2" = bot-classify ]; then
+  printf '{"jobs":[{"sub_class":"timeout"}]}\n'
+else
+  printf 'fits=1\n'
+fi
+"#,
+            "no `oom=N` line",
+        ),
+        (
+            r#"#!/bin/sh
+if [ "$2" = bot-classify ]; then
+  printf '{"jobs":[{"sub_class":"timeout"}]}\n'
+else
+  printf '%s\n' 'Other.eb may run out of memory on cpu (label): 2.0 GiB, the job has 1.0 GiB'
+  printf '%s\n' 'oom=1 fits=0 builds=1 nodes=1'
+fi
+"#,
+            "which is not a selected line",
+        ),
+    ] {
+        write_exec(&bin_dir.join("eb-stack"), script);
+        let o = bin()
+            .args(["--result"])
+            .arg(&result)
+            .args(["--list"])
+            .arg(&list)
+            .args(["--classify", "--node", "8:1024", "--drop-oom"])
+            .env("PATH", &bin_dir)
+            .output()
+            .unwrap();
+        assert_eq!(o.status.code(), Some(2), "{message}");
+        assert!(
+            String::from_utf8_lossy(&o.stderr).contains(message),
+            "{}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        assert!(o.stdout.is_empty());
+    }
+}
+
+#[test]
+fn help_names_class_and_node() {
+    let o = bin().arg("--help").output().unwrap();
+    assert_eq!(o.status.code(), Some(0));
+    let stdout = String::from_utf8(o.stdout).unwrap();
+    assert!(stdout.contains("--class"));
+    assert!(stdout.contains("--node"));
+    assert!(stdout.contains("--drop-oom"));
+    assert!(stdout.contains("does not classify"));
+}
+
+#[test]
+fn real_eb_stack_classifies_and_drops_a_predicted_oom() {
+    let Some(eb_stack) = std::env::var_os("EB_STACK_REAL") else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let bin_dir = dir.path().join("bin");
+    std::fs::create_dir(&bin_dir).unwrap();
+    std::os::unix::fs::symlink(&eb_stack, bin_dir.join("eb-stack")).unwrap();
+    let timeout = "\
+== FAILED: the command timed out before the build finished
+";
+    let compile = "\
+== FAILED: Installation ended unsuccessfully: build failed (first 300 chars): cmd \"make -j 16\" exited with exit code 2
+src/fft.c:12:5: error: 'plan' undeclared (first use in this function)
+";
+    let logs = [
+        ("libxc-7.0.0-GCC-15.2.0.eb", "slurm-11.out", timeout),
+        ("NoEstimate-1.0.0-GCC-15.2.0.eb", "slurm-12.out", timeout),
+        ("CompileMe-1.0.0-GCC-15.2.0.eb", "slurm-13.out", compile),
+    ];
+    let mut list_text = String::new();
+    let mut lines = String::new();
+    for (i, (name, file, text)) in logs.iter().enumerate() {
+        let log = dir.path().join(file);
+        std::fs::write(&log, text).unwrap();
+        list_text.push_str(name);
+        list_text.push_str(" --robot\n");
+        if i > 0 {
+            lines.push_str(",\n");
+        }
+        lines.push_str(&format!(
+            r#"{{"easyconfig":"{name}","status":"failed","log":"{}"}}"#,
+            log.display()
+        ));
+    }
+    let list = dir.path().join("build.list");
+    let result = dir.path().join("result.json");
+    std::fs::write(&list, list_text).unwrap();
+    std::fs::write(
+        &result,
+        format!(r#"{{"kind":"result","exit_code":1,"lines":[{lines}]}}"#),
+    )
+    .unwrap();
+
+    let run = |extra: &[&str]| {
+        bin()
+            .args(["--result"])
+            .arg(&result)
+            .args(["--list"])
+            .arg(&list)
+            .args(extra)
+            .env("PATH", &bin_dir)
+            .output()
+            .unwrap()
+    };
+    let o = run(&["--classify"]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(o.stdout).unwrap(),
+        "libxc-7.0.0-GCC-15.2.0.eb --robot\nNoEstimate-1.0.0-GCC-15.2.0.eb --robot\n"
+    );
+
+    let o = run(&["--classify", "--class", "compile"]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(o.stdout).unwrap(),
+        "CompileMe-1.0.0-GCC-15.2.0.eb --robot\n"
+    );
+
+    let o = run(&[
+        "--classify",
+        "--class",
+        "timeout",
+        "--node",
+        "8:32768:x86_64/amd/zen4",
+        "--arch",
+        "x86_64/amd/zen4",
+        "--drop-oom",
+    ]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&o.stdout),
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        stderr.contains("libxc-7.0.0-GCC-15.2.0.eb may run out of memory"),
+        "{stderr}"
+    );
+    assert_eq!(
+        String::from_utf8(o.stdout).unwrap(),
+        "NoEstimate-1.0.0-GCC-15.2.0.eb --robot\n"
+    );
 }

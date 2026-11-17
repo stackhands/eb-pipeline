@@ -169,6 +169,30 @@ This starts =eb-stack stack bot-classify --json= once for each unfinished line's
 Install =eb-stack= on =PATH= before using the option.
 If a line has no recorded log, =eb-stack= is missing or fails, or its output cannot be read, =eb-retry-list= exits 2 and writes no retry list instead of treating every line as retryable.
 
+=--class= names the classes to keep instead of those three.
+A class is the =class= or =sub_class= string in that JSON, such as =timeout= or =source=.
+=--class= needs =--classify=, and it replaces the default rather than adding to it:
+
+#+begin_src bash
+eb-retry-list --result result.json --list build.list --classify --class source,checksum --out retry.list
+#+end_src
+
+To see which of the remaining lines =eb-stack= predicts will not fit a node, add =--node=.
+The value is =CORES:MEMORY_MIB= or =CORES:MEMORY_MIB:TARGET=.
+=eb-retry-list= writes those lines to a temporary easystack and starts =eb-stack stack oom --node NODE --easystack= on that file.
+Each warning is printed on stderr.
+The lines stay in the retry list unless you also pass =--drop-oom=:
+
+#+begin_src bash
+eb-retry-list --result result.json --list build.list --classify \
+  --node 32:65536:x86_64/amd/zen4 --drop-oom --out retry.list
+#+end_src
+
+=--arch= and =--easyconfigs= are passed through to the same =stack oom= command when you set them.
+=--node=, =--drop-oom=, =--arch= and =--easyconfigs= need =--classify=, and =--drop-oom=, =--arch= and =--easyconfigs= need =--node=.
+=eb-retry-list= does not classify a log or estimate memory itself.
+With no lines left after classification, =stack oom= is not started.
+
 ** If it fails
 
 | Message                                                                                                                      | Cause                                                                                                          | What to do                                                                           |
