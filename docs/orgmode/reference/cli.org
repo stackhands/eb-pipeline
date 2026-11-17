@@ -1,0 +1,228 @@
+#+TITLE: The eb-pipeline command
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* The eb-pipeline command
+
+=eb-pipeline= reads a site file and a build list, and plans or runs the phases that build the list on one target of the site.
+Each command has its own options; =docs/examples/cli.sh= prints every help text on this page.
+
+** Synopsis
+
+#+begin_example
+eb-pipeline <COMMAND>
+eb-pipeline check [OPTIONS] --site <SITE>
+eb-pipeline schema
+eb-pipeline init [OPTIONS]
+eb-pipeline explain [OPTIONS] --site <SITE>
+eb-pipeline targets [OPTIONS] --site <SITE>
+eb-pipeline plan [OPTIONS] --site <SITE> --list <LIST> --target <TARGET> --build-type <BUILD_TYPE>
+eb-pipeline run [OPTIONS] --site <SITE> --list <LIST> --target <TARGET> --build-type <BUILD_TYPE>
+#+end_example
+
+=eb-pipeline --help= prints:
+
+#+begin_example
+Site-neutral EasyBuild pipeline driver configured by a per-site TOML file
+
+Usage: eb-pipeline <COMMAND>
+
+Commands:
+  check    Parse and validate a site file
+  schema   Print the site file reference: every key, type, default and meaning
+  init     Write a starter site file from a built-in template
+  explain  Print the resolved configuration of one or all targets
+  targets  Print the target names in file order, for a CI matrix or a shell loop
+  plan     Compute phases, launch lines, environments and tool calls without executing
+  run      Execute the plan's phases as subprocesses
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
+
+Examples:
+  eb-pipeline init --template small-cluster --out site.toml
+  eb-pipeline check --site site.toml
+  eb-pipeline targets --site site.toml --format json
+  eb-pipeline plan --site site.toml --list list.txt --target cpu --build-type production --out plan.json
+  eb-pipeline run --site site.toml --list list.txt --target cpu --build-type production --result result.json
+
+Configuration: every flag above falls back to an EB_PIPELINE_<FLAG> variable
+(EB_PIPELINE_SITE, EB_PIPELINE_LIST, EB_PIPELINE_TARGET, EB_PIPELINE_BUILD_TYPE,
+EB_PIPELINE_RUN_ID, EB_PIPELINE_LOG_STAMP, EB_PIPELINE_LISTS_DIR); a flag on the
+command line wins. EB_PIPELINE__SECTION__KEY=value sets one site file value, for
+example EB_PIPELINE__FILESYSTEMS__SCRATCH=/scratch/eb; the result is validated
+like the file.
+
+Output streams: stdout carries plan, explain, schema, init, targets and run --dry-run
+output only. Events go to stderr as `LEVEL [phase] target: message`. The result JSON
+goes to --result.
+
+Exit codes:
+   0  all requested work completed
+   1  work attempted and failed (a build line or a phase); see the result file
+   2  usage error, invalid site file, or a tool below its minimum version
+  75  a resource is temporarily unavailable or a step is pending; rerun
+  78  refused by a precondition, by admission or by eb-staged-rebuild; lines
+      built before the refusal stay built, see the result file
+ 130  interrupted by SIGINT, after the running child ended
+ 143  interrupted by SIGTERM, after the running child ended
+
+Sibling tool codes are mapped explicitly:
+  eb-stack admit    0 admitted, 78 refused, 1 failed, 2 usage
+  eb-stack shard    the code in shards.planner_exit_unsharded (default 3) means
+                    unsharded; the run continues
+  eb-staged-rebuild 2 is a refusal there; the driver records it as refused
+                    (exit 78), 75 as pending (exit 75), any other non-zero as failed
+  eb-keep-logs      rotate 75 means another rotate holds the log root's lock;
+                    the logs phase is recorded as skipped, any other non-zero
+                    as failed
+A signal (130, 143) or a usage error (2) ends the run with that code. Otherwise,
+when several apply: 1, then 78, then 75, then 0. Codes are never summed.
+#+end_example
+
+=eb-pipeline --version= prints the version of the crate, the same for a release and for a build from source:
+
+#+begin_example
+eb-pipeline 0.3.0
+#+end_example
+
+** Arguments
+
+The first argument names the command.
+No command takes an argument other than its options.
+
+| Command   | What it does                                                                                                                                        |
+|-----------+-----------------------------------------------------------------------------------------------------------------------------------------------------|
+| =check=   | Read the site file, check it against every rule of the site file, and print warnings about settings that are valid but probably wrong.              |
+| =schema=  | Print every key of the site file with its type, its default and what it does, section by section.                                                   |
+| =init=    | Print a built-in template site file, or write it to a new file.                                                                                     |
+| =explain= | Print what each target resolves to: paths, launch lines and the environment of its commands.                                                        |
+| =targets= | Print the names of the targets in the order of the site file.                                                                                       |
+| =plan=    | Print the plan of a run as JavaScript Object Notation (JSON): its phases and every command with its launch line and environment. It starts nothing. |
+| =run=     | Run the phases of the plan, one command at a time, and write the result file.                                                                       |
+| =help=    | Print the help of the program, or of the command it names.                                                                                          |
+
+** Options
+
+Every command takes =-h=, which prints a summary of its options, and =--help=, which prints them in full; both exit 0.
+=eb-pipeline -V= and =eb-pipeline --version= print the version.
+An option takes its value as the next argument or after an equals sign, as =--site site.toml= or =--site=site.toml=.
+An option with a variable in the table takes its value from that variable when the command line does not give it.
+
+*** check
+
+| Option            | Variable                | Meaning                                                                                                                                                                                                                            |
+|-------------------+-------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =--site FILE=     | =EB_PIPELINE_SITE=      | The site file; required.                                                                                                                                                                                                           |
+| =--lists-dir DIR= | =EB_PIPELINE_LISTS_DIR= | A directory that must hold every file that the =build_lists= of a target names. A missing file is an error of the site file.                                                                                                       |
+| =--probe-tools=   |                         | Start =BIN --version= for each sibling tool that an enabled phase calls, and fail when one cannot start, prints no version, or prints one below the =min_version= of its =[site.tools]= table. Without it, =check= starts nothing. |
+
+=check= writes =INFO [check] NAME: site file is valid= to stderr when the file is valid, where =NAME= is =site.name=.
+Before that line it writes a =WARN= line for each of these settings:
+
+- =modules.unuse_path= with a first =modules.init= entry that is not an absolute path;
+- =admission.required= without =admission.quota_cmd= and =admission.reservations=, so that =run= refuses with exit 78;
+- =admission.quota_cmd= and =admission.reservations= without =admission.live_jobs_cmd=.
+
+*** schema
+
+=schema= takes no options.
+It prints the reference of the site file on stdout, one block per section, with one entry per key:
+the key, its type, whether it is required or its default, and what it does.
+
+*** init
+
+| Option            | Meaning                                                                                                                                                                      |
+|-------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =--template NAME= | The template to print; required unless =--list= is given.                                                                                                                    |
+| =--list=          | Print the name and summary of each template, one per line, and nothing else.                                                                                                 |
+| =--out FILE=      | Write the template to =FILE= instead of stdout, and write =INFO [init] -: wrote template NAME to FILE= to stderr. =-= is stdout. An existing =FILE= is refused, with exit 2. |
+
+*** explain
+
+| Option              | Variable                 | Meaning                                                                                            |
+|---------------------+--------------------------+----------------------------------------------------------------------------------------------------|
+| =--site FILE=       | =EB_PIPELINE_SITE=       | The site file; required.                                                                           |
+| =--target NAME=     | =EB_PIPELINE_TARGET=     | The target to explain; every target when absent.                                                   |
+| =--build-type NAME= | =EB_PIPELINE_BUILD_TYPE= | Apply the =[targets.build_types.NAME]= table of each target to what it prints.                     |
+| =--format FORMAT=   |                          | =toml=, the default, prints Tom's Obvious Minimal Language (TOML); =json= prints the same as JSON. |
+
+For each target, =explain= prints the resolved paths, the launch line and arguments of each phase role, and the environment of its commands.
+It shows =<run-id>= and =<log-stamp>= where a run puts its own.
+
+*** targets
+
+| Option            | Variable           | Meaning                                                                                             |
+|-------------------+--------------------+-----------------------------------------------------------------------------------------------------|
+| =--site FILE=     | =EB_PIPELINE_SITE= | The site file; required.                                                                            |
+| =--format FORMAT= |                    | =text=, the default, prints one name per line; =json= prints a JSON array of the names on one line. |
+
+*** plan
+
+| Option              | Variable                 | Meaning                                                                                                                                                                          |
+|---------------------+--------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =--site FILE=       | =EB_PIPELINE_SITE=       | The site file; required.                                                                                                                                                         |
+| =--list FILE=       | =EB_PIPELINE_LIST=       | The build list; required.                                                                                                                                                        |
+| =--target NAME=     | =EB_PIPELINE_TARGET=     | The target to build on; required.                                                                                                                                                |
+| =--build-type NAME= | =EB_PIPELINE_BUILD_TYPE= | The build type; required. A name without a =[targets.build_types.NAME]= table takes the values of the target.                                                                    |
+| =--run-id ID=       | =EB_PIPELINE_RUN_ID=     | The run label passed to the tools; =<run-id>= when absent.                                                                                                                       |
+| =--log-stamp STAMP= | =EB_PIPELINE_LOG_STAMP=  | The name of the run's directory under the log root, a Coordinated Universal Time (UTC) as =YYYYMMDD_HHMMSS=; =<log-stamp>= when absent. Any other value is refused, with exit 2. |
+| =--out FILE=        |                          | Write the plan to =FILE= instead of stdout; =-= is stdout.                                                                                                                       |
+| =--shard-plan DIR=  |                          | Read =DIR/plan.json=, written by =eb-stack stack shard=, and plan its units and their lines instead of the list as one unit.                                                     |
+
+*** run
+
+=run= takes the first six options of =plan=, and these:
+
+| Option          | Meaning                                                                                                                                                                                     |
+|-----------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =--result FILE= | Write the result file to =FILE= when the run ends. Without it, no result file is written. An error in the input, which stops the run before it starts, leaves an existing =FILE= as it was. |
+| =--dry-run=     | Print each command of the plan on stdout and start nothing. No result file is written, even with =--result=.                                                                                |
+
+=--run-id= defaults to the log stamp, and =--log-stamp= to the UTC time at which the run starts, taken once.
+A line that =eb-staged-rebuild= builds passes =RUN_ID-STEM= as its run id, where =STEM= is the easyconfig file name without =.eb=, with =.2=, =.3= and so on added when the list repeats the line.
+
+With =--dry-run=, a planned command prints as =[PHASE] COMMAND= and a phase that starts nothing as =# [PHASE] STATUS=.
+
+** Environment
+
+Each option in the tables above that names a variable reads it when the option is not on the command line.
+=EB_PIPELINE__SECTION__KEY=VALUE= sets one value of the site file, and a run sets variables of its own for the commands it starts.
+[[file:environment.org][Environment variables]] lists all of them.
+
+** Exit status
+
+| Status | Meaning                                                                                                                                                                                                         |
+|--------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+|      0 | All requested work completed.                                                                                                                                                                                   |
+|      1 | =run=: a line or a phase failed. =plan=: the shard plan could not be read. Any command: an output file could not be written.                                                                                    |
+|      2 | A usage error, an invalid site file, an unknown target, a list that cannot be read, is empty or has a quote that is not closed, a tool below its =min_version=, or an =init --out= file that cannot be created. |
+|     75 | =run=: a resource was busy or a step is pending; run it again.                                                                                                                                                  |
+|     78 | =run=: a precondition, admission or =eb-staged-rebuild= refused.                                                                                                                                                |
+|    130 | =run=: interrupted by =SIGINT=.                                                                                                                                                                                 |
+|    143 | =run=: interrupted by =SIGTERM=.                                                                                                                                                                                |
+
+The commands other than =run= exit 0, 1 or 2.
+
+** Files
+
+| File                            | Use                                                                                                                                                                    |
+|---------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| the site file, =--site=         | Everything about the site; =eb-pipeline schema= lists its keys.                                                                                                        |
+| the build list, =--list=        | One easyconfig per line, followed by the options =eb= gets for it, as =Name-version-toolchain.eb [eb options]=. Blank lines and lines that start with =#= are skipped. |
+| the plan, =plan --out=          | What =plan= prints.                                                                                                                                                    |
+| the result file, =run --result= | What the run did, line by line and phase by phase.                                                                                                                     |
+| =LOG_ROOT/LOG_STAMP/TARGET/=    | The log directory of a run, under =filesystems.log_root=.                                                                                                              |
+
+A list line is split into words as a shell splits them, with single and double quotes.
+
+** See also
+
+- [[file:../tutorials/first-build-list.org][Run your first build list]]
+- [[file:environment.org][Environment variables]]
+- The [[file:api.org][API]] of the =eb_pipeline= library, which the command is built on.

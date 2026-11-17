@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared by the scripts in this directory, which source it.
 #
 # A script runs the commands of one page in order, the way a reader types

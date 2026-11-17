@@ -1,0 +1,128 @@
+#+TITLE: Environment variables
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Environment variables
+
+The variables =eb-pipeline= reads in place of an option or a site file value, the ones a run reads because the site file names them, and the ones it sets for the commands it starts.
+
+** Options
+
+An option that is not on the command line takes its value from its variable.
+An option on the command line wins.
+
+| Variable                 | Option         | Commands                                     |
+|--------------------------+----------------+----------------------------------------------|
+| =EB_PIPELINE_SITE=       | =--site=       | =check=, =explain=, =targets=, =plan=, =run= |
+| =EB_PIPELINE_LIST=       | =--list=       | =plan=, =run=                                |
+| =EB_PIPELINE_TARGET=     | =--target=     | =explain=, =plan=, =run=                     |
+| =EB_PIPELINE_BUILD_TYPE= | =--build-type= | =explain=, =plan=, =run=                     |
+| =EB_PIPELINE_RUN_ID=     | =--run-id=     | =plan=, =run=                                |
+| =EB_PIPELINE_LOG_STAMP=  | =--log-stamp=  | =plan=, =run=                                |
+| =EB_PIPELINE_LISTS_DIR=  | =--lists-dir=  | =check=                                      |
+
+=--out=, =--result=, =--shard-plan=, =--format=, =--dry-run= and =--probe-tools= have no variable.
+
+** Site file values
+
+=EB_PIPELINE__SECTION__KEY=VALUE= sets one value of the site file, after the file is read and before it is checked.
+Every command that reads a site file applies these variables.
+
+- The name after =EB_PIPELINE__= is split at each =__=, and each part, lowercased, names a table or, last, the key.
+  =EB_PIPELINE__FILESYSTEMS__SCRATCH= sets =scratch= in =[filesystems]=, and =EB_PIPELINE__LOGS__ROTATE__DELETE_AFTER_DAYS= sets =delete_after_days= in =[logs.rotate]=.
+- A part must hold letters, digits and underscores only, and none may be empty.
+- =VALUE= is read as a TOML value, such as =true=, =16=, ="16"= or =["a", "b"]=, and as a string when it is not one.
+  =/scratch/alice= is the string ="/scratch/alice"=.
+- A table on the path that the file does not have is made.
+- A path that reaches into an array of tables, such as =targets=, is refused: the values of a target stay in the file.
+  So is a path that ends at a table, or that passes through a value that is not a table.
+- The variables apply in the order of their names, whatever the order of the environment.
+- Each one writes =INFO [site] -: KEY set from NAME= to stderr, with the key and never the value.
+
+The result is checked like the file itself, so an unknown key or a value of the wrong type exits 2 with =invalid site file after environment overrides:= and the reason.
+Since every part is lowercased, these variables cannot set a key that has an upper-case letter, such as a package name under =[modules.package_env]=.
+
+** Read during a run
+
+The site file names these variables; =run= reads them before the first build.
+=plan= and =run --dry-run= show =${NAME}= in their place.
+
+| Variable                                                           | Use                                                                                                                                                                                    |
+|--------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| the one named by =admission.job_id_env=, =SLURM_JOB_ID= by default | The job id that =eb-stack stack admit= reserves for. With admission on, =run= refuses with exit 78 before any build when it is unset or not a positive integer without a leading zero. |
+| the one named by =targets.route.receipt_digest_env=                | A digest that the routed commands get as =EB_PIPELINE_ROUTE_RECEIPT_DIGEST=. =run= refuses with exit 78 when it is unset or empty.                                                     |
+| each one named in =shards.installed_modules_dirs_from_env=         | Module trees, separated by =:=, added to =shards.installed_modules_dirs=. =run= refuses with exit 78 when one is unset; an empty one adds nothing.                                     |
+
+** Set for the commands of a run
+
+A command that =run= starts inherits the environment of =eb-pipeline=, with the variables below set over it.
+The keys of =[scheduler.env]= come first, and a variable of the table below with the same name replaces one of them.
+
+| Variable                                                                                            | Value                                                                                | Set when                                             |
+|-----------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------+------------------------------------------------------|
+| the keys of =[scheduler.env]=                                                                       | their values                                                                         | always                                               |
+| =EASYBUILD_TMPDIR=                                                                                  | =filesystems.tmp=                                                                    | always                                               |
+| =EASYBUILD_BUILDPATH=                                                                               | =filesystems.build_path=, with ={target}= replaced by the target's name              | always                                               |
+| =EASYBUILD_SOURCEPATH=                                                                              | the entries of =filesystems.source_paths=, with ={target}= replaced, joined with =:= | =source_paths= is not empty                          |
+| =EASYBUILD_INSTALLPATH=                                                                             | the target's =site_prefix=, else =filesystems.install_root=                          | =filesystems.export_install_vars= is =single=        |
+| =EASYBUILD_INSTALLPATH_SOFTWARE=                                                                    | the target's =software_root=                                                         | =filesystems.export_install_vars= is =split=         |
+| =EASYBUILD_INSTALLPATH_MODULES=                                                                     | the target's =modules_root=                                                          | =filesystems.export_install_vars= is =split=         |
+| =EASYBUILD_OPTARCH=                                                                                 | =eb_optarch= of the build type, else of the target                                   | one of them is set                                   |
+| =EASYBUILD_MAX_PARALLEL=                                                                            | =max_parallel= of the build type, else of the target                                 | one of them is set                                   |
+| =EASYBUILD_CUDA_COMPUTE_CAPABILITIES=                                                               | the target's =cuda_compute_capabilities=                                             | it is set                                            |
+| =EASYBUILD_READ_ONLY_INSTALLDIR=                                                                    | =filesystems.read_only_installdir_value=, =1= by default                             | =filesystems.read_only_installdir= is =true=         |
+| =EASYBUILD_CONFIGS_REPOPATH=                                                                        | =filesystems.configs_repo=                                                           | it is set                                            |
+| =EB_PIPELINE_SITE=                                                                                  | =site.name=                                                                          | always                                               |
+| =EB_PIPELINE_TARGET=                                                                                | the target's name                                                                    | always                                               |
+| =EB_PIPELINE_BUILD_TYPE=                                                                            | the build type                                                                       | always                                               |
+| =EB_PIPELINE_RUN_ID=                                                                                | the run id                                                                           | always                                               |
+| =EB_PIPELINE_LOG_STAMP=                                                                             | the log stamp                                                                        | always                                               |
+| =EB_PIPELINE_LOG_DIR=                                                                               | =LOG_ROOT/LOG_STAMP/TARGET=, the run's log directory                                 | always                                               |
+| =EB_PIPELINE_BUILD_ACCOUNT=                                                                         | =site.build_account=                                                                 | it is set                                            |
+| =EB_PIPELINE_DEFAULT_GROUP=                                                                         | =site.default_group=                                                                 | it is set                                            |
+| =EB_PIPELINE_MODULES=                                                                               | the entries of =modules.init=, joined with spaces                                    | =modules.init= is not empty                          |
+| =EB_PIPELINE_UNUSE_PATH=                                                                            | =1=                                                                                  | =modules.unuse_path= is =true=                       |
+| =EB_PIPELINE_SHELL_INIT=                                                                            | =modules.shell_init=                                                                 | it is set                                            |
+| =EESSI_SITE_INSTALL=                                                                                | =1=                                                                                  | =[modules.eessi]= is on and =site_install= is =true= |
+| =EESSI_SITE_BOOTSTRAP_MODULEPATH=                                                                   | =modules.eessi.bootstrap_modulepath=                                                 | =[modules.eessi]= is on and it is set                |
+| the one named by =modules.eessi.cpu_override_var=, =EESSI_SOFTWARE_SUBDIR_OVERRIDE= by default      | the target's =cpu_target=                                                            | =[modules.eessi]= is on and =cpu_target= is set      |
+| the one named by =modules.eessi.accel_override_var=, =EESSI_ACCELERATOR_TARGET_OVERRIDE= by default | the target's =accel_target=                                                          | =[modules.eessi]= is on and =accel_target= is set    |
+| =EESSI_SITE_SOFTWARE_PREFIX=                                                                        | the target's =site_prefix=, else =filesystems.install_root=                          | =[modules.eessi]= is on                              |
+
+=[modules.eessi]= is on when the site file has the table and its =enabled= is not =false=.
+=EESSI= stands for the European Environment for Scientific Software Installations.
+
+*** Set for some commands
+
+Some commands get more variables, set over those above.
+
+| Variable                                                                                    | Value                                                                                                                     | Commands                                                                        |
+|---------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------|
+| the keys of =[modules.package_env.NAME]=, then of the target's =[targets.package_env.NAME]= | their values; per key, the target's wins                                                                                  | the prefetch and build commands of a line whose easyconfig is of package =NAME= |
+| the keys of =[licences.env.NAME]=                                                           | their values                                                                                                              | the same, with =[licences]= on                                                  |
+| =EB_PIPELINE_LICENCE_GROUP=                                                                 | the group of =[licences.groups]= that applies to the package and version                                                  | the same, with =[licences]= on                                                  |
+| =EB_PIPELINE_FETCH_PROFILE=                                                                 | the target's =fetch_profile= as JSON, with sorted keys                                                                    | the prefetch commands, when the target has a =fetch_profile=                    |
+| =EB_PIPELINE_HW_VENDOR_ID=, =EB_PIPELINE_HW_CPU_FAMILY=, =EB_PIPELINE_HW_MODEL=             | the =vendor_id=, =cpu_family= and =model= of the target's =cpu_hardware= for a CPU-role unit, of its =hardware= otherwise | the prefetch and build commands, when the target has a =cpu_hardware= table     |
+| the keys of =targets.route.env=                                                             | their values, with the placeholders of the route replaced                                                                 | the commands that the route wraps                                               |
+| =EB_PIPELINE_ROUTE_RUNTIME_ROOT=                                                            | =targets.route.runtime_root=                                                                                              | the same, when it is set                                                        |
+| =EB_PIPELINE_ROUTE_SHARES_RO=, =EB_PIPELINE_ROUTE_SHARES_RW=                                | the entries of =targets.route.shares_ro= and =shares_rw=, joined with =:=                                                 | the same, when they are not empty                                               |
+| =EB_PIPELINE_ROUTE_RECEIPT_DIGEST=                                                          | the value of the variable that =targets.route.receipt_digest_env= names                                                   | the same, when it is set                                                        |
+| =EASYBUILD_OUTPUT_STYLE=                                                                    | =basic=, whatever =[scheduler.env]= sets, so that =eb --last-log= prints the log path on one line                         | =eb-keep-logs failed=, after a line fails                                       |
+| =TZ=                                                                                        | =UTC=, so that =eb-keep-logs rotate= counts the age of a run from the midnight of its log stamp                           | =eb-keep-logs rotate=                                                           |
+| =EB_PIPELINE_CACHE_CONFIG=                                                                  | the =config= of the target's entry in =[[caches.targets]]=                                                                | =[caches].command=                                                              |
+| =EB_PIPELINE_CACHE_BINDINGS=                                                                | =caches.bindings=                                                                                                         | the same, when it is set                                                        |
+| =EB_PIPELINE_CACHE_INIT_MODULE=                                                             | the =init_module= of the target's entry, else =caches.init_module=                                                        | the same, when one of them is set                                               |
+
+*** The module wrapper
+
+When =modules.init= is not empty, =modules.unuse_path= is =true= or =modules.shell_init= is set, the shard, prefetch, build, keep-failed and cache commands start through =modules.shell=, which reads three of the variables above:
+
+1. =EB_PIPELINE_SHELL_INIT=: the file it sources first, when set.
+2. =EB_PIPELINE_UNUSE_PATH=: when set, it empties =MODULEPATH=.
+3. =EB_PIPELINE_MODULES=: it runs =module purge=, then =module load= for each name in it, in order, then the command.
+
+The admit and rotate commands start without it.
+
+** See also
+
+- [[file:cli.org][The eb-pipeline command]]

@@ -10,4 +10,4 @@ A declaration's doc comment is its description.
 - [[file:../api/eb_pipeline/index.html][eb_pipeline]]: the Rust library the =eb-pipeline= program is built on, as =cargo doc= documents it, with search and source views.
   It lists every =pub= item of the crate: the site file schema, its loading and validation, the planner, the runner and the tool contracts.
 
-The program itself, =src/main.rs=, is not part of the library.
+The program itself, =src/main.rs=, is not part of the library; [[file:cli.org][The eb-pipeline command]] describes it.

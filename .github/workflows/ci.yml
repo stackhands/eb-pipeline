@@ -69,3 +69,4 @@ jobs:
       - name: Run the documentation examples
         run: |
           bash docs/examples/tutorial.sh
+          bash docs/examples/cli.sh
