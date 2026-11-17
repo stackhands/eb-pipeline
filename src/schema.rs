@@ -300,9 +300,12 @@ doc_struct! {
     /// Paths.
     Filesystems {
         scratch: String => ("string", "", true, "Scratch root."),
-        tmp: String => ("string", "", true, "EASYBUILD_TMPDIR."),
+        tmp: String => ("string", "", true,
+            "EASYBUILD_TMPDIR. `{job_dir}` stands for `job_dir`, which gives each job a directory of its own."),
         build_path: String => ("string", "", true,
-            "EASYBUILD_BUILDPATH. `{target}` expands to the target name, which gives each target a build directory of its own; no other placeholder is allowed."),
+            "EASYBUILD_BUILDPATH. `{target}` expands to the target name, which gives each target a build directory of its own, and `{job_dir}` stands for `job_dir`, which gives each job one; no other placeholder is allowed."),
+        job_dir: Option<String> => ("string", "none", false,
+            "A directory that each Slurm job has to itself on its node, such as the node-local mount a prolog makes: `{job}` is the job id, which it must hold, and `{user}` the job's user. Each command resolves `{job_dir}` in `build_path` and `tmp` inside its job, from SLURM_JOB_ID and SLURM_JOB_USER, else `id -un`, and exits 1 before it starts when the job has no such directory it can write to. Needs `scheduler.kind = \"slurm\"`."),
         #[serde(default)]
         source_paths: Vec<String> => ("array of string", "[]", false,
             "EASYBUILD_SOURCEPATH entries, joined with `:`. EasyBuild looks for a source in every entry and downloads a missing one into the first; `{target}` expands to the target name, so `{target}` in the first entry gives each target a download directory of its own. No other placeholder is allowed."),

@@ -48,7 +48,7 @@ expect_line 'EASYBUILD_BUILDPATH = "/local/alice/build"'
 sed 's/^log_root/log_rot/' site.toml >typo.toml
 run 'eb-pipeline check --site typo.toml'
 expect_status 2
-expect_line 'unknown field `log_rot`, expected one of `scratch`, `tmp`, `build_path`, `source_paths`, `install_root`, `export_install_vars`, `log_root`, `shard_dir`, `read_only_installdir`, `read_only_installdir_value`, `configs_repo`'
+expect_line 'unknown field `log_rot`, expected one of `scratch`, `tmp`, `build_path`, `job_dir`, `source_paths`, `install_root`, `export_install_vars`, `log_root`, `shard_dir`, `read_only_installdir`, `read_only_installdir_value`, `configs_repo`'
 
 sed 's/^kind = "slurm"/kind = "pbs"/' site.toml >pbs.toml
 run 'eb-pipeline check --site pbs.toml'

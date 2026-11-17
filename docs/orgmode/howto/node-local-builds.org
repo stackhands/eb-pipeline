@@ -1,0 +1,100 @@
+#+TITLE: Build in a directory that each job has on its node
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Build in a directory that each job has on its node
+
+Give each job of a run a build directory of its own on the disk of its node, such as the one that a Slurm prolog mounts for each job, instead of one on shared scratch.
+EasyBuild then unpacks and compiles on the node, and no two jobs share a build directory.
+eb-local builds in the same mount, which its site file names with =storage.node_local_root= and =storage.node_local_mount=, so the nightly builds where the builds that users start do.
+
+** Before you start
+
+- A site file with =scheduler.kind = "slurm"= that passes =check=, as in [[file:write-a-site-file.org][Write a site file for your cluster]].
+- A directory that each job has to itself on its node, which is there when the job starts and which the job's user can write to.
+  This page takes =/local/USER.JOB=, which a prolog makes from =SLURM_JOB_USER= and =SLURM_JOB_ID=; eb-local takes the same directory with =storage.node_local_root = "/local"= and =storage.node_local_mount = "%u.%j"=.
+- The directory on every node that a job of the run can land on.
+  Every job that a run starts needs it, whatever its phase, so the prolog runs on every node of the partitions in =phase_defaults= and =targets.phases=.
+
+The site file on this page builds for the =zen4= nodes of the =cpu= partition:
+
+#+INCLUDE: "node-local-builds/site.toml" src toml
+
+The output on this page comes from =docs/examples/node-local.sh=.
+
+** Steps
+
+1. Name the directory in =[filesystems]=, with ={job}= for the job id and ={user}= for the job's user, and put the build directory in it with ={job_dir}=:
+
+   #+begin_src toml
+   job_dir = "/local/{user}.{job}"
+   build_path = "{job_dir}/build"
+   #+end_src
+
+   =build_path= needs no ={target}= now: no two jobs share the directory, so neither do two targets that build at once.
+   Leave =tmp= on scratch; =If it fails= says what a =tmp= in the job's directory loses.
+2. Check the site file, and see what the commands get:
+
+   #+begin_src bash
+   eb-pipeline check --site site.toml
+   eb-pipeline explain --site site.toml | grep -E "^(EASYBUILD_BUILDPATH|EASYBUILD_TMPDIR|EB_PIPELINE_JOB_DIR) ="
+   #+end_src
+
+   #+begin_example
+   INFO [check] example: site file is valid
+   EASYBUILD_BUILDPATH = "{job_dir}/build"
+   EASYBUILD_TMPDIR = "/scratch/alice/tmp"
+   EB_PIPELINE_JOB_DIR = "/local/{user}.{job}"
+   #+end_example
+
+   The job id and the user are known only inside the job, so =explain= and =plan= show the placeholders.
+   Each launch in =explain= ends with a short script for =bash=, which runs first inside the job.
+   It replaces the placeholders with =SLURM_JOB_ID= and =SLURM_JOB_USER=, checks that the job can write to the directory, and then starts the command.
+3. Run the list as before:
+
+   #+begin_src bash
+   eb-pipeline run --site site.toml --list zen4.list --target zen4 --build-type production
+   #+end_src
+
+** Check that it worked
+
+Here the run went through a copy of the site file above with its paths under a work directory and no modules.
+A stand-in for =srun= ran each command on the same host as job 4242 of =alice=, with =$WORK/node/alice.4242= in place of =/local/alice.4242=.
+The stand-in for =eb= of the tutorial printed its =EASYBUILD_= variables:
+
+#+begin_src bash
+eb-pipeline run --site site.toml --list build.list --target zen4 --build-type production --log-stamp 20261117_090000
+grep -E "^EASYBUILD_(BUILDPATH|TMPDIR)=" $WORK/site/logs/20261117_090000/zen4/Example-1.0-GCCcore-15.2.0.stdout.log
+#+end_src
+
+#+begin_example
+INFO [licences] zen4: not configured
+INFO [shard] zen4: not configured
+INFO [sources] zen4: not configured
+INFO [admission] zen4: not configured
+INFO [caches] zen4: not configured
+INFO [logs] zen4: not configured
+INFO [build] zen4: Example-1.0-GCCcore-15.2.0: start
+INFO [build] zen4: Example-1.0-GCCcore-15.2.0: ok
+EASYBUILD_BUILDPATH=$WORK/node/alice.4242/build
+EASYBUILD_TMPDIR=$WORK/scratch/tmp
+#+end_example
+
+On a cluster, a running build has its build directory under =/local/alice.JOB/build= on its node, which =srun --jobid=JOB --overlap ls /local/alice.JOB/build= lists.
+
+** If it fails
+
+| Message                                                                                                                                                                | Cause                                                                                                                                                                                         | What to do                                                                                                          |
+|------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------|
+| =eb-pipeline: job 4242 has no directory /local/alice.4242 that it can write to, which filesystems.job_dir names=, in the log of the line, which ends =failed (exit 1)= | The job's node has no such directory, or the job's user cannot write to it: the prolog did not run there, or names the directory otherwise.                                                   | Run the prolog on every node of the partitions that the run's jobs take, and give =job_dir= the name that it makes. |
+| =ERROR [check] example: filesystems.job_dir: must hold {job}, which makes the directory the job's own=                                                                 | Without the job id, two jobs on one node would share the directory.                                                                                                                           | Put ={job}= in =job_dir=.                                                                                           |
+| =ERROR [check] example: filesystems.job_dir: needs scheduler.kind = "slurm", found `local`; the Slurm job id names the directory=                                      | A run without Slurm has no job id.                                                                                                                                                            | Give =build_path= a ={target}= instead, as [[file:../explanation/shared-paths.org][What the targets of a site file share]] says.                              |
+| =ERROR [check] example: targets.zen4.route: {work_dir} is filesystems.build_path, whose {job_dir} is resolved inside the job, after the route has started=             | A route starts outside the job, before the job has an id.                                                                                                                                     | Bind the parent of the job directories, such as =/local=, in the route.                                             |
+| =LOG_DIR/STEM.keep-logs.log= of a failed line has a =Failed build log:= line and no =Failed command output:= line                                                      | =tmp= is in the job's directory as well, and the failed command wrote its output there. eb-keep-logs runs in a job of its own, and the directory of the build's job went when that job ended. | Keep =tmp= on scratch; eb-keep-logs keeps EasyBuild's log of the build either way.                                  |
+
+** Related
+
+- [[file:../reference/site-file.org][The site file]], for =job_dir= and ={job_dir}=
+- [[file:../reference/environment.org][Environment variables]], for the job directory wrapper
+- [[file:../explanation/shared-paths.org][What the targets of a site file share]]
+- [[file:build-from-ci.org][Build a list on every target from continuous integration]]

@@ -24,6 +24,7 @@ looks site-specific.
 - How-to guides: [install eb-pipeline](docs/orgmode/howto/install.org),
   [write a site file for your cluster](docs/orgmode/howto/write-a-site-file.org),
   [build a list on every target from continuous integration](docs/orgmode/howto/build-from-ci.org),
+  [build in a directory that each job has on its node](docs/orgmode/howto/node-local-builds.org),
   [let users load what a target installs on top of EESSI](docs/orgmode/howto/site-installs.org),
   [rotate the log tree](docs/orgmode/howto/rotate-logs.org),
   [rebuild installed software through eb-staged-rebuild](docs/orgmode/howto/staged-rebuilds.org),

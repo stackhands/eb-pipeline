@@ -126,6 +126,12 @@ const PLACEHOLDERS: &[&str] = &["project", "build", "phase", "target"];
 /// Placeholders of a site path that takes one value per target.
 const PER_TARGET: &[&str] = &["target"];
 
+/// Placeholders of `filesystems.build_path`.
+const BUILD_PATH: &[&str] = &["target", "job_dir"];
+
+/// Placeholders of `filesystems.job_dir`, which only the job knows.
+const PER_JOB: &[&str] = &["job", "user"];
+
 fn name_ok(s: &str) -> bool {
     !s.is_empty()
         && s.chars()
@@ -173,6 +179,64 @@ const ROUTE_ALL: &[&str] = &[
     "shares_rw",
 ];
 const ROUTE_BASIC: &[&str] = &["phase_dir", "log_dir", "work_dir", "target", "phase"];
+
+/// `filesystems.job_dir` and the paths that name it.
+fn validate_job_dir(site: &Site, e: &mut Vec<String>) {
+    let fs = &site.filesystems;
+    let paths = [("build_path", &fs.build_path), ("tmp", &fs.tmp)];
+    let Some(j) = &fs.job_dir else {
+        for (k, v) in paths {
+            if v.contains("{job_dir}") {
+                e.push(format!(
+                    "filesystems.{k}: {{job_dir}} needs filesystems.job_dir"
+                ));
+            }
+        }
+        return;
+    };
+    check_placeholders("filesystems.job_dir", j, PER_JOB, e);
+    if !j.starts_with('/') {
+        e.push(format!(
+            "filesystems.job_dir: `{j}` is not an absolute path"
+        ));
+    }
+    if !j.contains("{job}") {
+        e.push(
+            "filesystems.job_dir: must hold {job}, which makes the directory the job's own".into(),
+        );
+    }
+    if site.scheduler.kind != "slurm" {
+        e.push(format!(
+            "filesystems.job_dir: needs scheduler.kind = \"slurm\", found `{}`; the Slurm job id names the directory",
+            site.scheduler.kind
+        ));
+    }
+    if !paths.iter().any(|(_, v)| v.contains("{job_dir}")) {
+        e.push(
+            "filesystems.job_dir: neither filesystems.build_path nor filesystems.tmp has {job_dir}"
+                .into(),
+        );
+    }
+    if !fs.build_path.contains("{job_dir}") {
+        return;
+    }
+    for t in &site.targets {
+        let Some(r) = &t.route else { continue };
+        let names_work_dir = r
+            .args
+            .iter()
+            .chain(r.env.values())
+            .chain(&r.shares_ro)
+            .chain(&r.shares_rw)
+            .any(|a| a.contains("{work_dir}"));
+        if names_work_dir {
+            e.push(format!(
+                "targets.{}.route: {{work_dir}} is filesystems.build_path, whose {{job_dir}} is resolved inside the job, after the route has started",
+                t.name
+            ));
+        }
+    }
+}
 
 fn validate_route(t: &str, r: &Route, e: &mut Vec<String>) {
     let extra = !r.args.is_empty()
@@ -418,7 +482,14 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
             e.push(format!("filesystems.{k}: must not be empty"));
         }
     }
-    check_placeholders("filesystems.build_path", &fs.build_path, PER_TARGET, &mut e);
+    check_placeholders("filesystems.build_path", &fs.build_path, BUILD_PATH, &mut e);
+    // {target} in tmp has a message of its own below.
+    check_placeholders(
+        "filesystems.tmp",
+        &fs.tmp.replace("{target}", ""),
+        &["job_dir"],
+        &mut e,
+    );
     for p in &fs.source_paths {
         check_placeholders("filesystems.source_paths", p, PER_TARGET, &mut e);
     }
@@ -436,7 +507,13 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
                 "filesystems.{k}: {{target}} expands in filesystems.build_path, filesystems.source_paths and rebuild.state_root only"
             ));
         }
+        if k != "tmp" && v.is_some_and(|v| v.contains("{job_dir}")) {
+            e.push(format!(
+                "filesystems.{k}: {{job_dir}} expands in filesystems.build_path and filesystems.tmp only"
+            ));
+        }
     }
+    validate_job_dir(site, &mut e);
 
     if let Some(a) = &site.admission {
         if !matches!(a.lock_kind.as_str(), "flock" | "posix") {

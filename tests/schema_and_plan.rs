@@ -1403,7 +1403,7 @@ fn per_target_paths_take_the_target_placeholder_only() {
     assert!(errs(build_path("/scratch/x/{target}/b-{target}")).is_empty());
     assert_eq!(
         errs(build_path("/scratch/x/{targets}")),
-        ["filesystems.build_path: unknown placeholder {targets}; known: {target}"]
+        ["filesystems.build_path: unknown placeholder {targets}; known: {target}, {job_dir}"]
     );
     assert_eq!(
         errs(build_path("/scratch/x/{target")),
@@ -1437,6 +1437,109 @@ fn per_target_paths_take_the_target_placeholder_only() {
             "kind = \"slurm\"\njob_name_template = \"{project}-{nope}\""
         )),
         ["scheduler.job_name_template: unknown placeholder {nope}; known: {project}, {build}, {phase}, {target}"]
+    );
+}
+
+/// MINIMAL with a node-local directory per job, which `build_path` uses,
+/// and `tmp` set to `tmp`.
+fn with_job_dir(tmp: &str) -> String {
+    MINIMAL
+        .replace(
+            "build_path = \"/scratch/x/build\"",
+            "job_dir = \"/local/{user}.{job}\"\nbuild_path = \"{job_dir}/build/{target}\"",
+        )
+        .replace("tmp = \"/scratch/x/tmp\"", &format!("tmp = \"{tmp}\""))
+}
+
+#[test]
+fn a_job_dir_is_resolved_inside_each_job_before_the_command() {
+    let site = with_job_dir("{job_dir}/tmp");
+    assert!(site::validate(&site::parse(&site).unwrap(), None).is_empty());
+    let v = plan_of(
+        &site.replace("init = []", "init = [\"EESSI/2026.06\"]"),
+        "Foo-1.0-foss-2025a.eb\n",
+        "other",
+    );
+    let env = &phase(&v, "build")["env"];
+    assert_eq!(env["EASYBUILD_BUILDPATH"], "{job_dir}/build/other");
+    assert_eq!(env["EASYBUILD_TMPDIR"], "{job_dir}/tmp");
+    assert_eq!(env["EB_PIPELINE_JOB_DIR"], "/local/{user}.{job}");
+    for c in phase(&v, "build")["commands"].as_array().unwrap() {
+        let a = argv_of(c);
+        let i = a
+            .iter()
+            .position(|x| x == resolve::JOB_DIR_SCRIPT)
+            .unwrap_or_else(|| panic!("no job directory wrapper in {a:?}"));
+        assert_eq!(a[..2], ["srun", "--job-name=t-production-build"], "{a:?}");
+        assert_eq!(a[i - 2..i], ["bash", "-c"]);
+        assert_eq!(a[i + 1], "eb-pipeline");
+        assert_eq!(a[i + 4], resolve::MODULE_SCRIPT, "{a:?}");
+    }
+    let without = plan_of(MINIMAL, "Foo-1.0-foss-2025a.eb\n", "other");
+    assert!(phase(&without, "build")["env"]
+        .get("EB_PIPELINE_JOB_DIR")
+        .is_none());
+    let a = argv_of(&phase(&without, "build")["commands"][0]);
+    assert!(!a.iter().any(|x| x == resolve::JOB_DIR_SCRIPT), "{a:?}");
+}
+
+#[test]
+fn check_refuses_a_job_dir_that_is_not_the_jobs_own() {
+    let errs = |text: String| site::validate(&site::parse(&text).unwrap(), None);
+    assert!(errs(with_job_dir("/scratch/x/tmp")).is_empty());
+    assert_eq!(
+        errs(with_job_dir("/scratch/x/tmp").replace("{user}.{job}", "{user}")),
+        ["filesystems.job_dir: must hold {job}, which makes the directory the job's own"]
+    );
+    assert_eq!(
+        errs(with_job_dir("/scratch/x/tmp").replace("{user}.{job}", "{job}.{node}")),
+        ["filesystems.job_dir: unknown placeholder {node}; known: {job}, {user}"]
+    );
+    assert_eq!(
+        errs(with_job_dir("/scratch/x/tmp").replace("\"/local/", "\"local/")),
+        ["filesystems.job_dir: `local/{user}.{job}` is not an absolute path"]
+    );
+    assert_eq!(
+        errs(with_job_dir("/scratch/x/tmp").replace("kind = \"slurm\"", "kind = \"local\"")),
+        ["filesystems.job_dir: needs scheduler.kind = \"slurm\", found `local`; the Slurm job id names the directory"]
+    );
+    assert_eq!(
+        errs(
+            with_job_dir("/scratch/x/tmp")
+                .replace("\"{job_dir}/build/{target}\"", "\"/scratch/x/build\"")
+        ),
+        ["filesystems.job_dir: neither filesystems.build_path nor filesystems.tmp has {job_dir}"]
+    );
+    assert_eq!(
+        errs(MINIMAL.replace("/scratch/x/build", "{job_dir}/build")),
+        ["filesystems.build_path: {job_dir} needs filesystems.job_dir"]
+    );
+    assert_eq!(
+        errs(MINIMAL.replace("/scratch/x/tmp", "{job_dir}/tmp")),
+        ["filesystems.tmp: {job_dir} needs filesystems.job_dir"]
+    );
+    assert_eq!(
+        errs(with_job_dir("/scratch/x/tmp").replace("/opt/eb/logs", "{job_dir}/logs")),
+        ["filesystems.log_root: {job_dir} expands in filesystems.build_path and filesystems.tmp only"]
+    );
+    assert_eq!(
+        errs(with_job_dir("/scratch/x/{job}")),
+        ["filesystems.tmp: unknown placeholder {job}; known: {job_dir}"]
+    );
+    assert_eq!(
+        errs(with_job_dir("/scratch/x/tmp").replace("{job_dir}/build", "/local/{job}/build")),
+        [
+            "filesystems.build_path: unknown placeholder {job}; known: {target}, {job_dir}",
+            "filesystems.job_dir: neither filesystems.build_path nor filesystems.tmp has {job_dir}"
+        ]
+    );
+    let routed = with_job_dir("/scratch/x/tmp").replace(
+        "name = \"other\"",
+        "name = \"other\"\n[targets.route]\nkind = \"command\"\ncommand = \"route\"\nargs = [\"--bind={work_dir}\"]",
+    );
+    assert_eq!(
+        errs(routed),
+        ["targets.other.route: {work_dir} is filesystems.build_path, whose {job_dir} is resolved inside the job, after the route has started"]
     );
 }
 

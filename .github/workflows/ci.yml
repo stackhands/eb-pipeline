@@ -74,6 +74,7 @@ jobs:
           bash docs/examples/templates.sh
           bash docs/examples/site-file.sh
           bash docs/examples/ci.sh
+          bash docs/examples/node-local.sh
           bash docs/examples/site-installs.sh
           bash docs/examples/rotation.sh
           bash docs/examples/staged.sh

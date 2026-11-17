@@ -46,6 +46,7 @@ The default run id, the log stamp, is the same for two runs that start in the sa
 The example workflow of =examples/ci/= builds one target at a time, with =max-parallel: 1=, and a target that fails leaves the others running.
 Two targets can build at once only when no two of them share a build directory, a download directory or, with staged rebuilds, a state root.
 A =build_path= without ={target}= is one path for every target, so it needs storage that the build nodes of no two targets share.
+A =build_path= with ={job_dir}= is in a directory that each job has to itself on its node, so no two targets, and no two runs, share it, as [[file:../howto/node-local-builds.org][Build in a directory that each job has on its node]] shows.
 
 The =concurrency= group of the build job in that workflow, one per target, keeps two dispatches of the workflow off one target, not off one path: one dispatch can build a target while another builds a different one.
 Targets that share a path therefore need one group for the whole build job, with no target in its name.
@@ -67,4 +68,5 @@ Targets that share a path therefore need one group for the whole build job, with
 
 - [[file:../howto/build-from-ci.org][Build a list on every target from continuous integration]], for the workflow and the caller script.
 - [[file:../reference/site-file.org][The site file]], for ={target}= and the keys it expands in.
+- [[file:../howto/node-local-builds.org][Build in a directory that each job has on its node]], for ={job_dir}=.
 - [[file:../howto/staged-rebuilds.org][Rebuild installed software through eb-staged-rebuild]], for the state root of each target.

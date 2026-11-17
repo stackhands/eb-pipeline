@@ -1940,6 +1940,79 @@ fn an_easystack_reaches_the_shard_planner_as_build_list_lines() {
     );
 }
 
+/// A stand-in for srun that drops its options and runs the command as the
+/// job STUB_JOB_ID, 4242 unless set, of STUB_JOB_USER, alice unless set.
+const SRUN: &str = r#"#!/bin/sh
+while [ $# -gt 0 ]; do case $1 in -*) shift ;; *) break ;; esac; done
+SLURM_JOB_ID=${STUB_JOB_ID:-4242} SLURM_JOB_USER=${STUB_JOB_USER-alice} exec "$@"
+"#;
+
+/// Make the site of `env` start each command through the stand-in srun,
+/// with `tmp` and `build_path` in the job's directory under `local/`.
+fn with_job_dirs(env: &Env) -> PathBuf {
+    let srun = env.stubs.join("srun");
+    write_exec(&srun, SRUN);
+    let r = env.dir.path().display();
+    let text = std::fs::read_to_string(&env.site)
+        .unwrap()
+        .replace(
+            "kind = \"local\"",
+            &format!("kind = \"slurm\"\nlaunch = \"{}\"", srun.display()),
+        )
+        .replace(
+            &format!("tmp = \"{r}/tmp\""),
+            &format!("job_dir = \"{r}/local/{{user}}.{{job}}\"\ntmp = \"{{job_dir}}/tmp\""),
+        )
+        .replace(
+            &format!("build_path = \"{r}/build\""),
+            "build_path = \"{job_dir}/build\"",
+        );
+    std::fs::write(&env.site, text).unwrap();
+    env.dir.path().join("local")
+}
+
+#[test]
+fn each_job_builds_in_its_own_directory() {
+    let env = setup("");
+    let local = with_job_dirs(&env);
+    let user = Command::new("id").arg("-un").output().unwrap().stdout;
+    let user = String::from_utf8(user).unwrap();
+    // The job's user, else the user the job runs as.
+    for (stem, job_user, owner) in [
+        ("Foo-1.0-foss-2025a", None, "alice"),
+        ("Baz-3.0-foss-2025a", Some(""), user.trim()),
+    ] {
+        let dir = local.join(format!("{owner}.4242"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let vars: Vec<(&str, &str)> = job_user.map(|u| ("STUB_JOB_USER", u)).into_iter().collect();
+        let o = go(&env, &format!("{stem}.eb\n"), &vars);
+        assert_eq!(o.code, 0, "{}", o.stderr);
+        let e = file_text(&env, &format!("env.build.{stem}"));
+        let d = dir.display();
+        for want in [
+            format!("EASYBUILD_BUILDPATH={d}/build"),
+            format!("EASYBUILD_TMPDIR={d}/tmp"),
+            format!("EB_PIPELINE_JOB_DIR={d}"),
+        ] {
+            assert!(e.lines().any(|l| l == want), "{want} not in\n{e}");
+        }
+    }
+
+    // A job without its directory starts no command.
+    let o = go(&env, "Bar-2.0-foss-2025a.eb\n", &[("STUB_JOB_ID", "4343")]);
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    assert!(file_text(&env, "env.build.Bar-2.0-foss-2025a").is_empty());
+    let log = file_text(
+        &env,
+        "logs/20260101_000000/cpu/Bar-2.0-foss-2025a.stdout.log",
+    );
+    let want = format!(
+        "eb-pipeline: job 4343 has no directory {}/alice.4343 that it can write to, which filesystems.job_dir names",
+        local.display()
+    );
+    assert!(log.lines().any(|l| l == want), "{want} not in\n{log}");
+}
+
 #[test]
 fn no_selection_shards_the_list_as_given() {
     let env = setup("[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n");
