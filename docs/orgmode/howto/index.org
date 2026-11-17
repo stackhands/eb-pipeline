@@ -26,4 +26,5 @@ The title names the task.
    follow-runs
    run-tests-for-what-you-built
    rebuild-when-eessi-changes
+   integration-smoke
 #+end_export

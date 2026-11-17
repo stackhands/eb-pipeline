@@ -1,0 +1,40 @@
+#+TITLE: Run the integration smoke
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Run the integration smoke
+
+Check that the published releases of the stackhands tools still compose, on a GitHub-hosted runner, with the European Environment for Scientific Software Installations (EESSI) mounted.
+
+The check is =examples/integration-smoke.sh=. It is slow, because it mounts CernVM-FS and builds a package, so the workflow =.github/workflows/integration-smoke.yml= is limited to a weekly schedule and a manual start.
+
+** Before you start
+
+- A Linux host that can mount =software.eessi.io=, or Apptainer, so the script can run the same steps in the EESSI client image.
+- Network access to the GitHub release assets of eb-pipeline, eb-local, eb-keep-logs, eb-staged-rebuild, eessi-arch-guard and eb-stack.
+
+The workflow uses [[https://github.com/eessi/github-action-eessi][eessi/github-action-eessi]] v3.4.0, which mounts the repositories with [[https://github.com/cvmfs-contrib/github-action-cvmfs][cvmfs-contrib/github-action-cvmfs]] v5.5 and then initializes EESSI 2026.06. That is the stack the published eb-local extends.
+
+** Steps
+
+1. Start the workflow from the Actions tab, or wait for the weekly run.
+   On a machine where =/cvmfs/software.eessi.io= is already mounted, run the script directly:
+
+   #+begin_src bash
+   bash examples/integration-smoke.sh
+   #+end_src
+
+   =SMOKE_WORK= is the directory for the downloads, the install prefix and the logs. =SMOKE_EESSI_VERSION= selects the EESSI version; the default is 2026.06.
+
+2. The script downloads the latest release of each tool, checks the published checksum, and puts the binaries on =PATH=.
+   Those binaries come from the published release assets, rather than from a compile of this checkout.
+3. It loads EESSI and runs =eessi-arch-guard --shell=. The guard's =EESSI_SOFTWARE_SUBDIR= is the CPU target the rest of the run uses.
+4. =eb-local eb= installs =SmokeStamp=, a one-file easyconfig. That command loads EESSI-extend and runs EasyBuild into =SMOKE_WORK/prefix=. =eb-local <easyconfig>= is the form used inside a Slurm allocation; a GitHub-hosted runner has none, and that form stops before EasyBuild starts.
+5. The script then runs a second easyconfig that fails, keeps that log with =eb-keep-logs failed=, and prunes a sample log tree with =eb-keep-logs rotate=.
+6. It runs =eb-staged-rebuild run= so the same install is built in a staged tree and swapped into place, then =eb-pipeline check= and the =eb-stack stack shard= command that =eb-pipeline plan= prints for that site.
+7. It runs =eb-cvmfs= against a stub =cvmfs_server= that records =list=, =transaction=, the synchronization and =publish=.
+
+** Check that it worked
+
+The script's last lines are =integration smoke passed=, the CPU target, and the release tag of each tool.
+A run that stops earlier names the step. =eb-cvmfs= is taken from the published eb-pipeline archive; a release that does not include that binary stops the script at that step and lists the files the archive did contain.
