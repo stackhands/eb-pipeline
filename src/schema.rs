@@ -124,7 +124,7 @@ doc_struct! {
     /// Sibling tool table.
     Tools {
         eb_stack: Option<ToolSpec> => ("table", "bin eb-stack", false,
-            "eb-stack, called for `stack shard` and `stack admit`."),
+            "eb-stack, called for `stack shard`, `stack admit` and `stack sbom`. With `[resume]` enabled, `run` also calls `stack order --hashes-out` and may call `stack shard` for restart boundaries."),
         eb_keep_logs: Option<ToolSpec> => ("table", "bin eb-keep-logs", false,
             "eb-keep-logs, called for `failed` and `rotate`."),
         eb_staged_rebuild: Option<ToolSpec> => ("table", "bin eb-staged-rebuild", false,
@@ -646,6 +646,21 @@ doc_struct! {
 }
 
 doc_struct! {
+    /// Resume a run only when the inputs still match the prior result.
+    Resume {
+        #[serde(default)]
+        enabled: bool => ("boolean", "false", false,
+            "Set true to record the input identity and each successful line's module files, and to allow `run --resume-result`. False or absent, a run records neither and `--resume-result` is refused."),
+        #[serde(default)]
+        easyconfigs: Vec<String> => ("array of string", "[]", false,
+            "Easyconfig trees for `eb-stack stack order --easyconfigs` and, when `shards` is at least 2 and `[shards]` is not already planning, for `eb-stack stack shard --easyconfigs`. At least one is required when enabled, unless `[shards] easyconfigs` names one. `resume.easyconfigs` wins when it is not empty."),
+        #[serde(default = "d_one")]
+        shards: u32 => ("integer", "1", false,
+            "When `[shards]` is not planning, the `--shards` of `eb-stack stack shard` that makes the prelude and shard restart boundaries. Below 2, the list stays one unit."),
+    }
+}
+
+doc_struct! {
     /// A site file.
     Site {
         schema_version: u32 => ("integer", "", true, "Schema version; 1."),
@@ -657,6 +672,8 @@ doc_struct! {
         filesystems: Filesystems => ("table", "", true, "Paths."),
         admission: Option<Admission> => ("table", "none", false, "Inode admission."),
         shards: Option<Shards> => ("table", "none", false, "Shard planning."),
+        resume: Option<Resume> => ("table", "none", false,
+            "When enabled, `run` records the `eb-stack stack order --hashes-out` identity and can resume from it with `--resume-result`. Absent, a run does not record an identity."),
         sources: Option<Sources> => ("table", "none", false, "Source prefetch."),
         modules: Modules => ("table", "", true, "Environment modules."),
         caches: Option<Caches> => ("table", "none", false, "Module caches."),
@@ -690,6 +707,7 @@ pub const SECTIONS: &[(&str, &[FieldDoc])] = &[
     ("filesystems", Filesystems::FIELDS),
     ("admission", Admission::FIELDS),
     ("shards", Shards::FIELDS),
+    ("resume", Resume::FIELDS),
     ("sources", Sources::FIELDS),
     ("modules", Modules::FIELDS),
     ("modules.eessi", Eessi::FIELDS),
@@ -800,6 +818,7 @@ mod tests {
             Filesystems,
             Admission,
             Shards,
+            Resume,
             Sources,
             Modules,
             Eessi,

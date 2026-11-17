@@ -91,6 +91,7 @@ So every job that a run or =watch= starts needs the directory, whatever its phas
 | =filesystems=    | table          | required | The paths.                                                                      |
 | =admission=      | table          | none     | Admission of each build unit under an inode quota, with =eb-stack stack admit=. |
 | =shards=         | table          | none     | Splitting a list into shards, with =eb-stack stack shard=.                      |
+| =resume=         | table          | none     | Recording an input identity and resuming a run from a prior result.             |
 | =sources=        | table          | none     | Fetching the sources of every line before the first build.                      |
 | =modules=        | table          | required | The environment modules each command loads.                                     |
 | =caches=         | table          | none     | The command that writes module caches after a clean build.                      |
@@ -117,7 +118,7 @@ So every job that a run or =watch= starts needs the directory, whatever its phas
 
 | Key                 | Type  | Default                   | Meaning                                                                      |
 |---------------------+-------+---------------------------+------------------------------------------------------------------------------|
-| =eb_stack=          | table | =bin= =eb-stack=          | eb-stack, which runs =stack shard= and =stack admit=.                        |
+| =eb_stack=          | table | =bin= =eb-stack=          | eb-stack, which runs =stack shard=, =stack admit= and =stack sbom=. With =[resume]= enabled, =run= also calls =stack order --hashes-out=. |
 | =eb_keep_logs=      | table | =bin= =eb-keep-logs=      | eb-keep-logs, which runs =failed= and =rotate=.                              |
 | =eb_staged_rebuild= | table | =bin= =eb-staged-rebuild= | eb-staged-rebuild, which runs =run= for a line that rebuilds a live install. |
 
@@ -320,6 +321,25 @@ A record that another writer has replaced since, such as a =forecast= or =waitin
 =stack shard= runs inside the module wrapper, so what the modules of =[modules] init= set reaches it, such as the =EASYBUILD_FILTER_DEPS= of EESSI-extend.
 It writes its plan to =SHARD_DIR/RUN_ID/plan.json=, and =plan --shard-plan DIR= reads such a plan.
 A shard list holds lines of the input list only, so a line whose dependencies are not installed needs =--robot= to build them.
+
+** =[resume]=
+
+Set =enabled= to record the input identity of a run and to allow =run --resume-result FILE=.
+The identity is the file =eb-stack stack order --hashes-out= writes.
+=run= refuses to resume when that digest differs from the one in =FILE=, or when =stack order= reports =incomplete= other than 0.
+A unit is skipped only when every line of it succeeded in =FILE= and every module file that line declared is still present.
+=cpu-prerequisites=, =prelude= and =all= are prefixes: a prefix that cannot be skipped blocks every later unit.
+Without the table, or with =enabled= false, a run records no identity and =--resume-result= is refused.
+
+When =filesystems.job_dir= is set, =filesystems.configs_repo= is required and must be an absolute path.
+A requeued Slurm job, one whose =SLURM_RESTART_COUNT= is not 0, then uses =JOB_DIR/REPO.rCOUNT= as its workspace, where =REPO= is that path with every character outside =A-Za-z0-9._-= replaced by =_=.
+A count of 0 keeps the directory =filesystems.job_dir= names.
+
+| Key           | Type            | Default | Meaning                                                                                                                                                                                                                          |
+|---------------+-----------------+---------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =enabled=     | boolean         | =false= | =true= records the input identity and each successful line's module files, and allows =run --resume-result=. =false= records neither.                                                                                             |
+| =easyconfigs= | array of string | =[]=    | Easyconfig trees for =eb-stack stack order --easyconfigs= and, when =shards= is at least 2 and =[shards]= is not planning, for =eb-stack stack shard --easyconfigs=. At least one when enabled, unless =shards.easyconfigs= names one. =resume.easyconfigs= wins when it is not empty. |
+| =shards=      | integer         | =1=     | When =[shards]= is not planning, =stack shard --shards= for the prelude and shard restart boundaries. Below 2, the list stays one unit.                                                                                          |
 
 ** =[sources]=
 

@@ -263,10 +263,15 @@ impl<'a> Scope<'a> {
         if self.site.filesystems.job_dir.is_none() {
             return Vec::new();
         }
+        let script = if self.site.resume_on().is_some() {
+            JOB_DIR_RESUME_SCRIPT
+        } else {
+            JOB_DIR_SCRIPT
+        };
         vec![
             self.site.modules.shell.clone(),
             "-c".into(),
-            JOB_DIR_SCRIPT.into(),
+            script.into(),
             "eb-pipeline".into(),
         ]
     }
@@ -415,6 +420,14 @@ impl<'a> Scope<'a> {
         put("EASYBUILD_BUILDPATH", self.build_path());
         if let Some(j) = &fs.job_dir {
             put("EB_PIPELINE_JOB_DIR", j.clone());
+        }
+        if self.site.resume_on().is_some() {
+            if let (Some(repo), Some(_)) = (&fs.configs_repo, &fs.job_dir) {
+                put(
+                    "EB_PIPELINE_WORKSPACE_REPO",
+                    crate::resume::workspace_key(repo),
+                );
+            }
         }
         if !fs.source_paths.is_empty() {
             put("EASYBUILD_SOURCEPATH", self.source_paths().join(":"));
@@ -571,6 +584,53 @@ EASYBUILD_TMPDIR=$(sub \"$EASYBUILD_TMPDIR\" '{job_dir}' \"$d\")
 export EB_PIPELINE_JOB_DIR EASYBUILD_BUILDPATH EASYBUILD_TMPDIR
 exec \"$@\"";
 
+/// [`JOB_DIR_SCRIPT`] plus a workspace for a requeued Slurm job.
+///
+/// When `SLURM_RESTART_COUNT` is not 0 and `EB_PIPELINE_WORKSPACE_REPO` is
+/// set, the job's directory becomes `<job_dir>/<repo>.r<count>`. A count of
+/// 0, or an empty one, keeps the directory [`JOB_DIR_SCRIPT`] would use.
+pub const JOB_DIR_RESUME_SCRIPT: &str = "sub() {
+  r= t=$1
+  while :; do
+    case $t in
+      *\"$2\"*) r=$r${t%%\"$2\"*}$3; t=${t#*\"$2\"} ;;
+      *) break ;;
+    esac
+  done
+  printf '%s\\n' \"$r$t\"
+}
+if [ -z \"${SLURM_JOB_ID:-}\" ]; then
+  echo \"eb-pipeline: SLURM_JOB_ID is not set, so filesystems.job_dir names no directory\" >&2
+  exit 1
+fi
+d=$(sub \"$EB_PIPELINE_JOB_DIR\" '{job}' \"$SLURM_JOB_ID\")
+d=$(sub \"$d\" '{user}' \"${SLURM_JOB_USER:-$(id -un)}\")
+if [ ! -d \"$d\" ] || [ ! -w \"$d\" ]; then
+  echo \"eb-pipeline: job $SLURM_JOB_ID has no directory $d that it can write to, which filesystems.job_dir names\" >&2
+  exit 1
+fi
+case ${SLURM_RESTART_COUNT:-0} in
+  \"\"|0) ;;
+  *)
+    if [ -n \"${EB_PIPELINE_WORKSPACE_REPO:-}\" ]; then
+      d=$d/$EB_PIPELINE_WORKSPACE_REPO.r$SLURM_RESTART_COUNT
+      if ! mkdir -p \"$d\"; then
+        echo \"eb-pipeline: job $SLURM_JOB_ID cannot create $d, which filesystems.job_dir names for a requeued job\" >&2
+        exit 1
+      fi
+      if [ ! -w \"$d\" ]; then
+        echo \"eb-pipeline: job $SLURM_JOB_ID has no directory $d that it can write to, which filesystems.job_dir names\" >&2
+        exit 1
+      fi
+    fi
+    ;;
+esac
+EB_PIPELINE_JOB_DIR=$d
+EASYBUILD_BUILDPATH=$(sub \"$EASYBUILD_BUILDPATH\" '{job_dir}' \"$d\")
+EASYBUILD_TMPDIR=$(sub \"$EASYBUILD_TMPDIR\" '{job_dir}' \"$d\")
+export EB_PIPELINE_JOB_DIR EASYBUILD_BUILDPATH EASYBUILD_TMPDIR
+exec \"$@\"";
+
 /// The first line of `log` in which [`JOB_DIR_SCRIPT`] says why it started no
 /// command, trimmed.
 pub fn job_dir_refusal(log: &str) -> Option<&str> {
@@ -719,6 +779,59 @@ mod tests {
         assert_eq!(
             job_dir_refusal("srun: error: node01: task 0: Exited with exit code 1\n"),
             None
+        );
+    }
+
+    #[test]
+    fn a_requeued_job_uses_a_repository_qualified_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("alice.9");
+        std::fs::create_dir(&parent).unwrap();
+        let run = |restart: &str| {
+            std::process::Command::new("sh")
+                .arg("-c")
+                .arg(JOB_DIR_RESUME_SCRIPT)
+                .arg("eb-pipeline")
+                .arg("sh")
+                .arg("-c")
+                .arg("printf %s \"$EASYBUILD_BUILDPATH\"")
+                .env("SLURM_JOB_ID", "9")
+                .env("SLURM_JOB_USER", "alice")
+                .env("SLURM_RESTART_COUNT", restart)
+                .env(
+                    "EB_PIPELINE_JOB_DIR",
+                    format!("{}/{{user}}.{{job}}", root.path().display()),
+                )
+                .env("EB_PIPELINE_WORKSPACE_REPO", "opt_easyconfigs")
+                .env("EASYBUILD_BUILDPATH", "{job_dir}/build")
+                .env("EASYBUILD_TMPDIR", "{job_dir}/tmp")
+                .output()
+                .unwrap()
+        };
+        let first = run("0");
+        assert_eq!(
+            first.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&first.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&first.stdout),
+            format!("{}/build", parent.display())
+        );
+        assert!(!parent.join("opt_easyconfigs.r0").exists());
+        let second = run("2");
+        assert_eq!(
+            second.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&second.stderr)
+        );
+        let qualified = parent.join("opt_easyconfigs.r2");
+        assert!(qualified.is_dir(), "{}", qualified.display());
+        assert_eq!(
+            String::from_utf8_lossy(&second.stdout),
+            format!("{}/build", qualified.display())
         );
     }
 }
