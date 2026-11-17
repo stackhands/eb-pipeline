@@ -1,0 +1,72 @@
+#+TITLE: Run the tests that cover what you built
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Run the tests that cover what you built
+
+A build list mixes applications and toolchains.
+The tests worth running are the ones that cover the applications.
+=eb-test-map= reads a map of software name to test name and the build list, and prints those tests.
+An application with no row is a refusal: =has no test=.
+
+The EESSI build-and-deploy bot does this with =tests/eessi_test_mapping/software_to_tests.yml= and then runs the [[https://eessi.io/docs/test-suite/][EESSI test suite]], which is ReFrame.
+=eb-test-map= is that map for a site overlay. It does not run ReFrame itself.
+
+* Before you start
+
+- A build list of easyconfig file names, one per line, the list =eb-pipeline run --list= uses.
+- A map of the applications that list installs. A toolchain does not need a row.
+
+* Steps
+
+1. Write the map. The first word is the software name, the part of the easyconfig's file name before the version. The second is the test name ReFrame, or the site's own suite, knows:
+
+   #+begin_src text
+   # software    test
+   GROMACS       gromacs
+   GROMACS       gromacs-perf
+   FFTW          fftw
+   #+end_src
+
+   =GCC=, =GCCcore=, =foss=, =gfbf=, =gomkl=, =gompi=, =iimpi=, =intel= and =intel-compilers= are toolchains and are skipped.
+   =--toolchain NAME= skips another.
+
+2. Ask for the tests of one list:
+
+   #+begin_src bash
+   eb-test-map --map /opt/site/tests.tsv --list /opt/site/build.list
+   #+end_src
+
+   #+begin_example
+   fftw
+   gromacs
+   gromacs-perf
+   #+end_example
+
+   =Python has no test in /opt/site/tests.tsv= on stderr, and exit 2, means an application in the list has no row.
+   Nothing is printed in that case, so a later step does not run a subset and look finished.
+   =--allow-unmapped= prints the tests that do exist, names the gap, and exits 0.
+
+3. Make a clean build run that command before it refreshes module caches. =[checks].command= is split on spaces and is not a shell, so the paths are written out:
+
+   #+begin_src toml
+   [checks]
+   command = "eb-test-map --map /opt/site/tests.tsv --list /opt/site/build.list"
+   #+end_src
+
+   Exit 2 fails the run, and the caches phase does not run.
+   To run ReFrame on the names, the command is a script that calls =eb-test-map= and then ReFrame. The script's exit status is the check.
+
+* If it fails
+
+| Message | Cause | What to do |
+|---------+-------+------------|
+| =--map is required= or =--list is required= | One of the two files was not named. | Pass both. |
+| =cannot read FILE= | The map or the list is not there. | Use the path the build uses. |
+| =SOFTWARE has no test in FILE= | An application in the list has no row, and it is not a toolchain. | Add a row, or pass =--toolchain NAME= when that software is a toolchain of the site's. The run stays failed until the map covers it. |
+| =list line N: FILE is not an easyconfig= | A line is not an =.eb= file name. | Leave comments as lines that start with =#=. |
+
+* Next steps
+
+- [[file:follow-runs.org][Follow runs through their summaries]] for the checks phase in the result file.
+- [[https://eessi.io/docs/test-suite/][The EESSI test suite]] for the ReFrame tests a site can point the names at.

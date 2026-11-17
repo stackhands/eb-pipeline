@@ -16,6 +16,10 @@ exclude = [".github/"]
 name = "eb-pipeline"
 path = "src/main.rs"
 
+[[bin]]
+name = "eb-test-map"
+path = "src/bin/eb-test-map.rs"
+
 [lib]
 name = "eb_pipeline"
 path = "src/lib.rs"

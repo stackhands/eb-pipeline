@@ -1,0 +1,26 @@
+#+TITLE: The test map
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* The test map
+
+=eb-test-map= reads a map and a build list and prints the test names that cover the applications in the list.
+
+#+begin_example
+eb-test-map --map FILE --list FILE [--toolchain NAME]... [--allow-unmapped]
+#+end_example
+
+| Option | Meaning |
+|--------+---------|
+| =--map FILE= | One software name and one test name per line, separated by whitespace. A line that starts with =#= is a comment. Required. |
+| =--list FILE= | Easyconfig file names, or paths to them, one per line. The software name is the file name before the version, the first component that starts with a digit. Required. |
+| =--toolchain NAME= | A software name that needs no test, besides the built-in toolchains. |
+| =--allow-unmapped= | Print the tests that exist and exit 0 when an application has no row. Without it, that application prints nothing and exits 2. |
+
+The built-in toolchains are =GCC=, =GCCcore=, =foss=, =gfbf=, =gomkl=, =gompi=, =iimpi=, =intel= and =intel-compilers=.
+
+Stdout is the test names, sorted, each once, one per line. Messages go to stderr.
+
+Exit 0 means every application in the list has a test, or =--allow-unmapped= was set. Exit 2 is a missing file, a bad line, or an application with no test.
+
+[[file:../howto/run-tests-for-what-you-built.org][Run the tests that cover what you built]] uses it as the checks command.

@@ -21,5 +21,6 @@ The title names the task.
    select-lines
    from-eb-stack
    follow-runs
+   run-tests-for-what-you-built
    rebuild-when-eessi-changes
 #+end_export
