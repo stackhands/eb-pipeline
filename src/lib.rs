@@ -16,6 +16,7 @@ pub mod sbom;
 pub mod schema;
 pub mod select;
 pub mod site;
+pub mod stack_checks;
 pub mod summary;
 pub mod templates;
 pub mod tools;

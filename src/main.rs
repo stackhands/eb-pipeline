@@ -5,7 +5,8 @@ use eb_pipeline::plan::{build_plan, read_units, Planner};
 use eb_pipeline::resolve::{explain, Scope};
 use eb_pipeline::run::{install_handlers, log, run, Options, RunResult};
 use eb_pipeline::{
-    easystack, eessi, metrics, notify, sbom, schema, site, summary, templates, tools, util, watch,
+    easystack, eessi, metrics, notify, sbom, schema, site, stack_checks, summary, templates, tools,
+    util, watch,
 };
 use serde::Serialize;
 use std::os::unix::fs::MetadataExt;
@@ -84,6 +85,15 @@ enum Cmd {
         /// Run each needed tool's `--version` and enforce min_version.
         #[arg(long)]
         probe_tools: bool,
+        /// Build list or easystack to pass to requested eb-stack checks.
+        #[arg(long, env = "EB_PIPELINE_LIST")]
+        list: Option<PathBuf>,
+        /// Limit target-dependent settings to this target.
+        #[arg(long, env = "EB_PIPELINE_TARGET", requires = "stack_checks")]
+        target: Option<String>,
+        /// Comma-separated eb-stack checks to run before any allocation.
+        #[arg(long, value_delimiter = ',', requires = "list", value_enum)]
+        stack_checks: Vec<stack_checks::StackCheck>,
     },
     /// Print the site file reference: every key, type, default and meaning.
     Schema,
@@ -334,7 +344,14 @@ fn site_file(path: &Path) -> Option<String> {
         .and_then(|p| p.to_str().map(str::to_string))
 }
 
-fn cmd_check(site_path: &Path, lists_dir: Option<&Path>, probe: bool) -> Result<i32, Fail> {
+fn cmd_check(
+    site_path: &Path,
+    lists_dir: Option<&Path>,
+    probe: bool,
+    list: Option<&Path>,
+    target: Option<&str>,
+    stack_checks: &[stack_checks::StackCheck],
+) -> Result<i32, Fail> {
     let s = load_valid(site_path, lists_dir)?;
     let m = &s.modules;
     if let Some(first) = m
@@ -371,6 +388,14 @@ fn cmd_check(site_path: &Path, lists_dir: Option<&Path>, probe: bool) -> Result<
     }
     if probe {
         tools::check_versions(&s, true)?;
+    }
+    if !stack_checks.is_empty() {
+        stack_checks::run(
+            &s,
+            list.expect("clap requires --list with --stack-checks"),
+            target,
+            stack_checks,
+        )?;
     }
     log("INFO", "check", &s.site.name, "site file is valid");
     Ok(exit::OK)
@@ -1242,7 +1267,17 @@ fn main() {
             site,
             lists_dir,
             probe_tools,
-        } => cmd_check(site, lists_dir.as_deref(), *probe_tools),
+            list,
+            target,
+            stack_checks,
+        } => cmd_check(
+            site,
+            lists_dir.as_deref(),
+            *probe_tools,
+            list.as_deref(),
+            target.as_deref(),
+            stack_checks,
+        ),
         Cmd::Schema => {
             print!("{}", schema::reference());
             Ok(exit::OK)
