@@ -1,11 +1,13 @@
 #!/bin/bash
-# What docs/orgmode/reference/watch.org shows: a copy of build-from-ci/site.toml
-# with the local scheduler, its paths under $WORK, a [watch] table, and a
-# module environment that loads EESSI 2023.06 for x86_64/amd/zen4, which runs
-# hiredis and tmux through two runs, then Zip through one whose module
-# environment loads no EESSI; then watch, before and after EESSI rebuilds
-# CMake and libevent in place, from a module environment that loads EESSI
-# 2025.06, and with --adopt.
+# What docs/orgmode/reference/watch.org and
+# docs/orgmode/howto/rebuild-when-eessi-changes.org show: a copy of
+# build-from-ci/site.toml with the local scheduler, its paths under $WORK, a
+# [watch] table, and a module environment that loads EESSI 2023.06 for
+# x86_64/amd/zen4, which runs hiredis and tmux through two runs, then Zip
+# through one whose module environment loads no EESSI; then watch, before and
+# after EESSI rebuilds CMake and libevent in place, from a module environment
+# that loads EESSI 2025.06, with --adopt, and over a copy of the module tree
+# of 2023.06 in which the module file of CMake has changed.
 #
 # $WORK/cvmfs/software.eessi.io stands in for the EESSI repository, with the
 # CVMFS revision in its user.revision attribute, three modules in the module
@@ -133,6 +135,10 @@ printf '%s\n' hiredis-1.2.0-GCCcore-13.2.0.eb tmux-3.4-GCCcore-13.2.0.eb >zen4.l
 run 'sed -n "/^\[modules\]/,\$p" site.toml'
 expect_line '[watch]'
 
+run 'eb-pipeline check --site site.toml'
+expect_status 0
+expect_line 'INFO [check] example: site file is valid'
+
 run 'eb-pipeline run --site site.toml --list zen4.list --target zen4 --build-type production --log-stamp 20261117_090000'
 expect_status 0
 expect_line 'INFO [watch] zen4: recorded 2 against EESSI 2023.06 x86_64/amd/zen4 at revision 32663: hiredis/1.2.0-GCCcore-13.2.0, tmux/3.4-GCCcore-13.2.0'
@@ -189,9 +195,26 @@ run 'eb-pipeline watch --site eessi-2025.06.toml --target zen4 --build-type prod
 expect_status 78
 expect_line 'hiredis/1.2.0-GCCcore-13.2.0  built against EESSI 2023.06 x86_64/amd/zen4'
 
+run 'eb-pipeline watch --site site.toml --target zen4 --build-type production --log-stamp 20261117_150000 --adopt --dry-run'
+expect_status 0
+expect_line 'Zip/3.0-GCCcore-13.2.0'
+expect_line 'INFO [watch] zen4: dry run: would adopt 3 against EESSI 2023.06 x86_64/amd/zen4 at revision 32664'
+
 run 'eb-pipeline watch --site site.toml --target zen4 --build-type production --log-stamp 20261117_150000 --adopt'
 expect_status 0
 expect_line 'INFO [watch] zen4: adopted 3 against EESSI 2023.06 x86_64/amd/zen4 at revision 32664: Zip/3.0-GCCcore-13.2.0, hiredis/1.2.0-GCCcore-13.2.0, tmux/3.4-GCCcore-13.2.0'
+
+run 'cp -r cvmfs/software.eessi.io/versions/2023.06/software/linux/x86_64/amd/zen4/modules fixture
+echo "-- changed by hand" >>fixture/all/CMake/3.27.6-GCCcore-13.2.0.lua'
+sed "s#^\[watch\]#[watch]\nmodules_dirs = [\"$WORK/fixture/all\"]#" site.toml >fixture.toml
+
+run 'sed -n "/^\[watch\]/,\$p" fixture.toml'
+expect_line 'modules_dirs = ["$WORK/fixture/all"]'
+
+run 'eb-pipeline watch --site fixture.toml --target zen4 --build-type production --log-stamp 20261117_153000 --dry-run'
+expect_status 0
+expect_line 'EESSI 2023.06 x86_64/amd/zen4 at revision 32664: 3 recorded installs, 1 to rebuild, 0 kept, 2 unaffected, 0 gone'
+expect_line '   1. hiredis/1.2.0-GCCcore-13.2.0  CMake/3.27.6-GCCcore-13.2.0 changed (review, builddependency)'
 
 eessi_module CMake 3.27.6-GCCcore-13.2.0
 revision 32665

@@ -1,0 +1,267 @@
+#+TITLE: Rebuild what an EESSI change reaches
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Rebuild what an EESSI change reaches
+
+When the European Environment for Scientific Software Installations (EESSI) rebuilds a module in place, under the same name and version, rebuild what a target installed on top of it that the change reaches, and only that.
+=eb-pipeline watch= compares what each install was built against with the EESSI of now, asks eb-stack which installs a change reaches and how, rebuilds those that need it in the order of their dependencies, and keeps the others.
+
+** Before you start
+
+- A site file whose targets install on top of EESSI, with the EESSI module in =[modules] init=, as in [[file:site-installs.org][Let users load what a target installs on top of EESSI]]: =watch= reads =EESSI_VERSION=, =EESSI_SOFTWARE_SUBDIR= and =EESSI_MODULEPATH= from the module environment of the target.
+- eb-stack on the =PATH= of the build account, or named in =[site.tools.eb_stack]= =bin=; it tells eb-pipeline what each install depends on.
+- For a watch from cron, the crontab of the build account.
+
+The output on this page comes from =docs/examples/watch.sh=, which stands in for the EESSI repository, EasyBuild and eb-stack, as [[file:../reference/watch.org][The watch state and plan]] says.
+Its target =zen4= installs hiredis, which builds with the CMake of EESSI and links its OpenSSL, and tmux, which links its libevent, on top of EESSI 2023.06 for =x86_64/amd/zen4=.
+
+** Steps
+
+1. Add a =[watch]= table to the site file.
+   Without keys, it reads the EESSI that the module environment of each target loads, and keeps the record of the target in =.eb-pipeline-watch= under its install prefix:
+
+   #+begin_src bash
+   sed -n "/^\[modules\]/,\$p" site.toml
+   #+end_src
+
+   #+begin_example
+   [modules]
+   shell_init = "$WORK/cvmfs/software.eessi.io/versions/2023.06/init/lmod/bash"
+   init = ["EESSI/2023.06"]
+
+   [watch]
+   #+end_example
+
+   #+begin_src bash
+   eb-pipeline check --site site.toml
+   #+end_src
+
+   #+begin_example
+   INFO [check] example: site file is valid
+   #+end_example
+
+2. Build as before.
+   At its end, a run records each install that it built or changed, with the EESSI it was built against:
+
+   #+begin_src bash
+   eb-pipeline run --site site.toml --list zen4.list --target zen4 --build-type production --log-stamp 20261117_090000
+   #+end_src
+
+   #+begin_example
+   ...
+   INFO [watch] zen4: recorded 2 against EESSI 2023.06 x86_64/amd/zen4 at revision 32663: hiredis/1.2.0-GCCcore-13.2.0, tmux/3.4-GCCcore-13.2.0
+   INFO [summary] zen4: summary.json and summary.html written in $WORK/site/logs/20261117_090000
+   #+end_example
+
+   The run set =--log-stamp=, so its run directory is =20261117_090000=; without it, the directory is named for the time the run started.
+   A line that left its install as it was is not recorded again.
+   A record that fails is a =WARN= line, and the run exits as it would have without =[watch]=; here a run built Zip with a module environment that loaded no EESSI, and step 8 records it:
+
+   #+begin_example
+   WARN [watch] zen4: Zip/3.0-GCCcore-13.2.0 not recorded: no EESSI in the module environment of target zen4: EESSI_VERSION is unset; no EESSI change under them is seen until watch --adopt records them
+   #+end_example
+
+3. See what a watch would do, without changing anything:
+
+   #+begin_src bash
+   eb-pipeline watch --site site.toml --target zen4 --build-type production --log-stamp 20261117_120000 --dry-run
+   #+end_src
+
+   #+begin_example
+   EESSI 2023.06 x86_64/amd/zen4 at revision 32663, as recorded: 2 recorded installs, 0 to rebuild, 0 kept, 2 unaffected, 0 gone
+   unaffected:
+         hiredis/1.2.0-GCCcore-13.2.0
+         tmux/3.4-GCCcore-13.2.0
+   #+end_example
+
+   While the CVMFS revision of the repository is the one that the installs were recorded at, no module of EESSI can have changed, and =watch= compares none.
+
+4. Have cron start =watch= for each target as the build account, here at 17 minutes past each hour:
+
+   #+begin_example
+   PATH=/home/alice/.cargo/bin:/usr/bin:/bin
+   17 * * * * eb-pipeline watch --site /home/alice/site.toml --target zen4 --build-type production
+   #+end_example
+
+   A watch holds =STATE_DIR/TARGET.watch.lock= from start to end and takes it without waiting, so one that starts while the last still rebuilds exits 75 and changes nothing.
+   Its exit status tells a wrapper or a monitoring check what to do:
+
+   | Exit status | When                                                                                                                                                            | What to do                                                                                              |
+   |-------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------|
+   |           0 | Nothing was to be rebuilt, or the rebuild exited 0.                                                                                                             | Nothing.                                                                                                |
+   |           1 | The rebuild exited 1; an install whose rebuild failed keeps its changes in the record, as =pending=, and the next watch rebuilds it again.                      | Read the summary of the rebuild, as [[file:follow-runs.org][Follow runs through their summaries]] does. |
+   |          75 | Another watch of the target held its lock, or the module environment, the repository or a module tree of EESSI could not be read, as when CVMFS is not mounted. | Nothing: the next start tries again.                                                                    |
+   |          78 | Something only a person can change keeps =watch= from rebuilding, such as a new EESSI version or no eb-stack.                                                   | Read the =ERROR= line, which the table below lists.                                                     |
+
+5. When EESSI has changed, read the plan before a watch rebuilds.
+   Here EESSI has rebuilt CMake and libevent in place, at revision 32664:
+
+   #+begin_src bash
+   eb-pipeline watch --site site.toml --target zen4 --build-type production --log-stamp 20261117_120000 --dry-run --plan-out plan.json
+   #+end_src
+
+   #+begin_example
+   EESSI 2023.06 x86_64/amd/zen4 at revision 32664: 2 recorded installs, 1 to rebuild, 1 kept, 0 unaffected, 0 gone
+   rebuild, in this order:
+      1. hiredis/1.2.0-GCCcore-13.2.0  CMake/3.27.6-GCCcore-13.2.0 changed (review, builddependency)
+   kept:
+         tmux/3.4-GCCcore-13.2.0       libevent/2.1.12-GCCcore-13.2.0 changed (no-rebuild, runtime)
+   INFO [watch] zen4: dry run: nothing rebuilt; eb-stack's files are in $WORK/scratch/eb-pipeline-watch/zen4/20261117_120000/plan
+   #+end_example
+
+   tmux links libevent as a shared library, which a rebuild in place keeps working, so it is kept.
+   hiredis was built with CMake, which eb-stack classes =review=: what the install holds of it, nothing says, and =watch= rebuilds it.
+   =plan.json= holds the same plan in JSON, which [[file:../reference/watch.org][The watch state and plan]] describes key by key.
+   To keep such installs instead, with a =WARN= line for each, set =rebuild_review = false= in =[watch]=, here for one command through its variable:
+
+   #+begin_src bash
+   EB_PIPELINE__WATCH__REBUILD_REVIEW=false eb-pipeline watch --site site.toml --target zen4 --build-type production --log-stamp 20261117_120000 --dry-run
+   #+end_src
+
+   #+begin_example
+   INFO [site] -: watch.rebuild_review set from EB_PIPELINE__WATCH__REBUILD_REVIEW
+   WARN [watch] zen4: hiredis/1.2.0-GCCcore-13.2.0 kept although CMake/3.27.6-GCCcore-13.2.0 changed (review), as rebuild_review = false
+   EESSI 2023.06 x86_64/amd/zen4 at revision 32664: 2 recorded installs, 0 to rebuild, 2 kept, 0 unaffected, 0 gone
+   ...
+   #+end_example
+
+6. Let =watch= rebuild, from cron or by hand:
+
+   #+begin_src bash
+   eb-pipeline watch --site site.toml --target zen4 --build-type production --log-stamp 20261117_120000
+   #+end_src
+
+   #+begin_example
+   INFO [watch] zen4: EESSI 2023.06 x86_64/amd/zen4 at revision 32664: 2 recorded installs, 1 to rebuild, 1 kept, 0 unaffected, 0 gone
+   INFO [watch] zen4: rebuild, in this order:
+   INFO [watch] zen4:    1. hiredis/1.2.0-GCCcore-13.2.0  CMake/3.27.6-GCCcore-13.2.0 changed (review, builddependency)
+   INFO [watch] zen4: kept:
+   INFO [watch] zen4:       tmux/3.4-GCCcore-13.2.0       libevent/2.1.12-GCCcore-13.2.0 changed (no-rebuild, runtime)
+   ...
+   INFO [build] zen4: hiredis-1.2.0-GCCcore-13.2.0: ok
+   INFO [watch] zen4: recorded 1 against EESSI 2023.06 x86_64/amd/zen4 at revision 32664: hiredis/1.2.0-GCCcore-13.2.0
+   INFO [summary] zen4: summary.json and summary.html written in $WORK/site/logs/20261117_120000
+   #+end_example
+
+   It runs its rebuild list, =watch.list= in the log directory of the target, as =run= runs a build list, through the phases of the site file:
+
+   #+begin_src bash
+   cat site/logs/20261117_120000/zen4/watch.list
+   #+end_src
+
+   #+begin_example
+   hiredis-1.2.0-GCCcore-13.2.0.eb --rebuild
+   #+end_example
+
+   After the rebuild, the next watch finds EESSI as recorded:
+
+   #+begin_src bash
+   eb-pipeline watch --site site.toml --target zen4 --build-type production --log-stamp 20261117_130000 --dry-run
+   #+end_src
+
+   #+begin_example
+   EESSI 2023.06 x86_64/amd/zen4 at revision 32664, as recorded: 2 recorded installs, 0 to rebuild, 0 kept, 2 unaffected, 0 gone
+   ...
+   #+end_example
+
+7. When the target moves to a new EESSI version, =watch= refuses to rebuild in place, which would mix the two versions in one stack.
+   With =--dry-run=, it first names the installs built against the other:
+
+   #+begin_src bash
+   eb-pipeline watch --site eessi-2025.06.toml --target zen4 --build-type production --log-stamp 20261117_140000 --dry-run
+   #+end_src
+
+   #+begin_example
+   hiredis/1.2.0-GCCcore-13.2.0  built against EESSI 2023.06 x86_64/amd/zen4
+   tmux/3.4-GCCcore-13.2.0       built against EESSI 2023.06 x86_64/amd/zen4
+   ERROR [main] -: the module environment of target zen4 loads EESSI 2025.06 x86_64/amd/zen4, and 2 of 2 recorded installs were built against EESSI 2023.06 x86_64/amd/zen4; a rebuild in place would mix the two: build the stack for the new EESSI (eb-stack stack gap lists what it lacks), then record it with watch --adopt
+   #+end_example
+
+   =eessi-2025.06.toml= is =site.toml= with =2025.06= in place of =2023.06=.
+   Build the stack for the new version, then record it with =watch --adopt= and the site file of the new version, as in step 8.
+
+8. Record the installs that no run recorded: those from before the =[watch]= table, those whose record failed, as Zip in step 2, and a stack built for a new EESSI version.
+   =--adopt --dry-run= lists them first:
+
+   #+begin_src bash
+   eb-pipeline watch --site site.toml --target zen4 --build-type production --log-stamp 20261117_150000 --adopt --dry-run
+   #+end_src
+
+   #+begin_example
+   Zip/3.0-GCCcore-13.2.0
+   hiredis/1.2.0-GCCcore-13.2.0
+   tmux/3.4-GCCcore-13.2.0
+   INFO [watch] zen4: dry run: would adopt 3 against EESSI 2023.06 x86_64/amd/zen4 at revision 32664
+   #+end_example
+
+   #+begin_src bash
+   eb-pipeline watch --site site.toml --target zen4 --build-type production --log-stamp 20261117_150000 --adopt
+   #+end_src
+
+   #+begin_example
+   INFO [watch] zen4: adopted 3 against EESSI 2023.06 x86_64/amd/zen4 at revision 32664: Zip/3.0-GCCcore-13.2.0, hiredis/1.2.0-GCCcore-13.2.0, tmux/3.4-GCCcore-13.2.0
+   #+end_example
+
+   =--adopt= records each install of the target whose install directory holds its easyconfig, in place of the record, against the EESSI loaded now, and rebuilds nothing.
+   Adopt only installs that were built against that EESSI, as a change in between is not seen.
+   An adopted install has no options in the record, so its rebuild is its easyconfig and =--rebuild=.
+
+** Check that it worked
+
+Plan against a change that EESSI has not made: copy the module tree of EESSI, change the module file of a dependency in the copy, as a rebuild in place would, and give a copy of the site file =[watch] modules_dirs= with the copy.
+Here the module file of CMake changes:
+
+#+begin_src bash
+cp -r cvmfs/software.eessi.io/versions/2023.06/software/linux/x86_64/amd/zen4/modules fixture
+echo "-- changed by hand" >>fixture/all/CMake/3.27.6-GCCcore-13.2.0.lua
+#+end_src
+
+#+begin_src bash
+sed -n "/^\[watch\]/,\$p" fixture.toml
+#+end_src
+
+#+begin_example
+[watch]
+modules_dirs = ["$WORK/fixture/all"]
+#+end_example
+
+#+begin_src bash
+eb-pipeline watch --site fixture.toml --target zen4 --build-type production --log-stamp 20261117_153000 --dry-run
+#+end_src
+
+#+begin_example
+EESSI 2023.06 x86_64/amd/zen4 at revision 32664: 3 recorded installs, 1 to rebuild, 0 kept, 2 unaffected, 0 gone
+rebuild, in this order:
+   1. hiredis/1.2.0-GCCcore-13.2.0  CMake/3.27.6-GCCcore-13.2.0 changed (review, builddependency)
+unaffected:
+      Zip/3.0-GCCcore-13.2.0
+      tmux/3.4-GCCcore-13.2.0
+INFO [watch] zen4: dry run: nothing rebuilt; eb-stack's files are in $WORK/scratch/eb-pipeline-watch/zen4/20261117_153000/plan
+#+end_example
+
+A watch compares the modules whenever its module trees are not those of the record, whatever the revision.
+Keep to =--dry-run= with the copy: without it, =watch= would rebuild for a change that EESSI never made, and record the copy as what the installs were built against, so that the next watch with =site.toml= would rebuild them again.
+
+** If it fails
+
+| Message                                                                                                                                              | Cause                                                                                                                                                    | What to do                                                                                                                               |
+|------------------------------------------------------------------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------|
+| =WARN [watch] TARGET: MODULE not recorded: REASON; no EESSI change under them is seen until watch --adopt records them=                              | The record after a run failed; [[file:../reference/watch.org][The watch state and plan]] lists the reasons.                                              | Fix what =REASON= names, then record the installs with =watch --adopt=, as in step 8.                                                    |
+| =WARN [watch] TARGET: no install is recorded in PATH: a run with [watch] records what it builds, and watch --adopt what is installed=                | No run with =[watch]= has built for the target, and no =watch --adopt= has recorded it.                                                                  | Build, as in step 2, or record what is installed, as in step 8.                                                                          |
+| =ERROR [main] -: the site has no [watch] table, or it is disabled, so no install is recorded to watch=                                               | The site file has no =[watch]= table, or =enabled = false= in it.                                                                                        | Add the table, as in step 1.                                                                                                             |
+| =ERROR [main] -: no EESSI in the module environment of target TARGET: NAME is unset=                                                                 | =[modules]= loads no EESSI module for the target.                                                                                                        | Load it in =[modules] init=, as the site file of [[file:site-installs.org][Let users load what a target installs on top of EESSI]] does. |
+| =ERROR [main] -: another watch of target TARGET holds PATH=                                                                                          | A watch of the target was still running, as a rebuild that takes longer than the interval of the cron line.                                              | Nothing: the next start watches again. Start =watch= less often than a rebuild takes.                                                    |
+| =ERROR [main] -: cannot read the EESSI module tree PATH: ERROR=                                                                                      | CVMFS is not mounted on the host, or not reachable.                                                                                                      | Nothing, if it comes back: the next start tries again.                                                                                   |
+| =ERROR [main] -: the module environment of target TARGET loads EESSI VERSION ..., and N of M recorded installs were built against EESSI VERSION ...= | The target moved to another EESSI version or CPU subdirectory.                                                                                           | Build the stack for it, then =watch --adopt=, as in step 7.                                                                              |
+| =ERROR [main] -: eb-stack tells what an install depends on, and cannot run `eb-stack --version`: ERROR; ...=                                         | eb-stack is not on the =PATH= of the build account, or not where =[site.tools.eb_stack]= =bin= names it.                                                 | Install it there, or name it in =bin=.                                                                                                   |
+| =ERROR [main] -: a dependency vanished from EESSI, and eb-stack has no easyconfig tree to plan its local build from: ...=                            | EESSI no longer holds a module that an install depends on, and the module environment loads no EasyBuild whose easyconfigs eb-stack could build it from. | Load EasyBuild in =[modules] init=, or set =[watch] easyconfigs= to an easyconfig tree.                                                  |
+
+** Related
+
+- [[file:../reference/watch.org][The watch state and plan]], for what a record holds, what =watch= compares, and its plan
+- [[file:../reference/site-file.org][The site file]], for the keys of =[watch]=
+- [[file:../reference/cli.org][The eb-pipeline command]] and [[file:../reference/exit-status.org][Exit status]], for the options and exit statuses of =watch=
+- [[file:site-installs.org][Let users load what a target installs on top of EESSI]]
+- [[file:follow-runs.org][Follow runs through their summaries]], for the summary of each rebuild
+- The [[https://eb-stack.rgoswami.me/][eb-stack documentation]], for =rebuild-set= and its classes

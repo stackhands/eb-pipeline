@@ -20,4 +20,6 @@ The title names the task.
    staged-rebuilds
    select-lines
    from-eb-stack
+   follow-runs
+   rebuild-when-eessi-changes
 #+end_export

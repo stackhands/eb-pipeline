@@ -30,7 +30,9 @@ looks site-specific.
   [rotate the log tree](docs/orgmode/howto/rotate-logs.org),
   [rebuild installed software through eb-staged-rebuild](docs/orgmode/howto/staged-rebuilds.org),
   [build some lines of a list on some targets only](docs/orgmode/howto/select-lines.org),
-  [build what eb-stack plans](docs/orgmode/howto/from-eb-stack.org).
+  [build what eb-stack plans](docs/orgmode/howto/from-eb-stack.org),
+  [follow runs through their summaries](docs/orgmode/howto/follow-runs.org),
+  [rebuild what an EESSI change reaches](docs/orgmode/howto/rebuild-when-eessi-changes.org).
 - Explanation: [why one site file drives the build](docs/orgmode/explanation/design.org),
   [how a run goes through its phases](docs/orgmode/explanation/phases.org),
   [why the rotation takes two locks](docs/orgmode/explanation/log-rotation.org),

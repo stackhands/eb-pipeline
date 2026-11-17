@@ -1,0 +1,157 @@
+#+TITLE: Follow runs through their summaries
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Follow runs through their summaries
+
+See how the last runs of a site went, find the lines that failed and their logs, and have each run post its summary to a webhook.
+
+** Before you start
+
+- A site file whose =[filesystems] log_root= holds the run directories, where each run writes =summary.json= and =summary.html=.
+- jq, for step 3.
+- For steps 4 and 5, curl on the =PATH= of the build account, and an =http://= or =https://= URL that takes a JSON POST; for step 5, Python 3.
+
+The output on this page comes from =docs/examples/summary.sh=, which runs both targets of a copy of the site file of [[file:build-from-ci.org][Build a list on every target from continuous integration]] with the =local= scheduler, its paths under =$WORK= and the stand-in =eb= of the [[file:../tutorials/first-build-list.org][tutorial]], which fails the lines whose easyconfig starts with =Broken-=.
+
+** Steps
+
+1. After a run, open the summary in its run directory, which the run names at its end:
+
+   #+begin_example
+   INFO [summary] zen2: summary.json and summary.html written in $WORK/site/logs/20261117_090000
+   #+end_example
+
+   =summary.html= needs no script and no network, and links each log relative to the run directory, so a copy of the directory, or a web server over the log root, shows the same page.
+
+2. List the last runs, newest first:
+
+   #+begin_src bash
+   eb-pipeline status --site site.toml --last 2
+   #+end_src
+
+   #+begin_example
+   20261117_120000  failed (exit 1)  $WORK/site/logs/20261117_120000/summary.html
+     zen2  run  failed   exit 1          0.0 s  1 failed, 1 success; build failed
+   20261117_110000  failed (exit 1)  $WORK/site/logs/20261117_110000/summary.html
+     zen2  run  failed   exit 1          0.0 s  1 failed, 1 success; build failed
+     zen4  run  success  exit 0          0.0 s  1 success
+   #+end_example
+
+   Each run is a line with its status, its exit status and its page, then a line for each target with its command, status, exit status and duration, the number of packages with each status, and the phases that came to neither =ok= nor =not configured=.
+   The command is =watch= for a rebuild that [[file:rebuild-when-eessi-changes.org][Rebuild what an EESSI change reaches]] sets up.
+   Without =--last=, =status= lists 10 runs; =--target zen4= keeps the runs of one target, and =--format json= prints their summaries.
+
+3. List the lines of a run that did not succeed, with their logs, from its =summary.json=:
+
+   #+begin_src bash
+   jq -r '.targets[] | .name as $t | .packages[] | select(.status != "success") | "\($t)  \(.easyconfig)  \(.status)  \(.log)"' site/logs/20261117_120000/summary.json
+   #+end_src
+
+   #+begin_example
+   zen2  Broken-1.0-GCCcore-15.2.0.eb  failed  $WORK/site/logs/20261117_120000/zen2/Broken-1.0-GCCcore-15.2.0.stdout.log
+   #+end_example
+
+4. To have each run post its summary, add a =[notify]= table that names the variable holding the URL of the webhook, which keeps the URL out of the site file:
+
+   #+begin_src bash
+   sed -n "/^\[notify\]/,\$p" notify.toml
+   #+end_src
+
+   #+begin_example
+   [notify]
+   webhook_env = "SUMMARY_WEBHOOK"
+   when = "problems"
+   #+end_example
+
+   =when = "problems"= posts only after a run that did not exit 0; without it, every run posts.
+   Check the site file:
+
+   #+begin_src bash
+   eb-pipeline check --site notify.toml
+   #+end_src
+
+   #+begin_example
+   INFO [check] example: site file is valid
+   #+end_example
+
+   Then set the variable where eb-pipeline runs, as in the crontab or the CI job that starts it.
+
+5. Before the real webhook, try the table against a listener on the build host.
+   =listen.py= takes one POST on =127.0.0.1:8765=, prints what it got, and exits:
+
+   #+INCLUDE: "follow-runs/listen.py" src python
+
+   Start it, and then a run with its URL in the variable:
+
+   #+begin_src bash
+   python3 listen.py >listen.log &
+   SUMMARY_WEBHOOK=http://127.0.0.1:8765/hook/XXXX eb-pipeline run --site notify.toml --list build.list --target zen2 --build-type production --log-stamp 20261117_130000; echo "exit $?"
+   #+end_src
+
+   #+begin_example
+   ...
+   ERROR [build] zen2: Broken-1.0-GCCcore-15.2.0: failed (exit 1)
+   INFO [summary] zen2: summary.json and summary.html written in $WORK/site/logs/20261117_130000
+   INFO [notify] zen2: summary.json posted to http://127.0.0.1:8765/...
+   exit 1
+   #+end_example
+
+   The run exits 1, as a line failed, so =when = "problems"= posts its summary, and the listener got it:
+
+   #+begin_src bash
+   cat listen.log
+   #+end_src
+
+   #+begin_example
+   listening on http://127.0.0.1:8765
+   POST /hook/XXXX application/json: summary of run 20261117_130000, failed
+   #+end_example
+
+   eb-pipeline names only the scheme and the host of the URL, and hands curl the URL on its standard input, so that its path and its query show in no log and no process list.
+
+** Check that it worked
+
+With the URL of the webhook in the variable, a run that did not exit 0 ends with a line that names the scheme and the host of the URL, and a run that exited 0 sends nothing.
+Here a stand-in for curl takes the POST to =https://hooks.example.org/build/XXXX=:
+
+#+begin_src bash
+export SUMMARY_WEBHOOK=https://hooks.example.org/build/XXXX
+eb-pipeline run --site notify.toml --list build.list --target zen2 --build-type production --log-stamp 20261117_110000; echo "exit $?"
+eb-pipeline run --site notify.toml --list example.list --target zen4 --build-type production --log-stamp 20261117_110000; echo "exit $?"
+#+end_src
+
+#+begin_example
+...
+INFO [summary] zen2: summary.json and summary.html written in $WORK/site/logs/20261117_110000
+INFO [notify] zen2: summary.json posted to https://hooks.example.org/...
+exit 1
+...
+INFO [summary] zen4: summary.json and summary.html written in $WORK/site/logs/20261117_110000
+INFO [notify] zen4: the run exited 0 and notify.when is problems; nothing sent
+exit 0
+#+end_example
+
+The webhook gets the =summary.json= of the run directory as it is when the target's run ends, with every target that has written to it by then.
+
+** If it fails
+
+| Message                                                                                                                      | Cause                                                                                                          | What to do                                                                           |
+|------------------------------------------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------|
+| =INFO [status] -: no runs under LOG_ROOT=                                                                                    | No run has written under the =log_root= of the site file: none has run yet, or the runs use another site file. | Give =status= the site file that the runs use.                                       |
+| =RUN  no summary.json: the run is still going, or ended before writing one=                                                  | The run has not ended, or it stopped before it wrote its summary.                                              | Wait for the run to end, or read the logs in its run directory.                      |
+| =WARN [summary] TARGET: no summary written: PATH: ERROR=                                                                     | The run could not write its summary.                                                                           | Fix what =ERROR= names, such as the permissions or the free space of the log root.   |
+| =WARN [notify] TARGET: SUMMARY_WEBHOOK is unset or empty; nothing sent=                                                      | The variable that =webhook_env= names is not set where eb-pipeline runs.                                       | Set it there, as step 4 says.                                                        |
+| =WARN [notify] TARGET: the URL in SUMMARY_WEBHOOK must start with http:// or https://; nothing sent=                         | The variable holds something other than a URL with its scheme.                                                 | Put the URL of the webhook in it, with =https://= or =http://=.                      |
+| =WARN [notify] TARGET: POST of summary.json to URL failed: curl exited 7: ERROR=                                             | Nothing took the connection at the host and port of the URL.                                                   | Check the URL, and that the service of the webhook, or the listener of step 5, runs. |
+| =WARN [notify] TARGET: POST of summary.json to URL failed: curl exited 22: curl: (22) The requested URL returned error: 500= | The webhook answered with an HTTP error.                                                                       | Read what its service logged for the POST.                                           |
+
+A summary that is not written or not sent leaves the exit status of the run as it was.
+
+** Related
+
+- [[file:../reference/run-summary.org][The run summary]], for every key of =summary.json=, the output of =status= and the lines of =[notify]=
+- [[file:../reference/site-file.org][The site file]], for the keys of =[notify]=
+- [[file:../reference/cli.org][The eb-pipeline command]], for the options of =status=
+- [[file:rebuild-when-eessi-changes.org][Rebuild what an EESSI change reaches]], whose rebuilds =status= lists with the command =watch=
+- [[file:rotate-logs.org][Rotate the log tree]], which compresses and deletes the old run directories with their summaries

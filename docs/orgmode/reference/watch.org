@@ -7,6 +7,7 @@
 With a =[watch]= table in the site file, =run= records what each install it builds was built against in the European Environment for Scientific Software Installations (EESSI): the EESSI version and CPU subdirectory, the CVMFS revision of the repository, and each EESSI module that the install depends on, with an identity that changes when that module changes.
 =eb-pipeline watch= compares the record with the EESSI that the module environment loads now, and rebuilds only the installs that a change reaches.
 [[file:site-file.org][The site file]] lists the keys of the table, and [[file:cli.org][The eb-pipeline command]] the options of =watch=.
+[[file:../howto/rebuild-when-eessi-changes.org][Rebuild what an EESSI change reaches]] sets it up, step by step.
 The examples on this page come from =docs/examples/watch.sh=, which stands in for the EESSI repository with a directory under =$WORK= that holds three modules, for EasyBuild with a script that installs what it builds, and for eb-stack with a script that answers =rebuild-set= from a table and =stack shard= with the list in its order.
 
 ** The dependencies of an install
@@ -463,6 +464,7 @@ EasyBuild leaves a new log in the =easybuild= directory each time it builds a mo
 
 ** See also
 
+- [[file:../howto/rebuild-when-eessi-changes.org][Rebuild what an EESSI change reaches]], to set it up
 - [[file:site-file.org][The site file]], for =[watch]= and =[site.tools.eb_stack]=
 - [[file:cli.org][The eb-pipeline command]] and [[file:exit-status.org][Exit status]], for the options and exit statuses of =watch=
 - [[file:environment.org][Environment variables]], for what a record and =watch= read from the module environment
