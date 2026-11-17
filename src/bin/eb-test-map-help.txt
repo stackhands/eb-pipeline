@@ -1,11 +1,19 @@
 eb-test-map: name the tests that cover the easyconfigs in a build list.
 
-  eb-test-map --map FILE --list FILE [--toolchain NAME]... [--allow-unmapped]
+  eb-test-map --map FILE (--list FILE | --result FILE) [--toolchain NAME]...
+              [--allow-unmapped] [--format text|reframe]
 
 FILE of --map has one software name and one test name per line.
-A line of --list is an easyconfig, or a path to one. The software name is
-the part of the file name before the version. GCC, GCCcore, foss, gfbf,
-gomkl, gompi, iimpi, intel and intel-compilers have no test of their own.
---toolchain names another. Any other software with no row exits 2, unless
---allow-unmapped is set, and then nothing is printed. The test names go
-to stdout, one per line, sorted, each once.
+A --list file is a build list, or an easystack when its file name ends in
+.yml or .yaml. A line of that list is an easyconfig, or a path to one.
+--result FILE reads a result written by `eb-pipeline run --result` and keeps
+only lines whose status is `success`.
+
+The software name is the part of an easyconfig file name before the version.
+GCC, GCCcore, foss, gfbf, gomkl, gompi, iimpi, intel and intel-compilers
+have no test of their own. --toolchain names another. Any other software
+with no row exits 2, unless --allow-unmapped is set.
+
+--format text is the default and prints one test name per line.
+--format reframe prints one ReFrame selector per line as `-n ^<name>$`,
+with regular-expression characters escaped.
