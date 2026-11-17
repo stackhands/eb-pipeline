@@ -154,6 +154,95 @@ fn without_an_eessi_change_watch_rebuilds_nothing() {
 }
 
 #[test]
+fn abi_drift_absent_or_disabled_keeps_watch_output_and_state_bytes_identical() {
+    let t = built("");
+    let vars = eessi_vars(&t, "2023.06");
+    let state_path = t.root().join("install/.eb-pipeline-watch/cpu.json");
+    let before_state = std::fs::read(&state_path).unwrap();
+    let before = watch(&t, LATER, &["--dry-run"], &with(&vars));
+    assert_eq!(code(&before), 0, "{}", stderr(&before));
+
+    let mut site = std::fs::read_to_string(&t.site).unwrap();
+    site.push_str("\n[watch.abi_drift]\nenabled = false\n");
+    std::fs::write(&t.site, site).unwrap();
+
+    let after = watch(&t, LATER, &["--dry-run"], &with(&vars));
+    assert_eq!(code(&after), 0, "{}", stderr(&after));
+    assert_eq!(stdout(&after), stdout(&before));
+    assert_eq!(stderr(&after), stderr(&before));
+    assert_eq!(std::fs::read(&state_path).unwrap(), before_state);
+}
+
+#[test]
+fn abi_drift_can_trigger_selective_rebuilds_from_mapped_providers() {
+    let t = built(
+        r#"
+[watch.abi_drift]
+enabled = true
+[watch.abi_drift.probe]
+glibc = "printf '%s' \"${GLIBC_ABI:-}\""
+[watch.abi_drift.providers]
+glibc = ["CMake-3.27.6-GCCcore-13.2.0.eb"]
+"#,
+    );
+    let mut vars = eessi_vars(&t, "2023.06");
+    vars.push(("GLIBC_ABI", "2.39".to_string()));
+    let o = watch(&t, LATER, &[], &with(&vars));
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    assert_eq!(
+        t.watch_state("cpu")["abi_baseline"]["fields"]["glibc"],
+        "2.39"
+    );
+
+    vars.retain(|(k, _)| *k != "GLIBC_ABI");
+    vars.push(("GLIBC_ABI", "2.40".to_string()));
+    let o = watch(&t, "20260103_000000", &["--dry-run"], &with(&vars));
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("host ABI changed in 1 field(s): glibc"),
+        "{}",
+        stderr(&o)
+    );
+    let out = stdout(&o);
+    assert!(out.contains("2 to rebuild"), "{out}");
+    assert!(
+        out.contains("CMake/3.27.6-GCCcore-13.2.0 changed (review, glibc:builddependency)"),
+        "{out}"
+    );
+    let calls = t.calls("ebstack");
+    assert!(
+        calls.lines().any(|l| l.contains("abi-drift.changed")),
+        "{calls}"
+    );
+}
+
+#[test]
+fn abi_drift_refuses_changed_fields_without_providers() {
+    let t = built(
+        r#"
+[watch.abi_drift]
+enabled = true
+[watch.abi_drift.probe]
+glibc = "printf '%s' \"${GLIBC_ABI:-}\""
+"#,
+    );
+    let mut vars = eessi_vars(&t, "2023.06");
+    vars.push(("GLIBC_ABI", "2.39".to_string()));
+    let o = watch(&t, LATER, &[], &with(&vars));
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+
+    vars.retain(|(k, _)| *k != "GLIBC_ABI");
+    vars.push(("GLIBC_ABI", "2.40".to_string()));
+    let o = watch(&t, "20260103_000001", &["--dry-run"], &with(&vars));
+    assert_eq!(code(&o), 78, "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("watch.abi_drift.probe.glibc changed"),
+        "{}",
+        stderr(&o)
+    );
+}
+
+#[test]
 fn while_the_cvmfs_revision_is_the_recorded_one_watch_compares_no_module() {
     let t = setup(WATCH);
     stack(&t);

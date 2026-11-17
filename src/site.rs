@@ -784,6 +784,45 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
                 e.push(format!("watch.{key}: `{p}` is not an absolute path"));
             }
         }
+        if let Some(a) = &w.abi_drift {
+            if a.enabled && a.probe.is_empty() {
+                e.push(
+                    "watch.abi_drift.probe: at least one field command is required when enabled"
+                        .into(),
+                );
+            }
+            for (field, cmd) in &a.probe {
+                if !name_ok(field) {
+                    e.push(format!(
+                        "watch.abi_drift.probe.{field}: use letters, digits, `.`, `_` and `-`"
+                    ));
+                }
+                if cmd.trim().is_empty() {
+                    e.push(format!(
+                        "watch.abi_drift.probe.{field}: command must not be empty"
+                    ));
+                }
+            }
+            for (field, providers) in &a.providers {
+                if !a.probe.contains_key(field) {
+                    e.push(format!(
+                        "watch.abi_drift.providers.{field}: no matching probe command in watch.abi_drift.probe"
+                    ));
+                }
+                if providers.is_empty() {
+                    e.push(format!(
+                        "watch.abi_drift.providers.{field}: at least one easyconfig file name is required"
+                    ));
+                }
+                for p in providers {
+                    if p.contains('/') || p.trim().is_empty() {
+                        e.push(format!(
+                            "watch.abi_drift.providers.{field}: `{p}` is not a file name"
+                        ));
+                    }
+                }
+            }
+        }
     }
     e
 }

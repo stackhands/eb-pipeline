@@ -9,11 +9,11 @@ use crate::exit::{self, Fail};
 use crate::plan::{module_rel, read_units, Planner};
 use crate::resolve::job_dir_refusal;
 use crate::run::{exec_logged, log, RunResult};
-use crate::schema::{Site, Watch};
+use crate::schema::{AbiDrift, Site, Watch};
 use crate::tools::{self, Tool};
 use crate::util::{cmp_version, list_word, parse_version, ListLine};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
@@ -34,6 +34,17 @@ pub struct State {
     pub target: String,
     /// By module name, `Name/version`.
     pub installs: BTreeMap<String, Install>,
+    /// The host ABI baseline that the target's installs were last watched
+    /// against, when `[watch.abi_drift]` is enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub abi_baseline: Option<AbiBaseline>,
+}
+
+/// The host ABI fields a watch run measured.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AbiBaseline {
+    /// Field name to measured value.
+    pub fields: BTreeMap<String, String>,
 }
 
 /// One local install and the EESSI it was built against.
@@ -91,6 +102,7 @@ impl State {
             kind: KIND.into(),
             target: target.into(),
             installs: BTreeMap::new(),
+            abi_baseline: None,
         }
     }
 }
@@ -298,7 +310,12 @@ pub fn stage(
             if files.contains_key(&file) {
                 continue;
             }
-            std::os::unix::fs::symlink(ec, dir.join(&file)).map_err(|e| {
+            let dst = dir.join(&file);
+            if dst.exists() {
+                files.insert(file, m.name.clone());
+                continue;
+            }
+            std::os::unix::fs::symlink(ec, &dst).map_err(|e| {
                 Fail::new(
                     exit::FAILED,
                     format!("cannot link {file} in {}: {e}", dir.display()),
@@ -920,6 +937,149 @@ pub fn robot_trees(w: &Watch, env: &BTreeMap<String, String>) -> Vec<String> {
         .collect()
 }
 
+/// One ABI field whose value changed since the recorded baseline.
+#[derive(Debug, Clone)]
+pub struct AbiFieldChange {
+    /// Field name, as `watch.abi_drift.probe` names it.
+    pub field: String,
+    /// Provider easyconfig file names this field maps to.
+    pub providers: Vec<String>,
+}
+
+/// Host ABI fingerprint for this watch run, from probe commands.
+pub fn abi_baseline(p: &Planner, work: &Path, conf: &AbiDrift) -> Result<AbiBaseline, Fail> {
+    let mut fields = BTreeMap::new();
+    for (field, cmd_text) in &conf.probe {
+        let out = work.join(format!("abi-{field}.txt"));
+        let argv = vec![
+            "sh".into(),
+            "-c".into(),
+            "sh -c \"$1\" > \"$2\"".into(),
+            "sh".into(),
+            cmd_text.clone(),
+            out.display().to_string(),
+        ];
+        let cmd = p.plan_role_cmd("watch", argv)?;
+        let log_path = work.join(format!("abi-{field}.log"));
+        let code = exec_logged(&cmd, &p.scope.env(), &log_path)?;
+        if code != 0 {
+            return Err(Fail::new(
+                exit::TEMPFAIL,
+                format!(
+                    "watch.abi_drift.probe.{field} exited {code}; its output is in {}{}",
+                    log_path.display(),
+                    refusal_quote(&log_path)
+                ),
+            ));
+        }
+        let value = std::fs::read_to_string(&out)
+            .map_err(|e| Fail::new(exit::FAILED, format!("cannot read {}: {e}", out.display())))?;
+        fields.insert(field.clone(), value.trim().to_string());
+    }
+    Ok(AbiBaseline { fields })
+}
+
+/// ABI fields whose values changed from the recorded baseline.
+pub fn abi_changes(conf: &AbiDrift, state: &State, now: &AbiBaseline) -> Vec<AbiFieldChange> {
+    let Some(was) = &state.abi_baseline else {
+        return Vec::new();
+    };
+    conf.probe
+        .keys()
+        .filter_map(|field| {
+            let old = was.fields.get(field)?;
+            let new = now.fields.get(field)?;
+            if old == new {
+                return None;
+            }
+            Some(AbiFieldChange {
+                field: field.clone(),
+                providers: conf.providers.get(field).cloned().unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
+fn merge_change(changes: &mut Vec<Change>, change: Change) {
+    if let Some(found) = changes
+        .iter_mut()
+        .find(|c| c.module == change.module && c.change == change.change)
+    {
+        if rank(&change.class) > rank(&found.class) {
+            found.class = change.class;
+            found.edge_kind = change.edge_kind;
+        }
+        return;
+    }
+    changes.push(change);
+}
+
+/// Apply ABI drift field changes through `eb-stack rebuild-set`.
+pub fn apply_abi_changes(
+    p: &Planner,
+    work: &Path,
+    u: &Universe,
+    verdicts: &mut [Verdict],
+    fields: &[AbiFieldChange],
+    review: bool,
+    label: &str,
+) -> Result<(), Fail> {
+    if fields.is_empty() {
+        return Ok(());
+    }
+    let mut changed = BTreeSet::new();
+    let mut source = BTreeMap::new();
+    for f in fields {
+        if f.providers.is_empty() {
+            return Err(Fail::new(
+                exit::REFUSED,
+                format!(
+                    "watch.abi_drift.probe.{} changed, and watch.abi_drift.providers.{} has no easyconfig file names",
+                    f.field, f.field
+                ),
+            ));
+        }
+        for p in &f.providers {
+            changed.insert(p.clone());
+            source.entry(p.clone()).or_insert_with(|| f.field.clone());
+        }
+    }
+    let changed: Vec<String> = changed.into_iter().collect();
+    let rows = rebuild_set(p, work, u, &changed, "abi-drift", label)?;
+    let by_file: BTreeMap<&str, &str> = u
+        .eessi_files
+        .iter()
+        .chain(u.local_files.iter())
+        .map(|(f, m)| (f.as_str(), m.as_str()))
+        .collect();
+    for v in verdicts.iter_mut() {
+        for r in rows.iter().filter(|r| r.dependent == v.module) {
+            for f in r.changed.split(", ") {
+                let mapped = by_file.get(f).copied().unwrap_or(f);
+                let field = source.get(f).cloned().unwrap_or_else(|| "abi".into());
+                merge_change(
+                    &mut v.changes,
+                    Change {
+                        module: mapped.to_string(),
+                        change: "changed".into(),
+                        class: r.class.clone(),
+                        edge_kind: format!("{field}:{}", r.edge_kind),
+                    },
+                );
+            }
+        }
+        v.action = if v.changes.iter().any(|c| rebuilds(c, review)) {
+            "rebuild"
+        } else if v.changes.is_empty() {
+            "unaffected"
+        } else {
+            "keep"
+        }
+        .into();
+    }
+    Ok(())
+}
+
 /// The closures `plan.json` of `eb-stack stack shard` records: per line,
 /// the modules its build needs that the plan builds, dependencies first.
 #[derive(Deserialize)]
@@ -1219,6 +1379,7 @@ pub fn settle(
     revision: Option<u64>,
     verdicts: &[Verdict],
     rebuild: Option<Rebuild>,
+    abi: Option<&AbiBaseline>,
 ) -> Result<Vec<String>, Fail> {
     let dir = p.scope.watch_state_dir().expect("[watch] is on");
     let target = &p.scope.target.name;
@@ -1233,6 +1394,9 @@ pub fn settle(
         let _ = std::fs::remove_dir_all(&work);
     }
     update(&dir, target, |s| {
+        if let Some(a) = abi {
+            s.abi_baseline = Some(a.clone());
+        }
         for v in verdicts {
             match v.action.as_str() {
                 "gone" => {

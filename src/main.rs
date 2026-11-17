@@ -812,7 +812,18 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             doc.text().lines().for_each(say);
         }
     };
-    if watch::unchanged_at(&state, &probe, revision) {
+    let abi_conf = conf.abi_drift.as_ref().filter(|a| a.enabled);
+    let (abi_now, abi_fields) = if let Some(a) = abi_conf {
+        let now = watch::abi_baseline(&planner, &work, a)?;
+        let changed = watch::abi_changes(a, &state, &now);
+        (Some(now), changed)
+    } else {
+        (None, Vec::new())
+    };
+    let abi_needs_update = abi_now
+        .as_ref()
+        .is_some_and(|a| state.abi_baseline.as_ref() != Some(a));
+    if watch::unchanged_at(&state, &probe, revision) && abi_fields.is_empty() && !abi_needs_update {
         drop_work();
         let doc = watch::PlanDoc::unchanged(name, &probe, revision, &state);
         if let Some(p) = w.plan_out {
@@ -822,6 +833,34 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
         return Ok(exit::OK);
     }
     let mut verdicts = watch::assess(&state, &probe.modules_dirs, &local_dir, conf.rebuild_review);
+    let mut staged: Option<watch::Universe> = None;
+    if !abi_fields.is_empty() {
+        watch::need_eb_stack(&s)?;
+        say(&format!(
+            "host ABI changed in {} field(s): {}",
+            abi_fields.len(),
+            abi_fields
+                .iter()
+                .map(|f| f.field.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        let u = watch::stage(
+            &work,
+            &eessi::scan(&probe.modules_dirs),
+            &eessi::scan(std::slice::from_ref(&local_dir)),
+        )?;
+        watch::apply_abi_changes(
+            &planner,
+            &work,
+            &u,
+            &mut verdicts,
+            &abi_fields,
+            conf.rebuild_review,
+            &probe.software_subdir,
+        )?;
+        staged = Some(u);
+    }
     let mut doc;
     if verdicts.iter().any(|v| v.action == "rebuild") {
         if let Err(f) = watch::need_eb_stack(&s) {
@@ -834,11 +873,11 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                 ),
             ));
         }
-        let u = watch::stage(
+        let u = staged.take().unwrap_or(watch::stage(
             &work,
             &eessi::scan(&probe.modules_dirs),
             &eessi::scan(std::slice::from_ref(&local_dir)),
-        )?;
+        )?);
         watch::cascade(
             &planner,
             &work,
@@ -899,7 +938,14 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
         return Ok(exit::OK);
     }
     if doc.rebuild.is_empty() {
-        if let Err(f) = watch::settle(&planner, &probe, revision, &doc.installs, None) {
+        if let Err(f) = watch::settle(
+            &planner,
+            &probe,
+            revision,
+            &doc.installs,
+            None,
+            abi_now.as_ref(),
+        ) {
             log(
                 "WARN",
                 "watch",
@@ -937,7 +983,14 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     }
     if res.interrupted_by.is_none() {
         let rebuild = Some((lines.as_slice(), &res, &before));
-        match watch::settle(&planner, &probe, revision, &doc.installs, rebuild) {
+        match watch::settle(
+            &planner,
+            &probe,
+            revision,
+            &doc.installs,
+            rebuild,
+            abi_now.as_ref(),
+        ) {
             Ok(names) if !names.is_empty() => say(&format!(
                 "recorded {} against {eessi_now}: {}",
                 names.len(),

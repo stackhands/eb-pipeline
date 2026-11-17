@@ -506,10 +506,22 @@ With the table, each =run= records what every install it builds was built agains
 | =modules_dirs=   | array of string | =EESSI_MODULEPATH=, =EESSI_MODULEPATH_ACCEL= | The EESSI module trees, in order, in place of the ones that the module environment sets.                                                                                                                                                   |
 | =easyconfigs=    | array of string | =$EBROOTEASYBUILD/easybuild/easyconfigs=     | The easyconfig trees that =watch= gives =eb-stack stack shard= under those of EESSI and of the target, in which it finds the easyconfig of an EESSI module that vanished; the default reads =EBROOTEASYBUILD= from the module environment. |
 | =rebuild_review= | boolean         | =true=                                       | Whether =watch= rebuilds an install when a dependency that =eb-stack rebuild-set= classes =review= changed or vanished; =false= keeps the install, with a =WARN= line.                                                                     |
+| =abi_drift=      | table           | none                                         | Opt-in host ABI drift checks for =watch=. Changed fields map to provider easyconfigs, which =watch= gives to =eb-stack rebuild-set --changed=.                                               |
 
 The paths are absolute, which =check= checks.
 The install prefix is the =site_prefix= of the target, else =filesystems.install_root=.
 A record that fails is a =WARN= line, and the run exits as it would have without the table.
+
+** =[watch.abi_drift]=
+
+With the table and =enabled = true=, =watch= runs each command of =probe= in the target environment, trims each command's standard output, and compares the resulting field map with the baseline in the watch state.
+For each field whose value changed, =watch= reads =providers.FIELD= and passes those easyconfig file names to =eb-stack rebuild-set --changed=.
+
+| Key         | Type                     | Default | Meaning                                                                                                                                             |
+|-------------+--------------------------+---------+-----------------------------------------------------------------------------------------------------------------------------------------------------|
+| =enabled=   | boolean                  | =false= | =true= enables ABI drift checks; =false= leaves =watch= byte-identical to earlier behavior.                                                       |
+| =probe=     | table of string          | ={}=    | One shell command per field; each command's trimmed standard output is the field value. Required when enabled.                                    |
+| =providers= | table of array of string | ={}=    | One provider easyconfig file-name list per field. A changed field with no providers is refused, as =watch= cannot compute a selective rebuild set. |
 
 ** See also
 
