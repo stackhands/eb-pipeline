@@ -1,0 +1,1 @@
+A test covers a record whose probe the job directory wrapper of `filesystems.job_dir` stops. It checks that the record's warning quotes the wrapper's line, and that the run and the record otherwise go as for any record that fails.

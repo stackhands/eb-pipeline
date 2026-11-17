@@ -5,7 +5,6 @@
 mod common;
 
 use common::*;
-use std::path::PathBuf;
 use std::process::Output;
 
 const WATCH: &str = "[watch]\neasyconfigs = [\"@ROOT@/robot\"]\n";
@@ -599,34 +598,11 @@ while [ $# -gt 0 ]; do case $1 in -*) shift ;; *) break ;; esac; done
 SLURM_JOB_ID=4242 SLURM_JOB_USER=alice exec "$@"
 "#;
 
-/// Start each command of the site through the stand-in srun, with
-/// `build_path` in a job directory under `local/`, which holds none yet.
-fn with_job_dirs(t: &T) -> PathBuf {
-    let srun = t.stubs.join("srun");
-    write_exec(&srun, SRUN);
-    let local = t.root().join("local");
-    let text = std::fs::read_to_string(&t.site)
-        .unwrap()
-        .replace(
-            "kind = \"local\"",
-            &format!("kind = \"slurm\"\nlaunch = \"{}\"", srun.display()),
-        )
-        .replace(
-            &format!("build_path = \"{}/build\"", t.root().display()),
-            &format!(
-                "job_dir = \"{}/{{user}}.{{job}}\"\nbuild_path = \"{{job_dir}}/build\"",
-                local.display()
-            ),
-        );
-    std::fs::write(&t.site, text).unwrap();
-    local
-}
-
 #[test]
 fn a_probe_that_its_job_directory_stops_quotes_why() {
     let t = setup(WATCH);
     stack(&t);
-    let local = with_job_dirs(&t);
+    let local = with_job_dirs(&t, SRUN);
     let vars = eessi_vars(&t, "2023.06");
     let log = t
         .root()

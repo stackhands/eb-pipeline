@@ -263,6 +263,90 @@ fn a_record_that_fails_keeps_its_work_directory_but_not_the_environment() {
     }
 }
 
+/// A stand-in for srun, and for the prolog and epilog of its node: each job
+/// is the next job of alice, in a directory under `local/` that goes when
+/// the job ends. A job of the phase that STUB_NO_JOB_DIR names gets none.
+const SRUN: &str = r#"#!/bin/sh
+D="${STUB_DIR:?}"
+job=$(( $(cat "$D/srun.jobs" 2>/dev/null || echo 0) + 1 ))
+echo "$job" > "$D/srun.jobs"
+phase=
+while [ $# -gt 0 ]; do
+  case $1 in
+    --job-name=*) phase=${1##*-} ;;
+    -*) ;;
+    *) break ;;
+  esac
+  shift
+done
+dir="$D/local/alice.$job"
+[ -n "${STUB_NO_JOB_DIR:-}" ] && [ "$phase" = "$STUB_NO_JOB_DIR" ] || mkdir -p "$dir"
+SLURM_JOB_ID=$job SLURM_JOB_USER=alice "$@"
+code=$?
+rm -rf "$dir"
+exit "$code"
+"#;
+
+#[test]
+fn a_record_that_its_job_directory_stops_quotes_why_and_fails_as_any_record_does() {
+    let t = setup(WATCH);
+    eessi(&t);
+    let local = with_job_dirs(&t, SRUN);
+    let vars = eessi_vars(&t, "2023.06");
+    let o = run(
+        &t,
+        "cpu",
+        STAMP,
+        "Bar-2.0-GCCcore-13.2.0.eb\n",
+        &with(&vars),
+    );
+    let err = stderr(&o);
+    assert_eq!(code(&o), 0, "{err}");
+    assert!(
+        err.contains("INFO [watch] cpu: recorded 1 against EESSI 2023.06 x86_64/generic: Bar/2.0-GCCcore-13.2.0"),
+        "{err}"
+    );
+    let state = t.root().join("install/.eb-pipeline-watch/cpu.json");
+    let recorded = std::fs::read(&state).unwrap();
+
+    // The node of the next run's record makes no directory for its job.
+    let later = "20260102_000000";
+    let mut no_dir = with(&vars);
+    no_dir.push(("STUB_NO_JOB_DIR", "watch"));
+    let o = run(&t, "cpu", later, "Foo-1.0-GCCcore-13.2.0.eb\n", &no_dir);
+    let err = stderr(&o);
+    assert_eq!(code(&o), 0, "{err}");
+    let job = std::fs::read_to_string(t.root().join("srun.jobs")).unwrap();
+    let job = job.trim();
+    let work = t
+        .root()
+        .join("scratch/eb-pipeline-watch/cpu")
+        .join(later)
+        .join("record");
+    let want = format!(
+        "WARN [watch] cpu: Foo/1.0-GCCcore-13.2.0 not recorded: the module environment of target cpu did not load (exit 1); its output is in {}: \"eb-pipeline: job {job} has no directory {}/alice.{job} that it can write to, which filesystems.job_dir names\"; no EESSI change under them is seen until watch --adopt records them\nINFO [summary] cpu: summary.json and summary.html written in {}\n",
+        work.join("eessi-probe.log").display(),
+        local.display(),
+        t.run_dir(later).display()
+    );
+    assert!(err.ends_with(&want), "{want} does not end\n{err}");
+
+    // Otherwise it fails as any record does: the build stands, the record
+    // is as it was, and the work directory stays without the environment.
+    let result: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(t.root().join("result-cpu.json")).unwrap())
+            .unwrap();
+    assert_eq!(result["lines"][0]["status"], "success");
+    assert_eq!(std::fs::read(&state).unwrap(), recorded);
+    let files: Vec<String> = std::fs::read_dir(&work)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(files, ["eessi-probe.log"]);
+    let calls = t.calls("ebstack");
+    assert!(!calls.contains(later), "{calls}");
+}
+
 #[test]
 fn watch_paths_must_be_absolute() {
     let t = setup("[watch]\nstate_dir = \"state\"\nmodules_dirs = [\"@ROOT@/eessi\", \"rel\"]\n");
