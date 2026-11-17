@@ -5,6 +5,7 @@
 mod common;
 
 use common::*;
+use std::path::PathBuf;
 use std::process::Output;
 
 const WATCH: &str = "[watch]\neasyconfigs = [\"@ROOT@/robot\"]\n";
@@ -540,6 +541,79 @@ fn watch_refuses_without_its_table_waits_for_another_watch_and_for_eessi() {
         "{}",
         stderr(&o)
     );
+}
+
+/// A stand-in for srun that drops its options and runs the command as job
+/// 4242 of alice. With STUB_SRUN_REFUSE set it starts nothing, as srun does
+/// when Slurm refuses the job.
+const SRUN: &str = r#"#!/bin/sh
+if [ -n "${STUB_SRUN_REFUSE:-}" ]; then
+  echo "srun: error: Unable to allocate resources: Invalid account or account/partition combination specified" >&2
+  exit 1
+fi
+while [ $# -gt 0 ]; do case $1 in -*) shift ;; *) break ;; esac; done
+SLURM_JOB_ID=4242 SLURM_JOB_USER=alice exec "$@"
+"#;
+
+/// Start each command of the site through the stand-in srun, with
+/// `build_path` in a job directory under `local/`, which holds none yet.
+fn with_job_dirs(t: &T) -> PathBuf {
+    let srun = t.stubs.join("srun");
+    write_exec(&srun, SRUN);
+    let local = t.root().join("local");
+    let text = std::fs::read_to_string(&t.site)
+        .unwrap()
+        .replace(
+            "kind = \"local\"",
+            &format!("kind = \"slurm\"\nlaunch = \"{}\"", srun.display()),
+        )
+        .replace(
+            &format!("build_path = \"{}/build\"", t.root().display()),
+            &format!(
+                "job_dir = \"{}/{{user}}.{{job}}\"\nbuild_path = \"{{job_dir}}/build\"",
+                local.display()
+            ),
+        );
+    std::fs::write(&t.site, text).unwrap();
+    local
+}
+
+#[test]
+fn a_probe_that_its_job_directory_stops_quotes_why() {
+    let t = setup(WATCH);
+    stack(&t);
+    let local = with_job_dirs(&t);
+    let vars = eessi_vars(&t, "2023.06");
+    let log = t
+        .root()
+        .join("scratch/eb-pipeline-watch/cpu")
+        .join(LATER)
+        .join("plan/eessi-probe.log");
+    let error = format!(
+        "ERROR [main] -: the module environment of target cpu did not load (exit 1); its output is in {}",
+        log.display()
+    );
+
+    let o = watch(&t, LATER, &["--dry-run"], &with(&vars));
+    let err = stderr(&o);
+    assert_eq!(code(&o), 75, "{err}");
+    let want = format!(
+        "{error}: \"eb-pipeline: job 4242 has no directory {}/alice.4242 that it can write to, which filesystems.job_dir names\"\n",
+        local.display()
+    );
+    assert!(err.ends_with(&want), "{want} does not end\n{err}");
+
+    // Another failure of the job leaves the error as it was.
+    let mut refused = with(&vars);
+    refused.push(("STUB_SRUN_REFUSE", "1"));
+    let o = watch(&t, LATER, &["--dry-run"], &refused);
+    let err = stderr(&o);
+    assert_eq!(code(&o), 75, "{err}");
+    assert!(err.ends_with(&format!("{error}\n")), "{err}");
+
+    std::fs::create_dir_all(local.join("alice.4242")).unwrap();
+    let o = watch(&t, LATER, &["--dry-run"], &with(&vars));
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
 }
 
 #[test]

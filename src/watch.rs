@@ -7,6 +7,7 @@
 use crate::eessi::{self, Module, Probe};
 use crate::exit::{self, Fail};
 use crate::plan::{module_rel, read_units, Planner};
+use crate::resolve::job_dir_refusal;
 use crate::run::{exec_logged, log, RunResult};
 use crate::schema::{Site, Watch};
 use crate::tools::{self, Tool};
@@ -216,10 +217,14 @@ pub fn probe(p: &Planner, work: &Path) -> Result<(Probe, BTreeMap<String, String
     // the work directory can outlive the run.
     let _ = std::fs::remove_file(&out);
     if code != 0 || bytes.is_empty() {
+        let output = std::fs::read(&log_path).unwrap_or_default();
+        let why = job_dir_refusal(&String::from_utf8_lossy(&output))
+            .map(|l| format!(": \"{l}\""))
+            .unwrap_or_default();
         return Err(Fail::new(
             exit::TEMPFAIL,
             format!(
-                "the module environment of target {target} did not load (exit {code}); its output is in {}",
+                "the module environment of target {target} did not load (exit {code}); its output is in {}{why}",
                 log_path.display()
             ),
         ));

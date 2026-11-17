@@ -571,6 +571,14 @@ EASYBUILD_TMPDIR=$(sub \"$EASYBUILD_TMPDIR\" '{job_dir}' \"$d\")
 export EB_PIPELINE_JOB_DIR EASYBUILD_BUILDPATH EASYBUILD_TMPDIR
 exec \"$@\"";
 
+/// The first line of `log` in which [`JOB_DIR_SCRIPT`] says why it started no
+/// command, trimmed.
+pub fn job_dir_refusal(log: &str) -> Option<&str> {
+    log.lines()
+        .map(str::trim)
+        .find(|l| l.contains("eb-pipeline: ") && l.contains("filesystems.job_dir names"))
+}
+
 /// Shells that `modules.shell` may name, by name or by path. The wrapper
 /// needs a POSIX shell, which splits an unquoted expansion at white space and
 /// takes `set -f`: zsh does neither, and csh, tcsh and fish cannot parse it.
@@ -687,4 +695,30 @@ pub fn explain(
         },
         "targets": targets,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_first_refusal_of_the_job_directory_wrapper_is_found_trimmed() {
+        let refusals: Vec<&str> = JOB_DIR_SCRIPT
+            .lines()
+            .filter(|l| l.contains(">&2"))
+            .collect();
+        assert_eq!(refusals.len(), 2, "{refusals:?}");
+        for l in refusals {
+            assert!(job_dir_refusal(l).is_some(), "{l}");
+        }
+        let log = "srun: error: node01: task 0: Exited with exit code 1\n  eb-pipeline: job 6 has no directory /local/alice.6 that it can write to, which filesystems.job_dir names \r\neb-pipeline: SLURM_JOB_ID is not set, so filesystems.job_dir names no directory\n";
+        assert_eq!(
+            job_dir_refusal(log),
+            Some("eb-pipeline: job 6 has no directory /local/alice.6 that it can write to, which filesystems.job_dir names")
+        );
+        assert_eq!(
+            job_dir_refusal("srun: error: node01: task 0: Exited with exit code 1\n"),
+            None
+        );
+    }
 }
