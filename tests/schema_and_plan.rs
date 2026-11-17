@@ -987,6 +987,82 @@ fn cpu_hardware_applies_to_cpu_role_units() {
     assert_eq!(env_of("build:Foo-1.0")["EB_PIPELINE_HW_MODEL"], "2");
 }
 
+/// The hardware class reaches the source prefetch and build commands of the
+/// lines, which build for one class of node, and no other command; the
+/// schema text of `cpu_hardware` says so.
+#[test]
+fn only_prefetch_and_build_commands_carry_the_hardware_class() {
+    let d = tempfile::tempdir().unwrap();
+    let sp = d.path().join("sp");
+    std::fs::create_dir(&sp).unwrap();
+    std::fs::write(sp.join("cpu.list"), "Pre-1.0.eb\n").unwrap();
+    std::fs::write(sp.join("s.list"), "Foo-1.0.eb\n").unwrap();
+    std::fs::write(
+        sp.join("plan.json"),
+        r#"{"cpu_prerequisites":{"file":"cpu.list","inode_footprint":5},"shards":[{"name":"shard-01","file":"s.list","inode_footprint":7}]}"#,
+    )
+    .unwrap();
+    let l = d.path().join("l.txt");
+    std::fs::write(&l, "Pre-1.0.eb\nFoo-1.0.eb\n").unwrap();
+    let o = bin()
+        .args(["plan", "--site"])
+        .arg(example("eessi-site.toml"))
+        .arg("--list")
+        .arg(&l)
+        .args(["--target", "gpu-a", "--build-type", "production"])
+        .arg("--shard-plan")
+        .arg(&sp)
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    let mut kinds = std::collections::BTreeSet::new();
+    let mut models = std::collections::BTreeMap::new();
+    for p in v["phases"].as_array().unwrap() {
+        assert!(p["env"].get("EB_PIPELINE_HW_MODEL").is_none(), "{p}");
+        for c in p["commands"].as_array().unwrap() {
+            let name = c["name"].as_str().unwrap();
+            kinds.insert(name.split(':').next().unwrap().to_string());
+            if let Some(m) = c.get("env").and_then(|e| e.get("EB_PIPELINE_HW_MODEL")) {
+                models.insert(name.to_string(), m.as_str().unwrap().to_string());
+            }
+        }
+    }
+    assert_eq!(
+        kinds.into_iter().collect::<Vec<_>>(),
+        [
+            "admit",
+            "build",
+            "cache",
+            "fetch",
+            "keep-failed",
+            "probe",
+            "rotate",
+            "shard"
+        ]
+    );
+    let model = |n: &str| models.get(n).map(String::as_str);
+    assert_eq!(model("fetch:Pre-1.0"), Some("17"));
+    assert_eq!(model("build:Pre-1.0"), Some("17"));
+    assert_eq!(model("fetch:Foo-1.0"), Some("1"));
+    assert_eq!(model("build:Foo-1.0"), Some("1"));
+    assert_eq!(models.len(), 4, "{models:?}");
+    let doc = eb_pipeline::schema::Target::FIELDS
+        .iter()
+        .find(|f| f.key == "cpu_hardware")
+        .unwrap()
+        .doc;
+    assert!(
+        doc.contains("source prefetch and build commands") && !doc.contains("every command"),
+        "{doc}"
+    );
+}
+
 #[test]
 fn target_package_env_wins_per_key() {
     let site = with_target("[targets.package_env.Foo]\nB = \"target\"\nC = \"target\"\n").replace(

@@ -281,9 +281,10 @@ doc_struct! {
         route: Option<Route> => ("table", "none", false, "CPU phase wrapper."),
         select: Option<Select> => ("table", "none", false,
             "Per-line target selection; without it every line is planned for every target."),
-        hardware: Option<Hardware> => ("table", "none", false, "Hardware identity."),
+        hardware: Option<Hardware> => ("table", "none", false,
+            "Hardware identity of the target's build nodes; exported only when `cpu_hardware` is set."),
         cpu_hardware: Option<Hardware> => ("table", "none", false,
-            "Hardware identity of CPU-role phases. When set, every command exports its class as EB_PIPELINE_HW_VENDOR_ID, EB_PIPELINE_HW_CPU_FAMILY and EB_PIPELINE_HW_MODEL: `cpu_hardware` for CPU-role commands, `hardware` for the rest."),
+            "Hardware identity of the nodes that build CPU-role units. When set, the source prefetch and build commands of each line export a class as EB_PIPELINE_HW_VENDOR_ID, EB_PIPELINE_HW_CPU_FAMILY and EB_PIPELINE_HW_MODEL: `cpu_hardware` for a line of a CPU-role unit, `hardware` for the rest. No other command exports them."),
         fetch_profile: Option<toml::Table> => ("table", "none", false,
             "Free-form table passed to source prefetch commands as EB_PIPELINE_FETCH_PROFILE, serialised as JSON with sorted keys."),
         #[serde(default)]
