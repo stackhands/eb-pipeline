@@ -22,6 +22,7 @@ The title names the task.
    staged-rebuilds
    select-lines
    from-eb-stack
+   check-oom-before-building
    follow-runs
    run-tests-for-what-you-built
    rebuild-when-eessi-changes

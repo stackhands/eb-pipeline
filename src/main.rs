@@ -167,6 +167,12 @@ enum Cmd {
         /// Print the commands that would run and start nothing.
         #[arg(long)]
         dry_run: bool,
+        /// Ask `eb-stack stack oom` whether any planned package exceeds this node.
+        #[arg(long, requires = "node")]
+        oom_preflight: bool,
+        /// Node size for `--oom-preflight`, as `CORES:MEMORY_MIB[:TARGET]`.
+        #[arg(long, requires = "oom_preflight")]
+        node: Option<String>,
     },
     /// Rebuild the recorded installs an EESSI change reaches, in dependency order.
     #[command(after_long_help = WATCH_EXIT)]
@@ -459,6 +465,7 @@ struct Mode<'a> {
     shard_plan: Option<&'a Path>,
     dry: bool,
     is_run: bool,
+    oom_node: Option<&'a str>,
 }
 
 fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
@@ -468,6 +475,7 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         shard_plan,
         dry,
         is_run,
+        oom_node,
     } = m;
     if let Some(stamp) = c.log_stamp.as_deref().filter(|s| !util::is_log_stamp(s)) {
         return Err(Fail::usage(format!(
@@ -557,6 +565,7 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         &Options {
             dry_run: dry,
             shard_units: saved_units.as_deref(),
+            oom_node,
         },
     );
     if let Some(m) = &res.message {
@@ -920,6 +929,7 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
         &Options {
             dry_run: false,
             shard_units: None,
+            oom_node: None,
         },
     );
     if let Some(m) = &res.message {
@@ -996,6 +1006,7 @@ fn main() {
                 shard_plan: shard_plan.as_deref(),
                 dry: false,
                 is_run: false,
+                oom_node: None,
             },
         ),
         Cmd::Run {
@@ -1003,6 +1014,8 @@ fn main() {
             result,
             shard_plan,
             dry_run,
+            oom_preflight: _,
+            node,
         } => cmd_plan_or_run(
             common,
             Mode {
@@ -1011,6 +1024,7 @@ fn main() {
                 shard_plan: shard_plan.as_deref(),
                 dry: *dry_run,
                 is_run: true,
+                oom_node: node.as_deref(),
             },
         ),
         Cmd::Watch {

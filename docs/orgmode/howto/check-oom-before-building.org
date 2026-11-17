@@ -1,0 +1,32 @@
+#+TITLE: Check for OOM risks before building
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Check for OOM risks before building
+
+Use the optional OOM preflight when a run should stop before EasyBuild starts any planned package that eb-stack predicts will exceed the node's memory.
+
+Give the node's core count and memory in MiB:
+
+#+begin_src bash
+eb-pipeline run \
+  --site site.toml \
+  --list build.yml \
+  --target cpu \
+  --build-type production \
+  --oom-preflight \
+  --node 32:65536:x86_64/amd/zen4
+#+end_src
+
+eb-pipeline writes the selected package names to =oom-preflight.yml= in the run log directory and starts:
+
+#+begin_example
+eb-stack stack oom --easystack LOG_DIR/oom-preflight.yml --node 32:65536:x86_64/amd/zen4
+#+end_example
+
+An =oom= count greater than zero skips every planned build and exits 78.
+Read =oom-preflight.log= in the same directory for eb-stack's package-specific explanation.
+If eb-stack fails or prints no single =oom=N= summary line, the run fails before a package starts.
+
+Leave out =--oom-preflight= for the usual run with no memory check.
+All memory estimates and package rules come from eb-stack; eb-pipeline only passes the plan and reads its summary.

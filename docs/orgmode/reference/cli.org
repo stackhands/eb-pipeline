@@ -225,9 +225,13 @@ Exit 2 means the file is missing, is not JSON, or its =kind= is not =result=.
 | =--result FILE=    | Write the result file to =FILE= when the run ends. Without it, no result file is written. An error in the input, which stops the run before it starts, leaves an existing =FILE= as it was.                   |
 | =--shard-plan DIR= | Read the units from a plan previously written by =eb-stack stack shard=. The run does not call the shard planner or require its installed-module-directory environment variables.                           |
 | =--dry-run=        | Print each command of the plan on stdout and start nothing. No result file or summary is written, even with =--result=.                                                                                       |
+| =--oom-preflight=  | Before any package starts, ask =eb-stack stack oom= about the planned packages. Requires =--node=. Without this option no OOM check runs.                                                                       |
+| =--node NODE=      | The node passed to =eb-stack stack oom=, as =CORES:MEMORY_MIB= or =CORES:MEMORY_MIB:TARGET=. Requires =--oom-preflight=.                                                                                      |
 
 =--run-id= defaults to the log stamp, and =--log-stamp= to the UTC time at which the run starts, taken once.
 A line that =eb-staged-rebuild= builds passes =RUN_ID-STEM= as its run id, where =STEM= is the easyconfig file name without =.eb=, with =.2=, =.3= and so on added when the list repeats the line.
+When the OOM count is greater than zero, the preflight is refused, every planned package is recorded as skipped, and the run exits 78.
+The command reads only the =oom=N= summary line from eb-stack; eb-pipeline does not estimate memory itself.
 
 With =--dry-run=, a planned command prints as =[PHASE] COMMAND= and a phase that starts nothing as =# [PHASE] STATUS=.
 
