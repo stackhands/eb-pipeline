@@ -230,10 +230,19 @@ allocated task, so give each role a task count; the templates use
   holds between nodes only where the log root's filesystem carries `flock`
   between them. An eb-keep-logs that takes a lock of its own holds
   `<log_root>/.eb-keep-logs-rotate.lock` for the whole rotation, and exits 75
-  when another rotate holds it past `--lock-timeout`, 600 seconds unless
-  given, having changed nothing. `logs` is then `skipped`, with a note that
-  names that lock, and the rotation is left to the rotate that holds it. Any
-  other non-zero exit of `rotate` is `failed`.
+  when another rotate holds it past `--lock-timeout`, having changed nothing.
+  `logs` is then `skipped`, with a note that names that lock, and the
+  rotation is left to the rotate that holds it: that rotate lists the log
+  root after taking the lock, so it does this rotation's work, and a later
+  run that ends alone does what is left. Any other non-zero exit of `rotate`
+  is `failed`. `run` passes `--lock-timeout 0`, so that the rotation does not
+  wait: the run holds `.eb-pipeline-rotate.lock` alone while it rotates, and
+  every run under the log root that starts meanwhile waits for it.
+  eb-keep-logs 0.2.1 refuses `--lock-timeout` with exit 2, and the builds
+  that take it print the same version, so `run` passes the option only when
+  `eb-keep-logs --help`, run where eb-pipeline runs as the `min_version`
+  checks are, lists it. Otherwise the rotation runs without it, and the
+  `logs` note and an INFO line say why.
 
 ### Per-target line selection
 

@@ -3,7 +3,8 @@
 use crate::exit::{self, Fail};
 use crate::schema::{Site, ToolSpec};
 use crate::util::{cmp_version, find_version, parse_version};
-use std::process::Command;
+use std::collections::BTreeMap;
+use std::process::{Command, Stdio};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
@@ -79,6 +80,27 @@ pub fn probe(bin: &str) -> Result<Vec<u64>, String> {
     );
     find_version(&text)
         .ok_or_else(|| format!("`{bin} --version` printed no version: {}", text.trim()))
+}
+
+/// Whether `bin --help`, run with `env`, lists `option` on stdout.
+/// eb-keep-logs took `rotate --lock-timeout` without a version of its own:
+/// its Zig build says 0.2.1, and its shell script 0.1.0, with the option
+/// and without it.
+pub fn help_lists(bin: &str, env: &BTreeMap<String, String>, option: &str) -> Result<bool, String> {
+    let out = Command::new(bin)
+        .arg("--help")
+        .envs(env)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("cannot run `{bin} --help`: {e}"))?;
+    if !out.status.success() {
+        let code = out
+            .status
+            .code()
+            .map_or_else(|| out.status.to_string(), |c| c.to_string());
+        return Err(format!("`{bin} --help` exited {code}"));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).contains(option))
 }
 
 /// Check minimum versions of the tools the site needs. With `probe_all`,
