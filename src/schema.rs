@@ -201,7 +201,7 @@ doc_struct! {
             "Root of the route's runtime; exported as EB_PIPELINE_ROUTE_RUNTIME_ROOT and available as {runtime_root}."),
         #[serde(default)]
         shares_ro: Vec<String> => ("array of string", "[]", false,
-            "Paths shared read-only into the route; placeholders {phase_dir}, {log_dir}, {work_dir} allowed. Exported joined with `:` as EB_PIPELINE_ROUTE_SHARES_RO."),
+            "Paths shared read-only into the route; placeholders {phase_dir}, {log_dir}, {work_dir}, {target}, {phase} allowed, as in `args`. Exported joined with `:` as EB_PIPELINE_ROUTE_SHARES_RO."),
         #[serde(default)]
         shares_rw: Vec<String> => ("array of string", "[]", false,
             "Paths shared read-write into the route; same placeholders as `shares_ro`. Exported as EB_PIPELINE_ROUTE_SHARES_RW."),
