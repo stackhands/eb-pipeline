@@ -18,4 +18,5 @@ The title names the task.
    rotate-logs
    staged-rebuilds
    select-lines
+   from-eb-stack
 #+end_export

@@ -615,10 +615,11 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
     };
 
     // selection: lines the target's selector leaves out are recorded, not built;
-    // the kept lines go to a file that the shard planner reads
+    // the kept lines, or the lines read from an easystack, go to a file that
+    // the shard planner reads
     let (kept, deselected) = p.select_lines(lines);
     let has_select = p.selected_list_path().is_some();
-    if let Some(path) = p.selected_list_path() {
+    if let Some(path) = p.selected_list_path().or_else(|| p.easystack_list_path()) {
         let mut text = kept
             .iter()
             .map(|l| l.raw.as_str())

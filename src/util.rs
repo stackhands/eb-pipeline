@@ -34,6 +34,19 @@ pub fn split_args(s: &str) -> Result<Vec<String>, Fail> {
     Ok(out)
 }
 
+/// Quote `a` for a shell, or for a build list line: as it is when it holds
+/// only characters a shell leaves alone, else in single quotes.
+pub fn quote(a: &str) -> String {
+    if !a.is_empty()
+        && a.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./=:,@%+".contains(c))
+    {
+        a.to_string()
+    } else {
+        format!("'{}'", a.replace('\'', "'\\''"))
+    }
+}
+
 /// Whether `s` is a log stamp: a UTC time as `YYYYMMDD_HHMMSS`, the name
 /// `eb-keep-logs rotate` ages as a run directory.
 pub fn is_log_stamp(s: &str) -> bool {

@@ -96,16 +96,16 @@ eb-pipeline 0.3.0
 The first argument names the command.
 No command takes an argument other than its options.
 
-| Command   | What it does                                                                                                                                                   |
-|-----------+----------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| =check=   | Read the site file, check it against every rule of [[file:site-file.org][The site file]], and print warnings about settings that are valid but probably wrong. |
-| =schema=  | Print every key of the site file with its type, its default and what it does, section by section.                                                              |
-| =init=    | Print a built-in template site file, or write it to a new file.                                                                                                |
-| =explain= | Print what each target resolves to: paths, launch lines and the environment of its commands.                                                                   |
-| =targets= | Print the names of the targets in the order of the site file.                                                                                                  |
-| =plan=    | Print the plan of a run as JavaScript Object Notation (JSON): its phases and every command with its launch line and environment. It starts nothing.            |
-| =run=     | Run the phases of the plan, one command at a time, and write the result file.                                                                                  |
-| =help=    | Print the help of the program, or of the command it names.                                                                                                     |
+| Command   | What it does                                                                                                                                        |
+|-----------+-----------------------------------------------------------------------------------------------------------------------------------------------------|
+| =check=   | Read the site file, check it against every rule of [[file:site-file.org][The site file]], and print warnings about settings that are valid but probably wrong.              |
+| =schema=  | Print every key of the site file with its type, its default and what it does, section by section.                                                   |
+| =init=    | Print a built-in template site file, or write it to a new file.                                                                                     |
+| =explain= | Print what each target resolves to: paths, launch lines and the environment of its commands.                                                        |
+| =targets= | Print the names of the targets in the order of the site file.                                                                                       |
+| =plan=    | Print the plan of a run as JavaScript Object Notation (JSON): its phases and every command with its launch line and environment. It starts nothing. |
+| =run=     | Run the phases of the plan, one command at a time, and write the result file.                                                                       |
+| =help=    | Print the help of the program, or of the command it names.                                                                                          |
 
 ** Options
 
@@ -169,7 +169,7 @@ It shows =<run-id>= and =<log-stamp>= where a run puts its own.
 | Option              | Variable                 | Meaning                                                                                                                                                                          |
 |---------------------+--------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | =--site FILE=       | =EB_PIPELINE_SITE=       | The site file; required.                                                                                                                                                         |
-| =--list FILE=       | =EB_PIPELINE_LIST=       | The build list; required.                                                                                                                                                        |
+| =--list FILE=       | =EB_PIPELINE_LIST=       | The build list, or an easystack: a file whose name ends in =.yml= or =.yaml=; required.                                                                                          |
 | =--target NAME=     | =EB_PIPELINE_TARGET=     | The target to build on; required.                                                                                                                                                |
 | =--build-type NAME= | =EB_PIPELINE_BUILD_TYPE= | The build type; required. A name without a =[targets.build_types.NAME]= table takes the values of the target.                                                                    |
 | =--run-id ID=       | =EB_PIPELINE_RUN_ID=     | The run label passed to the tools; =<run-id>= when absent.                                                                                                                       |
@@ -199,28 +199,28 @@ Each option in the tables above that names a variable reads it when the option i
 
 ** Exit status
 
-| Status | Meaning                                                                                                                                                                                                         |
-|--------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-|      0 | All requested work completed.                                                                                                                                                                                   |
-|      1 | =run=: a line or a phase failed. =plan=: the shard plan could not be read. Any command: an output file could not be written.                                                                                    |
-|      2 | A usage error, an invalid site file, an unknown target, a list that cannot be read, is empty or has a quote that is not closed, a tool below its =min_version=, or an =init --out= file that cannot be created. |
-|     75 | =run=: a resource was busy or a step is pending; run it again.                                                                                                                                                  |
-|     78 | =run=: a precondition, admission or =eb-staged-rebuild= refused.                                                                                                                                                |
-|    130 | =run=: interrupted by =SIGINT=.                                                                                                                                                                                 |
-|    143 | =run=: interrupted by =SIGTERM=.                                                                                                                                                                                |
+| Status | Meaning                                                                                                                                                                                                                                                      |
+|--------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+|      0 | All requested work completed.                                                                                                                                                                                                                                |
+|      1 | =run=: a line or a phase failed. =plan=: the shard plan could not be read. Any command: an output file could not be written.                                                                                                                                 |
+|      2 | A usage error, an invalid site file, an unknown target, a list that cannot be read, is empty or has a quote that is not closed, an easystack that gives no lines as written, a tool below its =min_version=, or an =init --out= file that cannot be created. |
+|     75 | =run=: a resource was busy or a step is pending; run it again.                                                                                                                                                                                               |
+|     78 | =run=: a precondition, admission or =eb-staged-rebuild= refused.                                                                                                                                                                                             |
+|    130 | =run=: interrupted by =SIGINT=.                                                                                                                                                                                                                              |
+|    143 | =run=: interrupted by =SIGTERM=.                                                                                                                                                                                                                             |
 
 The commands other than =run= exit 0, 1 or 2.
 [[file:exit-status.org][Exit status]] has the cases behind each status, how =run= picks one when several apply, and how it reads the exit statuses of the tools it starts.
 
 ** Files
 
-| File                            | Use                                                                                                                                                                    |
-|---------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| the site file, =--site=         | Everything about the site; [[file:site-file.org][The site file]] lists its keys.                                                                                       |
-| the build list, =--list=        | One easyconfig per line, followed by the options =eb= gets for it, as =Name-version-toolchain.eb [eb options]=. Blank lines and lines that start with =#= are skipped. |
-| the plan, =plan --out=          | What =plan= prints; [[file:plan-and-result.org][The plan and result files]] lists its keys.                                                                            |
-| the result file, =run --result= | What the run did, line by line and phase by phase; [[file:plan-and-result.org][The plan and result files]] lists its keys.                                             |
-| =LOG_ROOT/LOG_STAMP/TARGET/=    | The log directory of a run, under =filesystems.log_root=; [[file:log-tree.org][The log tree and its locks]] lists its files.                                           |
+| File                            | Use                                                                                                                                                                                                                                                                                                                   |
+|---------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| the site file, =--site=         | Everything about the site; [[file:site-file.org][The site file]] lists its keys.                                                                                                                                                                                                                                                              |
+| the build list, =--list=        | One easyconfig per line, followed by the options =eb= gets for it, as =Name-version-toolchain.eb [eb options]=. Blank lines and lines that start with =#= are skipped. A =.yml= or =.yaml= file is an EasyBuild easystack instead, each of whose =easyconfigs= entries is a line, as [[file:../howto/from-eb-stack.org][Build what eb-stack plans]] shows. |
+| the plan, =plan --out=          | What =plan= prints; [[file:plan-and-result.org][The plan and result files]] lists its keys.                                                                                                                                                                                                                                                         |
+| the result file, =run --result= | What the run did, line by line and phase by phase; [[file:plan-and-result.org][The plan and result files]] lists its keys.                                                                                                                                                                                                                          |
+| =LOG_ROOT/LOG_STAMP/TARGET/=    | The log directory of a run, under =filesystems.log_root=; [[file:log-tree.org][The log tree and its locks]] lists its files.                                                                                                                                                                                                                 |
 
 A list line is split into words as a shell splits them, with single and double quotes.
 

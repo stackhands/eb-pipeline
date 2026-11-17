@@ -2,10 +2,11 @@
 //!
 //! The planner is pure. `run` executes the commands built here.
 
+use crate::easystack::is_easystack;
 use crate::exit::{self, Fail};
 use crate::resolve::{Role, Scope};
 use crate::tools::Tool;
-use crate::util::{parse_list, ListLine};
+use crate::util::{parse_list, quote, ListLine};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -266,9 +267,26 @@ impl<'a> Planner<'a> {
         )
     }
 
-    /// The list `stack shard` reads: the selected list when there is one.
+    /// Where a run writes the lines it read from an easystack, which
+    /// `stack shard` reads as a build list; with a selector, the selected
+    /// list holds them.
+    pub fn easystack_list_path(&self) -> Option<PathBuf> {
+        if self.scope.target.select.is_some() || !is_easystack(Path::new(&self.list_path)) {
+            return None;
+        }
+        Some(
+            PathBuf::from(self.scope.log_dir())
+                .join(format!("easystack-{}.list", self.scope.target.name)),
+        )
+    }
+
+    /// The list `stack shard` reads: the selected list when there is one,
+    /// else the lines read from an easystack, else the list as given.
     fn shard_list(&self) -> String {
-        match self.selected_list_path() {
+        match self
+            .selected_list_path()
+            .or_else(|| self.easystack_list_path())
+        {
             Some(p) => p.display().to_string(),
             None => self.list_path.clone(),
         }
@@ -945,17 +963,6 @@ pub fn shell_line(c: &Cmd) -> String {
             .join(" "),
     );
     s
-}
-
-fn quote(a: &str) -> String {
-    if !a.is_empty()
-        && a.chars()
-            .all(|c| c.is_ascii_alphanumeric() || "-_./=:,@%+".contains(c))
-    {
-        a.to_string()
-    } else {
-        format!("'{}'", a.replace('\'', "'\\''"))
-    }
 }
 
 /// A shard-plan `file` value: one name in `dir`, never an absolute path or
