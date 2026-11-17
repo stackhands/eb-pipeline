@@ -1,1 +1,0 @@
-An explanation page says what the targets of a site file share, what goes wrong when two of them build into one build directory, download directory or state root at once, and when `{target}` in those paths lets them build at the same time.

@@ -1,1 +1,0 @@
-The README is short and links the pages of the documentation, which now hold its sections, log rotation included. The tests that read the README read those pages instead, and one fails when the `--help` text on the command reference differs from what `eb-pipeline --help` prints.

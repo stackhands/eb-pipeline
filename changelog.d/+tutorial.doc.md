@@ -1,1 +1,0 @@
-The tutorial, "Run your first build list", installs eb-pipeline from source, writes a site file with the `local` scheduler, runs a build list against a stand-in for `eb`, reads the result file and a line's log, and makes a line fail. `docs/examples/tutorial.sh` runs its commands in order and checks what the page says they print, and the `docs` job of the `ci` workflow runs it.

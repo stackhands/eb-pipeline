@@ -1,1 +1,0 @@
-`eb-pipeline metrics --result FILE` prints the Prometheus text of a result file, or `--format json` for a one-run status. It exits 0 when the file can be read, including when the run failed, and 2 when the file is not a result.

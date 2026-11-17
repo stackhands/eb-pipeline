@@ -1,1 +1,0 @@
-`eb-test-map --map FILE --list FILE` prints the tests that cover the applications in a build list. A toolchain is skipped. An application with no row exits 2 and prints nothing, which fails a `[checks]` command before the caches phase runs.

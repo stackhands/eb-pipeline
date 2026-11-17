@@ -1,1 +1,0 @@
-`check`, and every command that loads the site file, refuses a `modules.init` entry with white space, since an entry is one module name. The module wrapper split such an entry at the white space, so `init = ["A B"]` loaded `A` and `B`, and a pasted `module load A` line loaded `module`, `load` and `A`. Write `init = ["A", "B"]`.

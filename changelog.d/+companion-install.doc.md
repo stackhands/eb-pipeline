@@ -1,1 +1,0 @@
-The README and install how-to document the five companion binaries, verify them after a source install, and use `--root ~/.local` consistently with the first-build tutorial.
