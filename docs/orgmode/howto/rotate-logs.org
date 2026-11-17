@@ -1,0 +1,109 @@
+#+TITLE: Rotate the log tree
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Rotate the log tree
+
+Compress and delete the old run directories under the log root with =eb-keep-logs rotate=, at the end of each run, from cron, or both, without touching the logs of a run that is still writing them.
+
+** Before you start
+
+- eb-keep-logs on the =PATH= of the build account, or named in =[site.tools.eb_keep_logs]= =bin=.
+  A version whose =eb-keep-logs --help= lists =--lock-timeout= takes a lock of its own; eb-keep-logs 0.2.1 takes none.
+- A site file with a =[logs]= table, as in [[file:write-a-site-file.org][Write a site file for your cluster]].
+- For a rotation from cron, the crontab of the build account, and =flock= from util-linux on the host that runs it.
+
+The output on this page comes from =docs/examples/rotation.sh=, which runs a site file with the =local= scheduler and a stand-in for =eb-keep-logs= that prints its arguments.
+
+** Steps
+
+1. Add a =[logs.rotate]= table to the site file, with the age in days at which eb-keep-logs compresses a run directory and, if you want, the age at which it deletes one:
+
+   #+begin_src toml
+   [logs.rotate]
+   compress_after_days = 30
+   delete_after_days = 365
+   #+end_src
+
+2. Check the rotation that a run starts at its end:
+
+   #+begin_src bash
+   eb-pipeline run --site site.toml --list build.list --target cpu --build-type production --dry-run | grep '^\[logs\]'
+   #+end_src
+
+   #+begin_example
+   INFO [run] cpu: dry run: nothing executed
+   [logs] TZ=UTC eb-keep-logs rotate $WORK/logs --compress-after 30 --delete-after 365 --lock-timeout 0
+   #+end_example
+
+   =TZ=UTC= makes eb-keep-logs count the age of a run from the midnight of its log stamp in Coordinated Universal Time (UTC), as the stamp is.
+   A run leaves out =--lock-timeout 0= when =eb-keep-logs --help= does not list it.
+3. Run as before.
+   A run takes =LOG_ROOT/.eb-pipeline-rotate.lock= shared while it writes logs, and rotates at its end only when it can take that lock alone, so a rotation never compresses the logs of a live run; while other runs are live, the last of them to end rotates.
+4. To rotate also when no run ends, as on a quiet day, have cron start =eb-keep-logs rotate= under the same lock, with =flock=:
+
+   #+begin_example
+   15 3 * * * TZ=UTC flock -w 3600 -E 75 /opt/site/logs/.eb-pipeline-rotate.lock eb-keep-logs rotate /opt/site/logs --compress-after 30 --delete-after 365
+   #+end_example
+
+   =flock= waits up to an hour for the live runs and a rotation that holds the lock to end, then holds it alone while =eb-keep-logs rotate= runs, and a run that starts meanwhile waits for it.
+   When the hour runs out, it exits 75 without starting =eb-keep-logs=.
+   Take the lock first and eb-keep-logs' own lock second, as =flock= around =eb-keep-logs rotate= does: [[file:../reference/log-tree.org][The log tree and its locks]] gives the order.
+
+** Check that it worked
+
+After a run, the =logs= phase of its result file is =ok=, and =rotate.log= in its log directory holds what eb-keep-logs printed, here the stand-in's arguments:
+
+#+begin_src bash
+grep -B1 -A1 '"name": "logs"' result.json
+cat logs/20261117_090000/cpu/rotate.log
+#+end_src
+
+#+begin_example
+      "exit_code": 0,
+      "name": "logs",
+      "status": "ok"
+eb-keep-logs rotate $WORK/logs --compress-after 30 --delete-after 365 --lock-timeout 0
+#+end_example
+
+Run the cron line once by hand, here from the parent of the log root =logs=; exit 0, after the line that the stand-in printed, means that eb-keep-logs rotated:
+
+#+begin_src bash
+TZ=UTC flock -w 3600 -E 75 logs/.eb-pipeline-rotate.lock eb-keep-logs rotate logs --compress-after 30 --delete-after 365; echo "exit $?"
+#+end_src
+
+#+begin_example
+eb-keep-logs rotate logs --compress-after 30 --delete-after 365
+exit 0
+#+end_example
+
+While a run under the log root is live, the same line with a wait of one second gives up, and starts nothing:
+
+#+begin_src bash
+TZ=UTC flock -w 1 -E 75 logs/.eb-pipeline-rotate.lock eb-keep-logs rotate logs --compress-after 30 --delete-after 365; echo "exit $?"
+#+end_src
+
+#+begin_example
+exit 75
+#+end_example
+
+** If it fails
+
+A run that does not rotate leaves its =logs= phase =skipped=, with the reason in its note, and keeps its exit status; only a rotation that fails changes it.
+
+| Message                                                                                                                                                                                 | Cause                                                                                                | What to do                                                                                            |
+|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+------------------------------------------------------------------------------------------------------+-------------------------------------------------------------------------------------------------------|
+| =INFO [logs] cpu: rotation skipped: another run under $WORK/logs holds $WORK/logs/.eb-pipeline-rotate.lock, live or rotating; the rotation is left to a run that ends alone=            | Another run under the log root was live when this one ended.                                         | Nothing: the run that ends alone rotates. On a log root that always has a live run, rotate from cron. |
+| =INFO [logs] cpu: waiting: another run rotates and holds $WORK/logs/.eb-pipeline-rotate.lock=                                                                                           | The run started while another run, or the cron line, rotated.                                        | Nothing: the run goes on when the rotation ends.                                                      |
+| =INFO [logs] cpu: rotation skipped: eb-keep-logs rotate exited 75: another rotate holds $WORK/logs/.eb-keep-logs-rotate.lock, and this one changed nothing; the rotation is left to it= | Another =eb-keep-logs rotate= held eb-keep-logs' own lock.                                           | Nothing: that rotate does the work.                                                                   |
+| =INFO [logs] cpu: no --lock-timeout for eb-keep-logs rotate: `eb-keep-logs --help` does not list it, as in eb-keep-logs 0.2.1, which takes no lock of its own=                          | eb-keep-logs 0.2.1, which refuses =--lock-timeout= and keeps no two rotates apart by itself.         | Rotate from cron only with the =flock= line, which keeps it apart from runs and their rotations.      |
+| =ERROR [logs] cpu: eb-keep-logs rotate exited 1=, and the run exits 1                                                                                                                   | =eb-keep-logs rotate= failed.                                                                        | Read =rotate.log= in the run's log directory.                                                         |
+| =WARN [logs] cpu: cannot lock $WORK/other/.eb-pipeline-rotate.lock: Is a directory (os error 21); the rotation does not wait for other runs=                                            | The run cannot take its rotation lock, here because the path is a directory, and rotates without it. | Make the path a file that the build account can write, on a filesystem that supports =flock=.         |
+| Exit 75 from the cron line                                                                                                                                                              | Runs under the log root kept the lock for the hour, or another rotate held eb-keep-logs' lock.       | Nothing: the tree was busy and nothing changed; the next start tries again.                           |
+
+** Related
+
+- [[file:../reference/log-tree.org][The log tree and its locks]]
+- [[file:../reference/site-file.org][The site file]], for =[logs]=
+- [[file:../reference/plan-and-result.org][The plan and result files]], for the statuses of the =logs= phase
+- The [[https://stackhands.github.io/eb-keep-logs/][eb-keep-logs documentation]], for what =rotate= does to a run directory
