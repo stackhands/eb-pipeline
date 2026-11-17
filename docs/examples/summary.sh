@@ -3,7 +3,9 @@
 # of build-from-ci/site.toml with the local scheduler, no modules and its
 # paths under $WORK, run with one log stamp and the stand-in eb of the
 # tutorial, which fails the lines whose easyconfig starts with Broken-; the
-# summary the two runs wrote together, and a run that cannot write one.
+# summary the two runs wrote together, a run that cannot write one, and the
+# POST of the summary that a [notify] table asks for, with a stand-in for
+# curl that writes its arguments and its standard input to curl.log.
 # shellcheck disable=SC2016 # commands stay quoted as the pages show them
 # shellcheck source-path=SCRIPTDIR source=lib.sh
 . "$(dirname -- "$0")/lib.sh"
@@ -54,3 +56,32 @@ run 'mkdir -p site/logs/20261117_100000/summary.json
 eb-pipeline run --site site.toml --list example.list --target zen4 --build-type production --log-stamp 20261117_100000; echo "exit $?"'
 expect_line 'exit 0'
 expect_line 'WARN [summary] zen4: no summary written: $WORK/site/logs/20261117_100000/summary.json: Is a directory (os error 21)'
+
+cp site.toml notify.toml
+printf '\n[notify]\nwebhook_env = "SUMMARY_WEBHOOK"\nwhen = "problems"\n' >>notify.toml
+cat >bin/curl <<'EOF'
+#!/bin/sh
+echo "curl $*" >>"$WORK/curl.log"
+cat >>"$WORK/curl.log"
+if [ -n "${CURL_FAIL:-}" ]; then
+    echo "curl: (22) The requested URL returned error: $CURL_FAIL" >&2
+    exit 22
+fi
+EOF
+chmod +x bin/curl
+
+run 'sed -n "/^\[notify\]/,\$p" notify.toml'
+expect_line 'when = "problems"'
+
+run 'export SUMMARY_WEBHOOK=https://hooks.example.org/build/XXXX
+eb-pipeline run --site notify.toml --list build.list --target zen2 --build-type production --log-stamp 20261117_110000; echo "exit $?"
+eb-pipeline run --site notify.toml --list example.list --target zen4 --build-type production --log-stamp 20261117_110000; echo "exit $?"'
+expect_line 'INFO [notify] zen2: summary.json posted to https://hooks.example.org/...'
+expect_line 'INFO [notify] zen4: the run exited 0 and notify.when is problems; nothing sent'
+
+run 'cat curl.log'
+expect_line 'url = "https://hooks.example.org/build/XXXX"'
+
+run 'CURL_FAIL=500 eb-pipeline run --site notify.toml --list build.list --target zen2 --build-type production --log-stamp 20261117_120000; echo "exit $?"'
+expect_line 'WARN [notify] zen2: POST of summary.json to https://hooks.example.org/... failed: curl exited 22: curl: (22) The requested URL returned error: 500'
+expect_line 'exit 1'

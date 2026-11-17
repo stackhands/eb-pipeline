@@ -547,6 +547,39 @@ doc_struct! {
 }
 
 doc_struct! {
+    /// POST of each run's summary to a webhook.
+    Notify {
+        #[serde(default = "yes")]
+        enabled: bool => ("boolean", "true", false, "Set false to send nothing."),
+        webhook: Option<String> => ("string", "none", false,
+            "`http://` or `https://` URL each run POSTs its run directory's `summary.json` to, once it has written it. A secret: eb-pipeline prints only its scheme and host. Set this or `webhook_env`."),
+        webhook_env: Option<String> => ("string", "none", false,
+            "Environment variable that holds the URL, read when the run ends, which keeps the URL out of the site file. Set this or `webhook`."),
+        #[serde(default = "d_notify_when")]
+        when: String => ("string", "always", false,
+            "`always`, or `problems` to POST only after a run whose exit code is not 0."),
+        #[serde(default = "d_notify_timeout")]
+        timeout_seconds: u64 => ("integer", "10", false,
+            "Longest the POST may take. A POST that fails or times out is a warning; the run's exit code stays as it was."),
+        #[serde(default = "d_curl")]
+        curl: String => ("string", "curl", false,
+            "curl that sends the POST; it reads the URL on its standard input, so the URL is in no process's arguments."),
+    }
+}
+
+fn d_notify_when() -> String {
+    "always".into()
+}
+
+fn d_notify_timeout() -> u64 {
+    10
+}
+
+fn d_curl() -> String {
+    "curl".into()
+}
+
+doc_struct! {
     /// A site file.
     Site {
         schema_version: u32 => ("integer", "", true, "Schema version; 1."),
@@ -564,6 +597,7 @@ doc_struct! {
         logs: Option<Logs> => ("table", "none", false, "Log handling."),
         rebuild: Option<Rebuild> => ("table", "none", false, "Staged rebuild."),
         licences: Option<Licences> => ("table", "none", false, "Licence enforcement."),
+        notify: Option<Notify> => ("table", "none", false, "Webhook POST of each run's summary; none without the table."),
     }
 }
 
@@ -595,6 +629,7 @@ pub const SECTIONS: &[(&str, &[FieldDoc])] = &[
     ("rebuild", Rebuild::FIELDS),
     ("licences", Licences::FIELDS),
     ("licences.required", LicenceRequired::FIELDS),
+    ("notify", Notify::FIELDS),
 ];
 
 /// Render the key reference as plain text.
@@ -700,6 +735,7 @@ mod tests {
             Rebuild,
             Licences,
             LicenceRequired,
+            Notify,
         );
         // Every documented table appears in the printed reference.
         for (_, fields) in SECTIONS {
@@ -733,6 +769,7 @@ mod tests {
             "rebuild",
             "licences",
             "phase_defaults",
+            "notify",
         ] {
             assert!(!req.contains(&k), "{k} must be optional");
         }

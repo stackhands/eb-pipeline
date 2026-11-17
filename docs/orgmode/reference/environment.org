@@ -44,14 +44,15 @@ Since every part is lowercased, these variables cannot set a key that has an upp
 
 ** Read during a run
 
-The site file names these variables; =run= reads them before the first build.
-=plan= and =run --dry-run= show =${NAME}= in their place.
+The site file names these variables.
+=run= reads the first three before the first build, and =plan= and =run --dry-run= show =${NAME}= in their place; it reads the one of =notify.webhook_env= once it has written the summary.
 
-| Variable                                                           | Use                                                                                                                                                                                    |
-|--------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| the one named by =admission.job_id_env=, =SLURM_JOB_ID= by default | The job id that =eb-stack stack admit= reserves for. With admission on, =run= refuses with exit 78 before any build when it is unset or not a positive integer without a leading zero. |
-| the one named by =targets.route.receipt_digest_env=                | A digest that the routed commands get as =EB_PIPELINE_ROUTE_RECEIPT_DIGEST=. =run= refuses with exit 78 when it is unset or empty.                                                     |
-| each one named in =shards.installed_modules_dirs_from_env=         | Module trees, separated by =:=, added to =shards.installed_modules_dirs=. =run= refuses with exit 78 when one is unset; an empty one adds nothing.                                     |
+| Variable                                                           | Use                                                                                                                                                                                                        |
+|--------------------------------------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| the one named by =admission.job_id_env=, =SLURM_JOB_ID= by default | The job id that =eb-stack stack admit= reserves for. With admission on, =run= refuses with exit 78 before any build when it is unset or not a positive integer without a leading zero.                     |
+| the one named by =targets.route.receipt_digest_env=                | A digest that the routed commands get as =EB_PIPELINE_ROUTE_RECEIPT_DIGEST=. =run= refuses with exit 78 when it is unset or empty.                                                                         |
+| each one named in =shards.installed_modules_dirs_from_env=         | Module trees, separated by =:=, added to =shards.installed_modules_dirs=. =run= refuses with exit 78 when one is unset; an empty one adds nothing.                                                         |
+| the one named by =notify.webhook_env=                              | The URL that =run= POSTs the summary to. When it is unset, empty, or a URL that =check= would refuse in =notify.webhook=, the run sends nothing and writes a =WARN= line; its exit status stays as it was. |
 
 ** Set for the commands of a run
 

@@ -3,7 +3,7 @@ use eb_pipeline::exit::{self, Fail};
 use eb_pipeline::plan::{build_plan, read_units, Planner};
 use eb_pipeline::resolve::{explain, Scope};
 use eb_pipeline::run::{install_handlers, log, run, Options, RunResult};
-use eb_pipeline::{easystack, schema, site, summary, templates, tools, util};
+use eb_pipeline::{easystack, notify, schema, site, summary, templates, tools, util};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -476,17 +476,20 @@ fn write_summary(s: &schema::Site, res: &RunResult, command: &str, result: Optio
     let dir = summary::run_dir(res);
     let entry = summary::entry(res, command, result);
     match summary::record(&s.site.name, entry, &dir) {
-        Ok(_) => log(
-            "INFO",
-            "summary",
-            &res.target,
-            &format!(
-                "{} and {} written in {}",
-                summary::JSON,
-                summary::HTML,
-                dir.display()
-            ),
-        ),
+        Ok(_) => {
+            log(
+                "INFO",
+                "summary",
+                &res.target,
+                &format!(
+                    "{} and {} written in {}",
+                    summary::JSON,
+                    summary::HTML,
+                    dir.display()
+                ),
+            );
+            notify::send(s, &res.target, res.exit_code, &dir.join(summary::JSON));
+        }
         Err(e) => log(
             "WARN",
             "summary",

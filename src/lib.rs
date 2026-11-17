@@ -3,6 +3,7 @@
 pub mod easystack;
 pub mod exit;
 pub mod lint;
+pub mod notify;
 pub mod plan;
 pub mod resolve;
 pub mod run;

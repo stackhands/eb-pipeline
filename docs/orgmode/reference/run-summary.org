@@ -330,6 +330,77 @@ eb-pipeline status --site site.toml --target zen4 --format json
 | =run=     | string | The name of the run directory, its =LOG_STAMP=.                                        |
 | =summary= | object | The run's =summary.json=, with only the entry of the target when =--target= names one. |
 
+** Sending it to a webhook
+
+With a =[notify]= table in the site file, a run POSTs the =summary.json= of its run directory to a webhook once it has written it, with every target that the summary holds; [[file:site-file.org][The site file]] lists the keys of the table.
+Here the URL is in a variable, and =when = "problems"= sends nothing after a run that exits 0:
+
+#+begin_src bash
+sed -n "/^\[notify\]/,\$p" notify.toml
+#+end_src
+
+#+begin_example
+[notify]
+webhook_env = "SUMMARY_WEBHOOK"
+when = "problems"
+#+end_example
+
+#+begin_src bash
+export SUMMARY_WEBHOOK=https://hooks.example.org/build/XXXX
+eb-pipeline run --site notify.toml --list build.list --target zen2 --build-type production --log-stamp 20261117_110000; echo "exit $?"
+eb-pipeline run --site notify.toml --list example.list --target zen4 --build-type production --log-stamp 20261117_110000; echo "exit $?"
+#+end_src
+
+#+begin_example
+INFO [licences] zen2: not configured
+...
+ERROR [build] zen2: Broken-1.0-GCCcore-15.2.0: failed (exit 1)
+INFO [summary] zen2: summary.json and summary.html written in $WORK/site/logs/20261117_110000
+INFO [notify] zen2: summary.json posted to https://hooks.example.org/...
+exit 1
+INFO [licences] zen4: not configured
+...
+INFO [summary] zen4: summary.json and summary.html written in $WORK/site/logs/20261117_110000
+INFO [notify] zen4: the run exited 0 and notify.when is problems; nothing sent
+exit 0
+#+end_example
+
+The URL is a secret: eb-pipeline prints only its scheme and its host, and curl reads it on its standard input, so that it is in the arguments of no process.
+The stand-in for curl wrote its arguments, then what it read:
+
+#+begin_src bash
+cat curl.log
+#+end_src
+
+#+begin_example
+curl --silent --show-error --fail --max-time 10 --request POST --header Content-Type: application/json --header Expect: --data-binary @$WORK/site/logs/20261117_110000/summary.json --config -
+url = "https://hooks.example.org/build/XXXX"
+#+end_example
+
+A POST that fails, or that takes longer than =notify.timeout_seconds=, is a warning that repeats what curl printed without the user, the path or the query of the URL, and the run exits as it would have without it:
+
+#+begin_src bash
+CURL_FAIL=500 eb-pipeline run --site notify.toml --list build.list --target zen2 --build-type production --log-stamp 20261117_120000; echo "exit $?"
+#+end_src
+
+#+begin_example
+INFO [licences] zen2: not configured
+...
+INFO [summary] zen2: summary.json and summary.html written in $WORK/site/logs/20261117_120000
+WARN [notify] zen2: POST of summary.json to https://hooks.example.org/... failed: curl exited 22: curl: (22) The requested URL returned error: 500
+exit 1
+#+end_example
+
+| Message                                                                            | When                                                                                                         |
+|------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------|
+| =INFO [notify] TARGET: summary.json posted to URL=                                 | curl exited 0.                                                                                               |
+| =INFO [notify] TARGET: the run exited 0 and notify.when is problems; nothing sent= | =when= is =problems= and the run exited 0.                                                                   |
+| =WARN [notify] TARGET: NAME is unset or empty; nothing sent=                       | The variable that =webhook_env= names holds no URL.                                                          |
+| =WARN [notify] TARGET: the URL in NAME REASON; nothing sent=                       | The variable that =webhook_env= names holds a URL that =check= would refuse in =webhook=; =REASON= says why. |
+| =WARN [notify] TARGET: POST of summary.json to URL failed: REASON=                 | curl could not start, or exited with a status other than 0.                                                  |
+
+=URL= is the scheme and the host of the URL, followed by =/...=.
+
 ** See also
 
 - [[file:plan-and-result.org][The plan and result files]], for the statuses of a phase and a line, and what =duration_seconds= counts

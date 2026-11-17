@@ -96,6 +96,7 @@ So every job that a run starts needs the directory, whatever its phase.
 | =logs=           | table          | none     | Keeping the logs of a failed line, and rotating the log tree.                   |
 | =rebuild=        | table          | none     | Rebuilding installed software in a staged tree, with eb-staged-rebuild.         |
 | =licences=       | table          | none     | The licence gate.                                                               |
+| =notify=         | table          | none     | Sending the summary of each run to a webhook.                                   |
 
 ** =[site]=
 
@@ -445,6 +446,24 @@ When the gate's problems are the only ones of the file, =run= exits 78; =check= 
 | Key        | Type            | Default | Meaning                                                                |
 |------------+-----------------+---------+------------------------------------------------------------------------|
 | =software= | array of string | =[]=    | The package names that each need a group, a threshold or an exemption. |
+
+** =[notify]=
+
+| Key               | Type    | Default  | Meaning                                                                                                                                          |
+|-------------------+---------+----------+--------------------------------------------------------------------------------------------------------------------------------------------------|
+| =enabled=         | boolean | =true=   | =false= sends nothing.                                                                                                                           |
+| =webhook=         | string  | none     | The =http://= or =https://= URL that each run POSTs the =summary.json= of its run directory to, once it has written it; set it or =webhook_env=. |
+| =webhook_env=     | string  | none     | The variable that holds the URL, read when the run ends, which keeps the URL out of the site file; set it or =webhook=.                          |
+| =when=            | string  | =always= | =always=, or =problems= to POST only after a run that exits with a status other than 0.                                                          |
+| =timeout_seconds= | integer | =10=     | The longest the POST may take, in seconds, as =curl --max-time=; at least 1.                                                                     |
+| =curl=            | string  | =curl=   | The curl that sends the POST.                                                                                                                    |
+
+The URL is a secret: eb-pipeline prints its scheme and its host only, and no message of =check= repeats it.
+Each run that sends the summary starts =curl --silent --show-error --fail --max-time TIMEOUT_SECONDS --request POST --header "Content-Type: application/json" --header "Expect:" --data-binary @SUMMARY --config -=, where =SUMMARY= is the =summary.json= of the run directory, and writes =url = "URL"= on its standard input, so that the URL is in the arguments of no process.
+=check= refuses both =webhook= and =webhook_env=, neither of them unless =enabled= is =false=, a =webhook= that does not start with =http://= or =https://=, names no host, or holds a space, a quote, a backslash or a control character, and a =webhook_env= that is not a variable name.
+A run checks the URL in the variable of =webhook_env= the same way when it ends.
+A run that writes no summary, such as =run --dry-run=, sends nothing.
+A POST that cannot start, fails or runs out of time is a =WARN= line, and the run exits as it would have without the table; [[file:run-summary.org][The run summary]] shows the lines that a run writes.
 
 ** See also
 
