@@ -49,12 +49,15 @@ if [ "$cmd" = stack ]; then cmd="stack-$1"; shift; fi
 while [ $# -gt 0 ]; do
   case "$1" in
     --out-dir) out="$2"; shift;;
+    --out) outfile="$2"; shift;;
+    --lock) lock="$2"; shift;;
     --changed) changed="$2"; shift;;
     --build-list) list="$2"; shift;;
   esac
   shift
 done
 [ -n "${STUB_EB_STACK_FAIL:-}" ] && { echo "error: stub failure"; exit 1; }
+[ "$cmd" = stack-sbom ] && [ -n "${STUB_SBOM_FAIL:-}" ] && { echo "error: sbom"; exit 1; }
 mkdir -p "$out"
 touch "$D/deps.tsv" "$D/order.txt" "$D/missing.txt"
 case "$cmd" in
@@ -62,6 +65,8 @@ case "$cmd" in
     rows=$(awk -F'\t' 'NR == FNR { c[$1] = 1; next }
       ($2 in c) { printf "%s{\"changed\":\"%s\",\"dependent\":\"%s\",\"class\":\"%s\",\"edge_kind\":\"%s\",\"reason\":\"stub\"}", (n++ ? "," : ""), $2, $1, $3, $4 }' "$changed" "$D/deps.tsv")
     printf '{"schema_version":5,"rows":[%s]}\n' "$rows" > "$out/rebuild-set.json";;
+  stack-sbom)
+    printf '%s\n' '{"bomFormat":"CycloneDX","specVersion":"1.5"}' > "$outfile";;
   stack-shard)
     awk 'NR == FNR { o[$1] = NR; next } { print (($1 in o) ? o[$1] : 100000 + FNR) "\t" $0 }' "$D/order.txt" "$list" \
       | sort -n | cut -f2- > "$out/shard-01.list"

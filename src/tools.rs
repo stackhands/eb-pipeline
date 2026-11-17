@@ -9,7 +9,7 @@ use std::process::{Command, Stdio};
 /// A sibling tool that eb-pipeline starts as a subprocess.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
-    /// eb-stack, for `stack shard` and `stack admit`.
+    /// eb-stack, for `stack shard`, `stack admit` and `stack sbom`.
     EbStack,
     /// eb-keep-logs, for `failed` and `rotate`.
     EbKeepLogs,
@@ -67,7 +67,7 @@ impl Tool {
 /// Tools that an enabled phase calls.
 pub fn needed(site: &Site) -> Vec<Tool> {
     let mut v = Vec::new();
-    if site.shards_on().is_some() || site.admission_on().is_some() {
+    if site.shards_on().is_some() || site.admission_on().is_some() || site.sbom_on().is_some() {
         v.push(Tool::EbStack);
     }
     if site.logs_on().is_some() {

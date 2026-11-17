@@ -8,6 +8,8 @@
 The rebuild of =eb-pipeline watch= adds its target in the same way.
 =summary.json= is an object in JavaScript Object Notation (JSON), with the keys of every object in sorted order and =schema_version= 1.
 =run --dry-run= writes no summary, and neither does a run that an error in its input stops before it starts, which writes no result file either.
+With a =[sbom]= table, a clean run also stores =sbom.cdx.json= in that directory: the CycloneDX document =eb-stack stack sbom --lock= writes from the lock the table names.
+A build that did not exit 0 stores none.
 [[file:../howto/follow-runs.org][Follow runs through their summaries]] puts the summary to use, with =status=, jq and a webhook.
 The examples on this page come from =docs/examples/summary.sh=, which runs both targets of the site file of [[file:../howto/build-from-ci.org][Build a list on every target from continuous integration]] with the =local= scheduler, no modules, its paths under a work directory, and the stand-in for =eb= of the tutorial, which fails the lines whose easyconfig starts with =Broken-=.
 

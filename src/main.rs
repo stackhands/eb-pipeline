@@ -4,7 +4,7 @@ use eb_pipeline::plan::{build_plan, read_units, Planner};
 use eb_pipeline::resolve::{explain, Scope};
 use eb_pipeline::run::{install_handlers, log, run, Options, RunResult};
 use eb_pipeline::{
-    easystack, eessi, metrics, notify, schema, site, summary, templates, tools, util, watch,
+    easystack, eessi, metrics, notify, sbom, schema, site, summary, templates, tools, util, watch,
 };
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -551,7 +551,7 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         Some(d) => Some(read_units(d)?),
         None => None,
     };
-    let res = run(
+    let mut res = run(
         &planner,
         &lines,
         &Options {
@@ -561,6 +561,23 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
     );
     if let Some(m) = &res.message {
         log("ERROR", "run", &c.target, m);
+    }
+    if !dry && res.exit_code == 0 {
+        if let Some(conf) = s.sbom_on() {
+            match sbom::store(&s, conf, &summary::run_dir(&res)) {
+                Ok(path) => log(
+                    "INFO",
+                    "sbom",
+                    &c.target,
+                    &format!("wrote {}", path.display()),
+                ),
+                Err(f) => {
+                    log("ERROR", "sbom", &c.target, &f.msg);
+                    res.message = Some(f.msg);
+                    res.exit_code = f.code;
+                }
+            }
+        }
     }
     if !dry {
         if let Some(before) = &before {

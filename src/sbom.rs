@@ -1,0 +1,79 @@
+//! After a clean build, ask eb-stack for the CycloneDX document of a lock
+//! and keep it beside `summary.json`. eb-stack reads the lock and writes
+//! the document; this module only starts that command.
+
+use crate::exit::{self, Fail};
+use crate::schema::{Sbom, Site};
+use crate::tools::Tool;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+/// The CycloneDX file in the run directory, beside `summary.json`.
+pub const FILE: &str = "sbom.cdx.json";
+
+/// Run `eb-stack stack sbom --lock LOCK --out RUN_DIR/sbom.cdx.json`.
+///
+/// A non-zero status removes a partial file. The command's output is
+/// `sbom.log` in the same directory.
+pub fn store(site: &Site, sbom: &Sbom, run_dir: &Path) -> Result<PathBuf, Fail> {
+    let lock = sbom
+        .lock
+        .as_deref()
+        .filter(|p| !p.is_empty())
+        .ok_or_else(|| Fail::usage("sbom.lock: must name the lock file when sbom is enabled"))?;
+    std::fs::create_dir_all(run_dir).map_err(|e| {
+        Fail::new(
+            exit::FAILED,
+            format!("cannot create {}: {e}", run_dir.display()),
+        )
+    })?;
+    let out = run_dir.join(FILE);
+    let log_path = run_dir.join("sbom.log");
+    let log = std::fs::File::create(&log_path).map_err(|e| {
+        Fail::new(
+            exit::FAILED,
+            format!("cannot write {}: {e}", log_path.display()),
+        )
+    })?;
+    let err = log.try_clone().map_err(|e| {
+        Fail::new(
+            exit::FAILED,
+            format!("cannot write {}: {e}", log_path.display()),
+        )
+    })?;
+    let bin = Tool::EbStack.bin(site);
+    let status = Command::new(&bin)
+        .args(["stack", "sbom", "--lock", lock, "--out"])
+        .arg(&out)
+        .stdin(Stdio::null())
+        .stdout(log)
+        .stderr(err)
+        .status()
+        .map_err(|e| {
+            Fail::new(
+                exit::FAILED,
+                format!("cannot run `{bin} stack sbom --lock {lock}`: {e}"),
+            )
+        })?;
+    if !status.success() {
+        let _ = std::fs::remove_file(&out);
+        let code = status.code().unwrap_or(exit::FAILED);
+        return Err(Fail::new(
+            code,
+            format!(
+                "eb-stack stack sbom --lock {lock} exited {code}; its output is in {}",
+                log_path.display()
+            ),
+        ));
+    }
+    if !out.is_file() {
+        return Err(Fail::new(
+            exit::FAILED,
+            format!(
+                "eb-stack stack sbom --lock {lock} wrote no {}",
+                out.display()
+            ),
+        ));
+    }
+    Ok(out)
+}
