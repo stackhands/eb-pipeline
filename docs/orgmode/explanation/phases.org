@@ -51,6 +51,7 @@ Otherwise the run exits 1 when a line or a phase failed, else 78 when something 
 The order puts first what needs the most from a person.
 A failed build needs someone to read its log, whatever else happened in the run; a refusal needs a precondition met or the quota freed, and the lines built before it stay built; a pending step needs only a rerun.
 The result file keeps what the status leaves out: the status of every line, with its log, and the counts.
+The run summary keeps the same for every target that ran with the log stamp, and ranks their statuses in the same order, as [[file:../reference/run-summary.org][The run summary]] says.
 
 *** The statuses of the tools, mapped
 

@@ -43,6 +43,7 @@ An error that ends a command is written to stderr as =ERROR [main] -: MESSAGE=.
 - =plan=: the shard plan given to =--shard-plan= could not be read, or the plan could not be written to =--out=.
 
 A failed =eb-keep-logs failed= after a failed line leaves the status as it is, with a =WARN= line.
+So does a run summary that cannot be written, as [[file:run-summary.org][The run summary]] says.
 
 *** 2
 
@@ -76,7 +77,7 @@ The refusals before the first build leave every line unbuilt.
 *** 130 and 143
 
 =run= passes the signal to the running command and waits for it to end.
-It starts no other command, records the phase as =interrupted=, writes the result file and exits 130 for =SIGINT= or 143 for =SIGTERM=.
+It starts no other command, records the phase as =interrupted=, writes the result file and the run summary, and exits 130 for =SIGINT= or 143 for =SIGTERM=.
 
 ** When several apply
 

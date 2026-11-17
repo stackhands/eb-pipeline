@@ -24,11 +24,14 @@ find logs | sort
 logs
 logs/.eb-pipeline-rotate.lock
 logs/20261117_090000
+logs/20261117_090000/.summary.lock
 logs/20261117_090000/cpu
 logs/20261117_090000/cpu/Broken-1.0-GCCcore-15.2.0.keep-logs.log
 logs/20261117_090000/cpu/Broken-1.0-GCCcore-15.2.0.stdout.log
 logs/20261117_090000/cpu/Example-1.0-GCCcore-15.2.0.stdout.log
 logs/20261117_090000/cpu/rotate.log
+logs/20261117_090000/summary.html
+logs/20261117_090000/summary.json
 #+end_example
 
 | File                            | Phase          | What it holds                                                                                              |
@@ -51,11 +54,14 @@ A command that cannot start leaves one line in its log, =cannot start PROGRAM: E
 
 ** The log root
 
-| File                                 | What it is                                                                                              |
-|--------------------------------------+---------------------------------------------------------------------------------------------------------|
-| =LOG_ROOT/LOG_STAMP/=                | The directories of the runs with that stamp, one per target.                                            |
-| =LOG_ROOT/.eb-pipeline-rotate.lock=  | The rotation lock of eb-pipeline; the first run with =[logs.rotate]= creates it.                        |
-| =LOG_ROOT/.eb-keep-logs-rotate.lock= | The rotation lock of eb-keep-logs, which an =eb-keep-logs rotate= that takes a lock of its own creates. |
+| File                                 | What it is                                                                                                                              |
+|--------------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------|
+| =LOG_ROOT/LOG_STAMP/=                | The directories of the runs with that stamp, one per target.                                                                            |
+| =LOG_ROOT/LOG_STAMP/summary.json=    | The summary of the runs with that stamp, which each of them updates as it ends; [[file:run-summary.org][The run summary]] describes it. |
+| =LOG_ROOT/LOG_STAMP/summary.html=    | The same summary, as a page to open in a browser.                                                                                       |
+| =LOG_ROOT/LOG_STAMP/.summary.lock=   | The lock a run holds while it updates the summary.                                                                                      |
+| =LOG_ROOT/.eb-pipeline-rotate.lock=  | The rotation lock of eb-pipeline; the first run with =[logs.rotate]= creates it.                                                        |
+| =LOG_ROOT/.eb-keep-logs-rotate.lock= | The rotation lock of eb-keep-logs, which an =eb-keep-logs rotate= that takes a lock of its own creates.                                 |
 
 =eb-keep-logs rotate= compresses and deletes the run directories by the age of their stamp, and keeps files of its own in the tree; the [[https://stackhands.github.io/eb-keep-logs/][eb-keep-logs documentation]] describes them.
 
@@ -67,6 +73,7 @@ A command that cannot start leaves one line in its log, =cannot start PROGRAM: E
 | =LOG_ROOT/.eb-keep-logs-rotate.lock= | =eb-keep-logs rotate=, where its =--help= lists =--lock-timeout=; eb-keep-logs 0.2.1 takes no lock | =flock=, alone, from before it lists the log root until it exits                                                | It waits up to =--lock-timeout= seconds, 600 unless given, then exits 75 having changed nothing. =run= passes =--lock-timeout 0=, and records exit 75 as =logs= =skipped=. |
 | =STATE_ROOT/.lock=                   | =eb-staged-rebuild run=, for a staged line                                                         | Alone, for the whole of its build and publish                                                                   | It waits up to =rebuild.lock_timeout= seconds, then exits 2, and the line is =refused=.                                                                                    |
 | =admission.lock=                     | =stack admit=, and =run= when it removes the reservation of an admitted job                        | =flock=, or a POSIX record lock over the whole file, as =admission.lock_kind= says                              | =run= waits for it.                                                                                                                                                        |
+| =LOG_ROOT/LOG_STAMP/.summary.lock=   | =run=, after its last phase                                                                        | =flock=, alone, while it reads =summary.json= and writes both files, holding no other lock                      | It waits for it.                                                                                                                                                           |
 
 =STATE_ROOT= is =rebuild.state_root=, else the =EB_STAGED_REBUILD_STATE_ROOT= that eb-staged-rebuild sees, else =.eb-staged-rebuild= beside the software tree.
 =flock= locks hold between nodes only where the filesystem carries them between nodes.
@@ -86,5 +93,6 @@ A run waits for the first lock only at its start, before it holds any other, and
 
 - [[file:site-file.org][The site file]], for =[logs]=, =[rebuild]= and =[admission]=
 - [[file:plan-and-result.org][The plan and result files]], for the statuses of the =logs= phase and of a line
+- [[file:run-summary.org][The run summary]], for =summary.json= and =summary.html=
 - [[file:exit-status.org][Exit status]]
 - [[file:../explanation/log-rotation.org][Why the rotation takes two locks]], for why the locks are taken as they are

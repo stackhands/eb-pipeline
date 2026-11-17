@@ -163,6 +163,7 @@ INFO [build] cpu: Example-1.0-GCCcore-15.2.0: start
 INFO [build] cpu: Example-1.0-GCCcore-15.2.0: ok
 INFO [build] cpu: Broken-1.0-GCCcore-15.2.0: start
 ERROR [build] cpu: Broken-1.0-GCCcore-15.2.0: failed (exit 1)
+INFO [summary] cpu: summary.json and summary.html written in $WORK/logs/20261117_090000
 #+end_example
 
 #+begin_src bash
@@ -323,4 +324,5 @@ That of =logs= counts =eb-keep-logs failed= after a failed line as well as =eb-k
 
 - [[file:cli.org][The eb-pipeline command]]
 - [[file:exit-status.org][Exit status]]
+- [[file:run-summary.org][The run summary]], which =run= writes in the run directory whether or not it has =--result=
 - [[file:../api/eb_pipeline/plan/struct.Plan.html][eb_pipeline::plan::Plan]] and [[file:../api/eb_pipeline/run/struct.RunResult.html][eb_pipeline::run::RunResult]], the types behind the two files.

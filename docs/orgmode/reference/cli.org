@@ -60,7 +60,8 @@ like the file.
 
 Output streams: stdout carries plan, explain, schema, init, targets and run --dry-run
 output only. Events go to stderr as `LEVEL [phase] target: message`. The result JSON
-goes to --result.
+goes to --result, and each run's summary to summary.json and summary.html in its run
+directory, <log_root>/<log-stamp>/.
 
 Exit codes:
    0  all requested work completed
@@ -104,7 +105,7 @@ No command takes an argument other than its options.
 | =explain= | Print what each target resolves to: paths, launch lines and the environment of its commands.                                                        |
 | =targets= | Print the names of the targets in the order of the site file.                                                                                       |
 | =plan=    | Print the plan of a run as JavaScript Object Notation (JSON): its phases and every command with its launch line and environment. It starts nothing. |
-| =run=     | Run the phases of the plan, one command at a time, and write the result file.                                                                       |
+| =run=     | Run the phases of the plan, one command at a time, write the result file, and add the run to the summary of its run directory.                      |
 | =help=    | Print the help of the program, or of the command it names.                                                                                          |
 
 ** Options
@@ -184,7 +185,7 @@ It shows =<run-id>= and =<log-stamp>= where a run puts its own.
 | Option          | Meaning                                                                                                                                                                                     |
 |-----------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | =--result FILE= | Write the result file to =FILE= when the run ends. Without it, no result file is written. An error in the input, which stops the run before it starts, leaves an existing =FILE= as it was. |
-| =--dry-run=     | Print each command of the plan on stdout and start nothing. No result file is written, even with =--result=.                                                                                |
+| =--dry-run=     | Print each command of the plan on stdout and start nothing. No result file or summary is written, even with =--result=.                                                                     |
 
 =--run-id= defaults to the log stamp, and =--log-stamp= to the UTC time at which the run starts, taken once.
 A line that =eb-staged-rebuild= builds passes =RUN_ID-STEM= as its run id, where =STEM= is the easyconfig file name without =.eb=, with =.2=, =.3= and so on added when the list repeats the line.
@@ -214,19 +215,20 @@ The commands other than =run= exit 0, 1 or 2.
 
 ** Files
 
-| File                            | Use                                                                                                                                                                                                                                                                                                                   |
-|---------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| the site file, =--site=         | Everything about the site; [[file:site-file.org][The site file]] lists its keys.                                                                                                                                                                                                                                                              |
-| the build list, =--list=        | One easyconfig per line, followed by the options =eb= gets for it, as =Name-version-toolchain.eb [eb options]=. Blank lines and lines that start with =#= are skipped. A =.yml= or =.yaml= file is an EasyBuild easystack instead, each of whose =easyconfigs= entries is a line, as [[file:../howto/from-eb-stack.org][Build what eb-stack plans]] shows. |
-| the plan, =plan --out=          | What =plan= prints; [[file:plan-and-result.org][The plan and result files]] lists its keys.                                                                                                                                                                                                                                                         |
-| the result file, =run --result= | What the run did, line by line and phase by phase; [[file:plan-and-result.org][The plan and result files]] lists its keys.                                                                                                                                                                                                                          |
-| =LOG_ROOT/LOG_STAMP/TARGET/=    | The log directory of a run, under =filesystems.log_root=; [[file:log-tree.org][The log tree and its locks]] lists its files.                                                                                                                                                                                                                 |
+| File                              | Use                                                                                                                                                                                                                                                                                                                   |
+|-----------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| the site file, =--site=           | Everything about the site; [[file:site-file.org][The site file]] lists its keys.                                                                                                                                                                                                                                                              |
+| the build list, =--list=          | One easyconfig per line, followed by the options =eb= gets for it, as =Name-version-toolchain.eb [eb options]=. Blank lines and lines that start with =#= are skipped. A =.yml= or =.yaml= file is an EasyBuild easystack instead, each of whose =easyconfigs= entries is a line, as [[file:../howto/from-eb-stack.org][Build what eb-stack plans]] shows. |
+| the plan, =plan --out=            | What =plan= prints; [[file:plan-and-result.org][The plan and result files]] lists its keys.                                                                                                                                                                                                                                                         |
+| the result file, =run --result=   | What the run did, line by line and phase by phase; [[file:plan-and-result.org][The plan and result files]] lists its keys.                                                                                                                                                                                                                          |
+| =LOG_ROOT/LOG_STAMP/TARGET/=      | The log directory of a run, under =filesystems.log_root=; [[file:log-tree.org][The log tree and its locks]] lists its files.                                                                                                                                                                                                                 |
+| =LOG_ROOT/LOG_STAMP/summary.json= | The summary of the runs with that log stamp, which each =run= updates, with =summary.html= beside it; [[file:run-summary.org][The run summary]] lists its keys.                                                                                                                                                                                 |
 
 A list line is split into words as a shell splits them, with single and double quotes.
 
 ** See also
 
 - [[file:../tutorials/first-build-list.org][Run your first build list]]
-- [[file:site-file.org][The site file]] and [[file:plan-and-result.org][The plan and result files]]
+- [[file:site-file.org][The site file]], [[file:plan-and-result.org][The plan and result files]] and [[file:run-summary.org][The run summary]]
 - [[file:environment.org][Environment variables]] and [[file:exit-status.org][Exit status]]
 - The [[file:api.org][API]] of the =eb_pipeline= library, which the command is built on.

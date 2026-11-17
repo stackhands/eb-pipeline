@@ -2,8 +2,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use eb_pipeline::exit::{self, Fail};
 use eb_pipeline::plan::{build_plan, read_units, Planner};
 use eb_pipeline::resolve::{explain, Scope};
-use eb_pipeline::run::{install_handlers, log, run, Options};
-use eb_pipeline::{easystack, schema, site, templates, tools, util};
+use eb_pipeline::run::{install_handlers, log, run, Options, RunResult};
+use eb_pipeline::{easystack, schema, site, summary, templates, tools, util};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -24,7 +24,8 @@ like the file.
 
 Output streams: stdout carries plan, explain, schema, init, targets and run --dry-run
 output only. Events go to stderr as `LEVEL [phase] target: message`. The result JSON
-goes to --result.
+goes to --result, and each run's summary to summary.json and summary.html in its run
+directory, <log_root>/<log-stamp>/.
 
 ";
 
@@ -419,11 +420,38 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         log("ERROR", "run", &c.target, m);
     }
     if !dry {
+        write_summary(&s, &res, "run", result);
         if let Some(p) = result {
             write_json(&to_sorted(&res), Some(p))?;
         }
     }
     Ok(res.exit_code)
+}
+
+/// Merge a target's run into its run directory's summary; a problem is a
+/// warning and leaves the run's exit code as it is.
+fn write_summary(s: &schema::Site, res: &RunResult, command: &str, result: Option<&Path>) {
+    let dir = summary::run_dir(res);
+    let entry = summary::entry(res, command, result);
+    match summary::record(&s.site.name, entry, &dir) {
+        Ok(_) => log(
+            "INFO",
+            "summary",
+            &res.target,
+            &format!(
+                "{} and {} written in {}",
+                summary::JSON,
+                summary::HTML,
+                dir.display()
+            ),
+        ),
+        Err(e) => log(
+            "WARN",
+            "summary",
+            &res.target,
+            &format!("no summary written: {e}"),
+        ),
+    }
 }
 
 fn main() {

@@ -9,6 +9,7 @@ pub mod run;
 pub mod schema;
 pub mod select;
 pub mod site;
+pub mod summary;
 pub mod templates;
 pub mod tools;
 pub mod util;
