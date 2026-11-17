@@ -12,4 +12,5 @@ Nothing here is a step to follow.
    :maxdepth: 1
 
    log-rotation
+   shared-paths
 #+end_export

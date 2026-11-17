@@ -130,3 +130,4 @@ The commands and their output on this page come from =docs/examples/ci.sh=.
 - [[file:../reference/site-file.org][The site file]], for ={target}= in paths
 - [[file:../reference/exit-status.org][Exit status]]
 - [[file:../reference/plan-and-result.org][The plan and result files]]
+- [[file:../explanation/shared-paths.org][What the targets of a site file share]], for when targets can build at once

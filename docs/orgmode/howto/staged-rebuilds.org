@@ -128,4 +128,5 @@ eb-staged-rebuild run --software $WORK/site/zen4/software --modules $WORK/site/z
 
 - [[file:../reference/site-file.org][The site file]], for =[rebuild]= and the keys of =[[targets]]=
 - [[file:../reference/exit-status.org][Exit status]], for how the exit statuses of eb-staged-rebuild map to those of a run
+- [[file:../explanation/shared-paths.org][What the targets of a site file share]], for a state root per target
 - The [[https://stackhands.github.io/eb-staged-rebuild/][eb-staged-rebuild documentation]], for what a staged rebuild does to the live tree
