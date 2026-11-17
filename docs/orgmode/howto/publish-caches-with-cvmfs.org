@@ -24,7 +24,30 @@ eb-cvmfs --dry-run repo.example -- /opt/site/bin/sync-module-cache
 The preview prints the transaction-state check, transaction, synchronization and publish commands, plus the abort command used when synchronization fails.
 It runs none of them.
 
-** 3. Put the bracket in =[caches]=
+** 3. Add a pre-publish check
+
+Use =--verify-cmd= when the synchronized files must pass a check before they become a published repository revision:
+
+#+begin_src bash
+eb-cvmfs --dry-run \
+  --verify-cmd '/opt/site/bin/check-module-cache --root "/cvmfs/repo.example"' \
+  repo.example -- /opt/site/bin/sync-module-cache
+#+end_src
+
+The complete CMD is one argument to =--verify-cmd=, so quote it in the outer shell.
+The example is parsed into a command and argument vector and starts =/opt/site/bin/check-module-cache= directly, without a shell.
+If a verifier needs shell operations, quote the expression so that the outer shell does not evaluate it:
+
+#+begin_src bash
+eb-cvmfs --verify-cmd 'test -s "$CACHE_ROOT/spiderT.lua" && test -r "$CACHE_ROOT/moduleT.lua"' \
+  repo.example -- /opt/site/bin/sync-module-cache
+#+end_src
+
+That expression contains expansion and =&&=, so =eb-cvmfs= runs it as =sh -c CMD= inside the transaction.
+A failed verifier keeps its standard output and standard error visible, triggers =cvmfs_server abort -f= and returns its status.
+The synchronization command and verifier are not retried by =eb-cvmfs=.
+
+** 4. Put the bracket in =[caches]=
 
 Set the site's cache command to the same command without =--dry-run=:
 
@@ -41,8 +64,9 @@ config = "/opt/site/cache/cpu.toml"
 After a clean build, the cache phase checks that the repository is not already in a transaction, opens one, and runs the configured synchronization.
 A successful synchronization is published.
 A failed synchronization is aborted with =cvmfs_server abort -f=, and its exit status becomes the cache command's exit status.
+When =--verify-cmd= is configured, verification runs after synchronization and before publish; its failure is aborted and returned in the same way.
 
-** 4. Test the configured command
+** 5. Test the configured command
 
 Run a dry plan to see that the cache phase names =eb-cvmfs=:
 
