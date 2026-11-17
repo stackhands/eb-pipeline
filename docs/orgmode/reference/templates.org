@@ -8,8 +8,11 @@
 Each is a complete site file that =check= finds valid, with placeholder values only: names in angle brackets, such as =<build-user>=, and paths and names, such as =/opt/eb= and =small-lab=, that stand for the site's own.
 The examples on this page come from =docs/examples/templates.sh=.
 
+#+begin_src bash
+eb-pipeline init --list
+#+end_src
+
 #+begin_example
-$ eb-pipeline init --list
 small-cluster    Slurm, one CPU target; no EESSI, inode quota or licences
 eessi-site       Slurm, CPU and GPU targets on an EESSI site layer, with quota, caches and licences
 #+end_example
@@ -21,17 +24,23 @@ eessi-site       Slurm, CPU and GPU targets on an EESSI site layer, with quota, 
 
 =init --template NAME= prints the template, and =init --template NAME --out FILE= writes it to =FILE=:
 
+#+begin_src bash
+eb-pipeline init --template small-cluster --out small-cluster.toml
+eb-pipeline check --site small-cluster.toml
+#+end_src
+
 #+begin_example
-$ eb-pipeline init --template small-cluster --out small-cluster.toml
 INFO [init] -: wrote template small-cluster to small-cluster.toml
-$ eb-pipeline check --site small-cluster.toml
 INFO [check] small-lab: site file is valid
 #+end_example
 
 =init= refuses a file that exists, and exits 2, as it does for an unknown template or none:
 
+#+begin_src bash
+eb-pipeline init --template small-cluster --out small-cluster.toml
+#+end_src
+
 #+begin_example
-$ eb-pipeline init --template small-cluster --out small-cluster.toml
 ERROR [main] -: cannot create small-cluster.toml: File exists (os error 17)
 #+end_example
 
@@ -50,10 +59,15 @@ Its targets install where EESSI-extend puts a site installation for their =cpu_t
 The GPU target =gpu-a= keeps only the lines of a list that are for it, and wraps the commands of its CPU-only prerequisites in a route command, which build them with the hardware variables of another class.
 A run admits each unit against an inode quota, shards the list, prefetches sources without the robot, writes module caches for =cpu-a= and =gpu-a=, rebuilds installed modules through eb-staged-rebuild with a state root per target, and checks that each licensed package has a group, a version threshold or an exemption.
 
+#+begin_src bash
+eb-pipeline init --template eessi-site --out eessi-site.toml
+eb-pipeline check --site eessi-site.toml
+eb-pipeline targets --site eessi-site.toml
+#+end_src
+
 #+begin_example
-$ eb-pipeline check --site eessi-site.toml
+INFO [init] -: wrote template eessi-site to eessi-site.toml
 INFO [check] cluster-a: site file is valid
-$ eb-pipeline targets --site eessi-site.toml
 cpu-a
 cpu-b
 gpu-a

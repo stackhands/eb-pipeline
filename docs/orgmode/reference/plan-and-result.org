@@ -13,9 +13,13 @@ The examples on this page come from =docs/examples/files.sh=, which plans and ru
 =plan --out FILE= writes the plan to =FILE=, and =plan= without =--out= prints it.
 A plan holds every phase, planned or not, in the order a run goes through them, and every command a run would start, with its whole argument vector and environment.
 
+#+begin_src bash
+eb-pipeline plan --site site.toml --list build.list --target cpu --build-type production \
+    --run-id nightly --log-stamp 20261117_090000 --out plan.json
+cat plan.json
+#+end_src
+
 #+begin_example
-$ eb-pipeline plan --site site.toml --list build.list --target cpu --build-type production --run-id nightly --log-stamp 20261117_090000 --out plan.json
-$ cat plan.json
 {
   "build_type": "production",
   "kind": "plan",
@@ -143,8 +147,12 @@ A =probe:TOOL= command runs the =--version= of a tool that has a =min_version=.
 =run --dry-run= writes none either, and neither does a run that an error in its input stops before it starts, such as an invalid site file, an unknown target, a list that cannot be read or a tool below its =min_version=: those exit 2, or 78 when only the licence gate fails, and leave an existing =FILE= as it was.
 Read the exit status before the file.
 
+#+begin_src bash
+eb-pipeline run --site site.toml --list build.list --target cpu --build-type production \
+    --run-id nightly --log-stamp 20261117_090000 --result result.json
+#+end_src
+
 #+begin_example
-$ eb-pipeline run --site site.toml --list build.list --target cpu --build-type production --run-id nightly --log-stamp 20261117_090000 --result result.json
 INFO [licences] cpu: not configured
 INFO [shard] cpu: not configured
 INFO [sources] cpu: not configured
@@ -154,7 +162,13 @@ INFO [build] cpu: Example-1.0-GCCcore-15.2.0: start
 INFO [build] cpu: Example-1.0-GCCcore-15.2.0: ok
 INFO [build] cpu: Broken-1.0-GCCcore-15.2.0: start
 ERROR [build] cpu: Broken-1.0-GCCcore-15.2.0: failed (exit 1)
-$ cat result.json
+#+end_example
+
+#+begin_src bash
+cat result.json
+#+end_src
+
+#+begin_example
 {
   "admission": [],
   "build_type": "production",

@@ -16,8 +16,11 @@ Two runs with the same stamp and target write into the same directory; the runs 
 
 After the run in =docs/examples/files.sh=, which builds one line and fails another with =[logs] keep_failed= and =[logs.rotate]= set, the log root holds:
 
+#+begin_src bash
+find logs | sort
+#+end_src
+
 #+begin_example
-$ find logs | sort
 logs
 logs/.eb-pipeline-rotate.lock
 logs/20261117_090000
