@@ -20,8 +20,8 @@ synopsis=(
     'targets [OPTIONS] --site <SITE>'
     'status [OPTIONS] --site <SITE>'
     'metrics [OPTIONS] --result <RESULT>'
-    'plan [OPTIONS] --site <SITE> --list <LIST> --target <TARGET> --build-type <BUILD_TYPE>'
-    'run [OPTIONS] --site <SITE> --list <LIST> --target <TARGET> --build-type <BUILD_TYPE>'
+    'plan [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>'
+    'run [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>'
     'watch [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>'
 )
 for usage in "${synopsis[@]}"; do

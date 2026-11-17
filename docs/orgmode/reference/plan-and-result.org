@@ -99,8 +99,9 @@ cat plan.json
 | =deselected=     | array   | The lines that the target's =[targets.select]= leaves out; only when there are some.                                     |
 | =kind=           | string  | =plan=.                                                                                                                  |
 | =lines=          | integer | The number of lines of the list, without blank lines and comments.                                                       |
-| =list=           | string  | The build list, as =--list= names it.                                                                                    |
+| =list=           | string  | The build list as =--list= names it, or the absolute package-plan bundle directory.                                     |
 | =log_dir=        | string  | =LOG_ROOT/LOG_STAMP/TARGET=, where the run writes its logs.                                                              |
+| =package_plan_digest= | string | The SHA-256 of =package.plan.json=, only with =--package-plan=.                                                      |
 | =phases=         | array   | Every phase, in the order a run goes through them.                                                                       |
 | =run_id=         | string  | The run id, =<run-id>= without =--run-id=.                                                                               |
 | =schema_version= | integer | =1=.                                                                                                                     |
@@ -117,7 +118,7 @@ Where a run reads a value when it starts, the plan shows a stand-in: =<run-id>= 
 |------------+--------+----------------------------------------------------------------------------------------------------------------------------------|
 | =commands= | array  | The commands of the phase, in the order a run starts them.                                                                       |
 | =env=      | object | The environment of the phase, which each of its commands gets.                                                                   |
-| =name=     | string | =preflight=, =licences=, =shard=, =sources=, =admission=, =build=, =checks=, =caches= or =logs=.                                |
+| =name=     | string | =preflight=, =licences=, =shard=, =sources=, =admission=, =build=, =checks=, optional =verification=, =caches= or =logs=.        |
 | =reason=   | string | Why the phase is not planned; only then.                                                                                         |
 | =role=     | string | The role whose launch arguments its commands take, such as =build= or =short=; only for a phase that has one.                    |
 | =status=   | string | =planned=, =not configured=, or =refused= for an admission that =admission.required= asks for when the site file cannot give it. |
@@ -255,8 +256,9 @@ cat result.json
 | =interrupted_by=   | string  | =SIGINT= or =SIGTERM=, when a signal stopped the run.                                                                  |
 | =kind=             | string  | =result=.                                                                                                              |
 | =lines=            | array   | Every line the run reached, in that order.                                                                             |
-| =list=             | string  | The build list, as =--list= names it.                                                                                  |
+| =list=             | string  | The build list as =--list= names it, or the absolute package-plan bundle directory.                                   |
 | =log_dir=          | string  | =LOG_ROOT/LOG_STAMP/TARGET=, where the run wrote its logs.                                                             |
+| =package_plan_digest= | string | The SHA-256 of =package.plan.json=, only with =--package-plan=.                                                     |
 | =message=          | string  | The error that stopped the run, when one did.                                                                          |
 | =not_configured=   | array   | The phases that the site file leaves out, in pipeline order.                                                           |
 | =phases=           | array   | Every phase the run reached, in pipeline order from =preflight= to =logs=.                                             |

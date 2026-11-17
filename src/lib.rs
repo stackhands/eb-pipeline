@@ -7,6 +7,7 @@ pub mod lint;
 pub mod metrics;
 pub mod notify;
 pub mod offline;
+pub mod package_plan;
 pub mod plan;
 pub mod resolve;
 pub mod resume;

@@ -1,0 +1,82 @@
+#+TITLE: Build and verify an eb-stack package plan
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Build and verify an eb-stack package plan
+
+Use an =eb-stack package plan= bundle directly instead of copying its emitted
+recipes into a build list. The pipeline reads the bundle but never changes it.
+
+** Before you start
+
+- A completed =eb-stack package plan --out-dir BUNDLE= bundle.
+- A site file and target that can build the bundle's toolchain.
+- The product modules must expose =pip= for a PyPI plan or =Rscript= for a
+  Comprehensive R Archive Network (CRAN) plan if you want verification.
+
+** Steps
+
+1. Inspect the commands without starting them:
+
+   #+begin_src bash
+   eb-pipeline plan --site site.toml --package-plan bundle \
+       --target cpu --build-type production --out package-plan.json
+   #+end_src
+
+   The build phase follows =build-order.json= when the bundle has one.
+   Otherwise it builds every =.eb= file under =bundle/easyconfigs= in sorted
+   order. Each line uses that directory as its first EasyBuild robot overlay.
+   Included easyblocks under =bundle/easyblocks= are passed to EasyBuild too.
+
+2. Run the build:
+
+   #+begin_src bash
+   eb-pipeline run --site site.toml --package-plan bundle \
+       --target cpu --build-type production --result result.json
+   #+end_src
+
+   This does not run an ecosystem consistency check. The default phases and
+   output of a normal =--list= run are unchanged.
+
+3. Opt in to consistency verification:
+
+   #+begin_src bash
+   eb-pipeline run --site site.toml --package-plan bundle \
+       --verify-package-plan --target cpu --build-type production \
+       --result verified.json
+   #+end_src
+
+   After a clean build, the =verification= phase loads each emitted product
+   module separately. It runs =pip check= for a PyPI product. For a CRAN
+   product it asks R to read the installed package's =DESCRIPTION= fields and
+   fails when a package named by =Depends=, =Imports=, or =LinkingTo= is not
+   installed. Plans of other origins add no ecosystem command.
+
+** Check that it worked
+
+The result records the digest of the canonical package plan:
+
+#+begin_src bash
+jq '{package_plan_digest, verification: [.phases[] | select(.name == "verification")]}' verified.json
+#+end_src
+
+=package_plan_digest= is the lowercase SHA-256 of =bundle/package.plan.json=
+exactly as eb-stack wrote it. Verification logs are
+=verification-1.log=, =verification-2.log=, and so on under the run's target
+log directory.
+
+** If it fails
+
+| Message or status | Cause | What to do |
+|-
+| =package-plan bundle is not a directory= | =--package-plan= does not name a bundle directory. | Pass the directory that contains =package.plan.json=. |
+| =build-order recipe does not exist= | The declared bundle is incomplete. | Re-run =eb-stack package plan= and transfer the whole output directory. |
+| =verification= is =skipped= | A build was failed, refused, or pending. | Repair or resume the build before checking the installed environment. |
+| =pip-check:MODULE exited N= | =pip check= found inconsistent installed Python requirements, or could not run. | Read the matching verification log with the product module loaded. |
+| =r-description-check:MODULE exited N= | The R product is absent or a DESCRIPTION dependency is absent. | Read the matching verification log and repair the R installation. |
+
+** Related
+
+- [[file:from-eb-stack.org][Build what eb-stack plans]], for build-list and easystack inputs
+- [[file:../reference/plan-and-result.org][The plan and result files]]
+- [[file:../reference/cli.org][The eb-pipeline command]]
