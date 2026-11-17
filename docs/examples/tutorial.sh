@@ -56,6 +56,10 @@ expect_line 'INFO [run] cpu: dry run: nothing executed'
 # compares those blocks with what this script just printed, including
 # the checks phase a site file without [checks] leaves out.
 page=$pages/tutorials/first-build-list.org
+grep -Fx 'git checkout main' "$page" >/dev/null || {
+    echo "the tutorial must follow main rather than pin a moving main commit" >&2
+    exit 1
+}
 grep -F '# [checks] not configured' "$page" >/dev/null || {
     echo "the tutorial dry-run example has no '# [checks] not configured' line" >&2
     exit 1
