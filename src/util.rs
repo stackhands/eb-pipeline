@@ -34,10 +34,13 @@ pub fn split_args(s: &str) -> Result<Vec<String>, Fail> {
     Ok(out)
 }
 
-/// Quote `a` for a shell, or for a build list line: as it is when it holds
-/// only characters a shell leaves alone, else in single quotes. A single
-/// quote in `a` is written `'"'"'`, which a shell and `split_args` both read
-/// back.
+/// Quote `a` for a shell: as it is when it holds only characters a shell
+/// leaves alone, else in single quotes. A single quote in `a` is written
+/// `'"'"'`, which a shell and [`split_args`] both read back.
+///
+/// A build list line is not a shell command. [`list_word`] writes one word
+/// of a build list, and leaves a parenthesis or a star bare. `stack shard`
+/// splits on white space and keeps the quotes a shell would add.
 pub fn quote(a: &str) -> String {
     if !a.is_empty()
         && a.chars()
@@ -47,6 +50,63 @@ pub fn quote(a: &str) -> String {
     } else {
         format!("'{}'", a.replace('\'', "'\"'\"'"))
     }
+}
+
+/// One word of a build list line, which [`parse_list`] reads back as `word`.
+///
+/// The word stays bare when the reader already keeps it as one word, including
+/// a parenthesis or a star that a shell would quote. A word that holds a space
+/// or a quote is quoted so the reader still returns it: double quotes when it
+/// holds an apostrophe, single quotes otherwise, and the two side by side when
+/// it holds both. A line break cannot be one word of one line.
+pub fn list_word(word: &str) -> Result<String, Fail> {
+    if word.contains(['\n', '\r']) {
+        return Err(Fail::usage(
+            "a build list word holds a line break, which one line cannot hold",
+        ));
+    }
+    if word.is_empty() {
+        return Ok("''".into());
+    }
+    if is_bare_list_word(word) {
+        return Ok(word.to_string());
+    }
+    if !word.contains('\'') {
+        return Ok(format!("'{word}'"));
+    }
+    if !word.contains('"') {
+        return Ok(format!("\"{word}\""));
+    }
+    let mut out = String::new();
+    let mut chars = word.chars().peekable();
+    while chars.peek().is_some() {
+        let quote = if chars.peek() == Some(&'\'') {
+            '"'
+        } else {
+            '\''
+        };
+        let mut run = String::new();
+        while let Some(&c) = chars.peek() {
+            if c == quote {
+                break;
+            }
+            run.push(c);
+            chars.next();
+        }
+        out.push(quote);
+        out.push_str(&run);
+        out.push(quote);
+    }
+    Ok(out)
+}
+
+/// Whether `word` is already one word to [`parse_list`], and not a comment
+/// when it is the first word of a line.
+fn is_bare_list_word(word: &str) -> bool {
+    !word.starts_with('#')
+        && !word
+            .chars()
+            .any(|c| c.is_whitespace() || c == '\'' || c == '"')
 }
 
 /// Whether `s` is a log stamp: a UTC time as `YYYYMMDD_HHMMSS`, the name
@@ -176,6 +236,55 @@ mod tests {
             assert_eq!(String::from_utf8_lossy(&o.stdout), a, "{}", quote(a));
         }
         assert_eq!(quote("--rebuild"), "--rebuild");
+    }
+
+    #[test]
+    fn a_shell_quote_is_not_a_build_list_word() {
+        // quote() is the shell quoter. An apostrophe is '"'"', which a shell
+        // and split_args both read back, not the backslash form '\''.
+        let shell = quote("it's");
+        assert!(shell.contains("'\"'\"'"), "{shell}");
+        assert!(!shell.contains("'\\''"), "{shell}");
+        assert_eq!(split_args(&shell).unwrap(), ["it's"]);
+
+        // A parenthesis is one bare word of a build list. The shell form
+        // quotes it, so a reader that splits on white space and keeps the
+        // quotes does not see the option.
+        let hooks = "--hooks=/tmp/a(b).py";
+        let quoted = quote(hooks);
+        assert_ne!(quoted, hooks, "{quoted}");
+        assert_ne!(quoted.split_whitespace().collect::<Vec<_>>(), [hooks]);
+        assert_eq!(list_word(hooks).unwrap(), hooks);
+        assert_eq!(
+            list_word("--filter-deps=foo(bar)").unwrap(),
+            "--filter-deps=foo(bar)"
+        );
+        assert_eq!(list_word("--opt=a*b").unwrap(), "--opt=a*b");
+
+        for word in [
+            "it's",
+            "a b",
+            "say \"hi\"",
+            "it's \"a\"",
+            "",
+            "#hash",
+            "--hooks=/tmp/a(b).py",
+            "--opt=a*b",
+            "--filter-deps=foo(bar)",
+            "  ",
+        ] {
+            let listed = list_word(word).unwrap();
+            let lines = parse_list(&format!("x.eb {listed}")).unwrap();
+            assert_eq!(
+                lines[0].args,
+                vec![word.to_string()],
+                "{word:?} encoded as {listed}"
+            );
+        }
+        assert_eq!(list_word("it's").unwrap(), "\"it's\"");
+        assert_eq!(list_word("a b").unwrap(), "'a b'");
+        assert!(list_word("a\nb").is_err());
+        assert!(list_word("a\rb").is_err());
     }
 
     #[test]
