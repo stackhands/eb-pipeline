@@ -686,6 +686,15 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
             }
         }
     }
+    if let Some(s) = &site.sbom {
+        if s.enabled {
+            match s.lock.as_deref().filter(|p| !p.is_empty()) {
+                Some(p) if Path::new(p).is_absolute() => {}
+                Some(p) => e.push(format!("sbom.lock: `{p}` is not an absolute path")),
+                None => e.push("sbom.lock: must name the lock file when sbom is enabled".into()),
+            }
+        }
+    }
     if let Some(c) = &site.checks {
         if c.when != "clean" && c.when != "staged" {
             e.push(format!(
@@ -821,6 +830,10 @@ impl Site {
     /// `[notify]` when active.
     pub fn notify_on(&self) -> Option<&Notify> {
         self.notify.as_ref().filter(|n| n.enabled)
+    }
+    /// `[sbom]` when active.
+    pub fn sbom_on(&self) -> Option<&Sbom> {
+        self.sbom.as_ref().filter(|s| s.enabled)
     }
     /// `[watch]` when active.
     pub fn watch_on(&self) -> Option<&Watch> {

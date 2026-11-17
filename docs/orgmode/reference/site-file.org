@@ -99,6 +99,7 @@ So every job that a run or =watch= starts needs the directory, whatever its phas
 | =rebuild=        | table          | none     | Rebuilding installed software in a staged tree, with eb-staged-rebuild.         |
 | =licences=       | table          | none     | The licence gate.                                                               |
 | =notify=         | table          | none     | Sending the summary of each run to a webhook.                                   |
+| =sbom=           | table          | none     | After a clean build, storing the CycloneDX document of a lock beside the summary. |
 | =watch=          | table          | none     | Recording what each install was built against in EESSI.                         |
 
 ** =[site]=
@@ -480,6 +481,18 @@ Each run that sends the summary starts =curl --silent --show-error --fail --max-
 A run checks the URL in the variable of =webhook_env= the same way when it ends.
 A run that writes no summary, such as =run --dry-run=, sends nothing.
 A POST that cannot start, fails or runs out of time is a =WARN= line, and the run exits as it would have without the table; [[file:run-summary.org][The run summary]] shows the lines that a run writes.
+
+** =[sbom]=
+
+With the table, a clean =run= starts =eb-stack stack sbom --lock LOCK --out LOG_ROOT/LOG_STAMP/sbom.cdx.json= and keeps that file beside =summary.json=.
+A build that did not exit 0 does not start it, and neither does =run --dry-run=.
+A command that cannot be started, or that exits with a status other than 0, fails the run with that status and leaves no =sbom.cdx.json=.
+eb-stack reads the lock and writes the document; eb-pipeline does not compute a bill of materials of its own.
+
+| Key       | Type    | Default | Meaning                                                                                                        |
+|-----------+---------+---------+----------------------------------------------------------------------------------------------------------------|
+| =enabled= | boolean | =true=  | =false= stores nothing.                                                                                        |
+| =lock=    | string  | none    | The lock file given to =eb-stack stack sbom --lock=; required when enabled, and an absolute path.             |
 
 ** =[watch]=
 

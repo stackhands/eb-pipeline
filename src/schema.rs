@@ -619,6 +619,16 @@ doc_struct! {
 }
 
 doc_struct! {
+    /// Store a CycloneDX document from an eb-stack lock after a clean build.
+    Sbom {
+        #[serde(default = "yes")]
+        enabled: bool => ("boolean", "true", false, "Set false to store nothing."),
+        lock: Option<String> => ("string", "none", false,
+            "Lock file given to `eb-stack stack sbom --lock`. After a clean build the CycloneDX document is `sbom.cdx.json` beside `summary.json`. Required when enabled."),
+    }
+}
+
+doc_struct! {
     /// A site file.
     Site {
         schema_version: u32 => ("integer", "", true, "Schema version; 1."),
@@ -639,6 +649,8 @@ doc_struct! {
         rebuild: Option<Rebuild> => ("table", "none", false, "Staged rebuild."),
         licences: Option<Licences> => ("table", "none", false, "Licence enforcement."),
         notify: Option<Notify> => ("table", "none", false, "Webhook POST of each run's summary; none without the table."),
+        sbom: Option<Sbom> => ("table", "none", false,
+            "After a clean build, `eb-stack stack sbom --lock` writes `sbom.cdx.json` beside `summary.json`."),
         watch: Option<Watch> => ("table", "none", false, "Records what each install was built against in EESSI, for `watch`; none without the table."),
     }
 }
@@ -673,6 +685,7 @@ pub const SECTIONS: &[(&str, &[FieldDoc])] = &[
     ("licences", Licences::FIELDS),
     ("licences.required", LicenceRequired::FIELDS),
     ("notify", Notify::FIELDS),
+    ("sbom", Sbom::FIELDS),
     ("watch", Watch::FIELDS),
 ];
 
@@ -781,6 +794,7 @@ mod tests {
             Licences,
             LicenceRequired,
             Notify,
+            Sbom,
             Watch,
         );
         // Every documented table appears in the printed reference.
@@ -817,6 +831,7 @@ mod tests {
             "licences",
             "phase_defaults",
             "notify",
+            "sbom",
             "watch",
         ] {
             assert!(!req.contains(&k), "{k} must be optional");

@@ -39,6 +39,7 @@ An error that ends a command is written to stderr as =ERROR [main] -: MESSAGE=.
 - =run=: =eb-stack stack shard= exited with a status other than 0, 2 and =shards.planner_exit_unsharded=, or its plan could not be read; the run ends.
 - =run=: =eb-stack stack admit= exited with a status other than 0, 2 and 78; the run ends.
 - =run=: =[caches].command= exited with a status other than 0.
+- =run=: =eb-stack stack sbom= could not be started, exited with a status other than 0, or wrote no =sbom.cdx.json=, after a clean build.
 - =run=: =eb-keep-logs rotate= exited with a status other than 0 and 75.
 - =run=: a log file, a log directory, the list of selected lines or the result file could not be written.
 - =plan=: the shard plan given to =--shard-plan= could not be read, or the plan could not be written to =--out=.

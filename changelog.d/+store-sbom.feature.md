@@ -1,0 +1,1 @@
+A `[sbom]` table makes a clean `run` start `eb-stack stack sbom --lock` and keep the CycloneDX document as `sbom.cdx.json` beside `summary.json`. A build that did not exit 0 does not ask. A command that fails, or writes no document, fails the run and leaves no file. eb-stack reads the lock; eb-pipeline does not compute the bill of materials.
