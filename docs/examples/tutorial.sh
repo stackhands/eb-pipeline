@@ -6,6 +6,13 @@
 # RUSTUP_TOOLCHAIN=1.90.0 bash docs/examples/tutorial.sh.
 # shellcheck disable=SC2016 # commands stay quoted as the page shows them
 
+# Build the tutorial binary from this checkout when it is missing.
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+bin=${DOCS_EB_PIPELINE:-$root/target/debug/eb-pipeline}
+if [ ! -x "$bin" ]; then
+    (cd "$root" && cargo build --locked)
+fi
+
 # lib.sh moves HOME and PATH; keep the toolchain of the user who runs this.
 cargo=$(command -v cargo)
 export RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}
