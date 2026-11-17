@@ -1748,6 +1748,48 @@ fn eessi_site_prefix_follows_the_install_prefix() {
 }
 
 #[test]
+fn the_site_installs_guide_gives_users_the_prefix_and_target_builds_install_for() {
+    let howto = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/orgmode/howto");
+    let o = bin()
+        .args(["explain", "--format", "json", "--site"])
+        .arg(howto.join("site-installs/site.toml"))
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let r: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    let targets = r["targets"].as_array().unwrap();
+    assert_eq!(targets.len(), 2);
+    for t in targets {
+        assert_eq!(
+            t["env"]["EESSI_SITE_SOFTWARE_PREFIX"], t["site_prefix"],
+            "{t}"
+        );
+        assert_eq!(
+            t["env"]["EESSI_SOFTWARE_SUBDIR_OVERRIDE"], t["cpu_target"],
+            "{t}"
+        );
+    }
+
+    let guide = howto.join("site-installs.org");
+    let page = std::fs::read_to_string(&guide).unwrap();
+    let text = page.split_whitespace().collect::<Vec<_>>().join(" ");
+    for needed in [
+        "Without the variable, it takes the =host_injections= tree",
+        "With eessi-arch-guard as the Slurm =TaskProlog=, that is the target the guard selects",
+        "printenv EESSI_SOFTWARE_SUBDIR",
+        "Set the target's prefix before EESSI loads",
+        "export EESSI_SITE_SOFTWARE_PREFIX=/opt/site/zen4",
+        "keeps it on the nodes of another",
+    ] {
+        assert!(
+            text.contains(needed),
+            "{} lacks `{needed}`",
+            guide.display()
+        );
+    }
+}
+
+#[test]
 fn the_log_root_reference_names_the_stamp_and_the_target() {
     let text = eb_pipeline::schema::reference();
     assert!(text.contains("<log_root>/<log-stamp>/<target>/"), "{text}");
