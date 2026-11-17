@@ -217,32 +217,11 @@ allocated task, so give each role a task count; the templates use
   build, with `EB_PIPELINE_CACHE_*` in the environment.
 - `logs`: `eb-keep-logs rotate` on `filesystems.log_root`. `[logs.rotate]` needs
   `compress_after_days`, passed as `--compress-after`; `delete_after_days`,
-  passed as `--delete-after`, must be greater. eb-keep-logs 0.2.1 takes no
-  lock and passes over at most the run that it writes into itself: two
-  rotations at once lose each other's updates to a run's `.licensed-logs`,
-  and a rotation compresses the logs of a run that is still writing them once
-  that run's log stamp is a day old in UTC, as it is for a target that
-  started before midnight. So a run holds `<log_root>/.eb-pipeline-rotate.lock`
-  shared from its start and rotates only when it can take that lock alone.
-  While another run under the log root is live or rotating, `logs` is
-  `skipped` and the rotation is left to a run that ends alone; a run that
-  starts while another rotates waits for it. The lock is a `flock`, so it
-  holds between nodes only where the log root's filesystem carries `flock`
-  between them. An eb-keep-logs that takes a lock of its own holds
-  `<log_root>/.eb-keep-logs-rotate.lock` for the whole rotation, and exits 75
-  when another rotate holds it past `--lock-timeout`, having changed nothing.
-  `logs` is then `skipped`, with a note that names that lock, and the
-  rotation is left to the rotate that holds it: that rotate lists the log
-  root after taking the lock, so it does this rotation's work, and a later
-  run that ends alone does what is left. Any other non-zero exit of `rotate`
-  is `failed`. `run` passes `--lock-timeout 0`, so that the rotation does not
-  wait: the run holds `.eb-pipeline-rotate.lock` alone while it rotates, and
-  every run under the log root that starts meanwhile waits for it.
-  eb-keep-logs 0.2.1 refuses `--lock-timeout` with exit 2, and the builds
-  that take it print the same version, so `run` passes the option only when
-  `eb-keep-logs --help`, run where eb-pipeline runs as the `min_version`
-  checks are, lists it. Otherwise the rotation runs without it, and the
-  `logs` note and an INFO line say why.
+  passed as `--delete-after`, must be greater. A run rotates only when no other
+  run under the log root is live or rotating, and leaves the rotation to
+  another rotate that holds eb-keep-logs' lock; either way, `logs` is then
+  `skipped`. [Log rotation](#log-rotation) has the locks behind this, and a
+  rotation from cron that takes them in the same order.
 
 ### Per-target line selection
 
@@ -377,6 +356,72 @@ its own: a target's `ledger_config` overrides the one in `[rebuild]`, and
 `check` refuses two such targets that resolve to the same file. `explain` shows
 the file of each target.
 
+### Log rotation
+
+Two `flock` locks in `filesystems.log_root` keep the rotations of the log tree
+apart from each other and from the runs that write into it. They hold between
+nodes only where the log root's filesystem carries `flock` between them.
+
+- `.eb-pipeline-rotate.lock` is eb-pipeline's. With `[logs.rotate]`, a run
+  holds it shared from its start and rotates only when it can take it alone.
+  While another run under the log root is live or rotating, `logs` is
+  `skipped` and the rotation is left to a run that ends alone; a run that
+  starts while another rotates waits for it.
+- `.eb-keep-logs-rotate.lock` is eb-keep-logs'. An eb-keep-logs whose `--help`
+  lists `--lock-timeout` takes this lock alone in `rotate`, from before it lists
+  the log root until it exits, and waits for it up to `--lock-timeout` seconds,
+  600 unless given; 0 does not wait. When the wait runs out, it exits 75 and
+  has changed nothing. eb-keep-logs never takes eb-pipeline's lock.
+
+eb-keep-logs' lock keeps two rotates apart, but not a rotate and a run that is
+still writing logs on another host, which is what eb-pipeline's lock is for.
+eb-keep-logs 0.2.1 takes no lock of its own, and passes over at most the run
+that it writes into itself: two rotations at once lose each other's updates to
+a run's `.licensed-logs`, and a rotation compresses the logs of a run that is
+still writing them once that run's log stamp is a day old in UTC, as it is for
+a target that started before midnight.
+
+Whatever takes both locks takes eb-pipeline's first and eb-keep-logs' second.
+A run's rotation does, and so does the cron wrapper below; eb-keep-logs takes
+only its own. So nothing waits for eb-pipeline's lock while it holds
+eb-keep-logs', and two rotations cannot deadlock.
+
+`run` passes `--lock-timeout 0`, so that its rotation does not wait for another
+rotate: while it rotates, the run holds `.eb-pipeline-rotate.lock` alone, and
+every run under the log root that starts meanwhile waits for it. A `rotate`
+that exits 75 leaves `logs` `skipped`, with a note that names
+`.eb-keep-logs-rotate.lock`, and the rotation to the rotate that holds it. That
+rotate lists the log root after taking the lock, so it does this rotation's
+work, and a later run that ends alone does what is left. Any other non-zero
+exit of `rotate` is `failed`.
+
+eb-keep-logs 0.2.1 refuses `--lock-timeout` with exit 2, and the builds that
+take it print the same version, so `run` passes the option only when
+`eb-keep-logs --help` lists it. `run` reads the help where it checks
+`min_version`, with the rotation's environment, and only when it rotates.
+Without the option, the rotation runs as it does with 0.2.1, and the `logs`
+note and an INFO line say why.
+
+A rotation outside a run, such as one from cron, takes eb-pipeline's lock the
+same way with `flock(1)`:
+
+```bash
+TZ=UTC flock -w 3600 -E 75 /opt/eb/logs/.eb-pipeline-rotate.lock \
+  eb-keep-logs rotate /opt/eb/logs --compress-after 30 --delete-after 365
+```
+
+`flock` waits up to an hour for the live runs under the log root, and a
+rotation that holds the lock, to end, then holds the lock alone while `rotate`
+runs. When that wait runs out, it exits 75 without starting `rotate`; `rotate`
+exits 75 too when another rotate holds its own lock past `--lock-timeout`.
+Either way, 75 means that the tree was busy and nothing changed. While the
+wrapper holds the lock, a run that starts waits for it. A run can still start
+while the wrapper waits, so on a log root that always has a live run the
+wrapper gives up after the hour, and the last run to end can take the lock and
+rotate before the wrapper does. The wrapper keeps a rotation by eb-keep-logs
+0.2.1 apart from runs and their rotations too. `TZ=UTC`, as `run` sets it, counts a run's age from the UTC
+midnight of its stamp.
+
 ## Exit codes
 
 | code | meaning |
@@ -496,8 +541,8 @@ set, and is `refused` when the first still holds it then, so the run ends with
 lock between two build nodes. `EASYBUILD_TMPDIR` is safe to share: each `eb`
 makes its own `eb-*` directory under it. So is `log_root`: each run writes
 under its own `<log-stamp>/<target>`, and with `[logs.rotate]` a run rotates
-only when no other run under the log root is live (`logs` under
-[Phases](#phases)).
+only when no other run under the log root is live ([Log
+rotation](#log-rotation)).
 
 `targets --format json` prints the names as a JSON array on one line, the form
 a CI matrix reads. [examples/ci/github-actions.yml](examples/ci/github-actions.yml)

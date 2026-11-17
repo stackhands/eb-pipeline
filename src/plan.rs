@@ -667,8 +667,10 @@ impl<'a> Planner<'a> {
 
     /// `<log_root>/.eb-pipeline-rotate.lock`, with `[logs.rotate]` set. A
     /// run holds it shared while it writes logs and rotates only when it can
-    /// take it alone: eb-keep-logs takes no lock, and passes over at most
-    /// the run that it writes into itself.
+    /// take it alone. eb-keep-logs takes a lock of its own, `keep_logs_lock`,
+    /// which keeps two rotates apart but not a rotate and a run that is
+    /// still writing, and never takes this one: whatever takes both takes
+    /// this one first. eb-keep-logs 0.2.1 takes no lock.
     pub fn rotate_lock(&self) -> Option<PathBuf> {
         self.site().logs_on()?.rotate.as_ref()?;
         Some(PathBuf::from(&self.site().filesystems.log_root).join(".eb-pipeline-rotate.lock"))
