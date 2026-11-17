@@ -719,16 +719,32 @@ pub fn check_dirs(probe: &Probe) -> Result<(), Fail> {
     Ok(())
 }
 
-/// Recorded installs built against another EESSI version or CPU
-/// subdirectory than the module environment loads now.
-pub fn other_eessi<'a>(state: &'a State, probe: &Probe) -> Vec<(&'a String, &'a Install)> {
+/// Recorded installs built against an EESSI generation other than `version`.
+/// When `subdir` is set, an install of that generation on another CPU
+/// subdirectory is included too.
+///
+/// [`other_eessi`] passes the subdirectory the module environment loads.
+/// A plan knows the generation in `[modules] init` and passes none, so a
+/// move that keeps the generation and changes only the CPU stays a watch
+/// refusal.
+pub fn built_against_other<'a>(
+    state: &'a State,
+    version: &str,
+    subdir: Option<&str>,
+) -> Vec<(&'a String, &'a Install)> {
     state
         .installs
         .iter()
         .filter(|(_, i)| {
-            i.eessi_version != probe.version || i.software_subdir != probe.software_subdir
+            i.eessi_version != version || subdir.is_some_and(|s| i.software_subdir != s)
         })
         .collect()
+}
+
+/// Recorded installs built against another EESSI version or CPU
+/// subdirectory than the module environment loads now.
+pub fn other_eessi<'a>(state: &'a State, probe: &Probe) -> Vec<(&'a String, &'a Install)> {
+    built_against_other(state, &probe.version, Some(&probe.software_subdir))
 }
 
 /// Whether every install was last found at the repository's revision now,
@@ -1258,6 +1274,57 @@ pub fn settle(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn recorded(version: &str, subdir: &str) -> Install {
+        Install {
+            easyconfig: "x.eb".into(),
+            args: Vec::new(),
+            how: "built".into(),
+            run: "r".into(),
+            recorded_at: "2026-11-17T09:00:00Z".into(),
+            eessi_version: version.into(),
+            software_subdir: subdir.into(),
+            modules_dirs: vec!["/m".into()],
+            revision: None,
+            deps: BTreeMap::new(),
+            pending: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn other_eessi_uses_the_shared_walk_and_the_probe_subdirectory() {
+        let mut state = State::new("zen4");
+        state
+            .installs
+            .insert("A/1.0".into(), recorded("2023.06", "x86_64/amd/zen4"));
+        state
+            .installs
+            .insert("B/1.0".into(), recorded("2025.06", "x86_64/amd/zen4"));
+        state
+            .installs
+            .insert("C/1.0".into(), recorded("2025.06", "x86_64/amd/zen2"));
+        let probe = Probe {
+            version: "2025.06".into(),
+            software_subdir: "x86_64/amd/zen4".into(),
+            repository: None,
+            modules_dirs: Vec::new(),
+        };
+        let names = |found: Vec<(&String, &Install)>| -> Vec<String> {
+            found.into_iter().map(|(n, _)| n.clone()).collect()
+        };
+        let via_probe = names(other_eessi(&state, &probe));
+        let via_helper = names(built_against_other(
+            &state,
+            &probe.version,
+            Some(&probe.software_subdir),
+        ));
+        assert_eq!(via_probe, via_helper);
+        assert_eq!(via_probe, ["A/1.0", "C/1.0"]);
+        assert_eq!(
+            names(built_against_other(&state, "2025.06", None)),
+            ["A/1.0"]
+        );
+    }
 
     fn module(name: &str) -> Module {
         Module {

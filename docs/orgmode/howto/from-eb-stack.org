@@ -151,6 +151,7 @@ Without =[shards]= the build keeps the argument, space included.
 | =ERROR [main] -: easystack FILE: there is no top-level `easyconfigs` key=                                                  | A build list whose name ends in =.yml= or =.yaml=, or an easystack of another form. | Name a build list otherwise; write the entries under =easyconfigs:=. |
 | =ERROR [main] -: build list line LINE: stack shard reads words split on white space, and those words are not this line's arguments= | A word holds a space or a quote, and =[shards]= is on. =stack shard= would not read the arguments the build runs. | Write the value without a space or a quote, or run without =[shards]=. |
 | A line fails because an easyconfig it depends on is not installed                                                          | The file lists the easyconfigs by name, and the dependency comes later.             | Build from a file of =stack solve= or =stack order=.                 |
+| =ERROR [main] -: target TARGET loads EESSI VERSION in [modules] init, and N of M recorded installs were built against EESSI ...= | The site file loads a different EESSI generation from the one the watch record of this prefix was built against. | Give the new generation its own prefix. =eb-stack stack gap --out-dir DIR= writes =roots.txt=, and =plan --list DIR/roots.txt= plans it. Then =watch --adopt= on that prefix. =run= prints the same words as =ERROR [run] TARGET:=. |
 
 ** Related
 
