@@ -260,6 +260,50 @@ fn a_dry_run_prints_the_targeted_rebuild_in_the_order_eb_stack_gives() {
 }
 
 #[test]
+fn a_rebuild_line_leaves_a_parenthesis_and_a_star_bare() {
+    let t = setup(WATCH);
+    stack(&t);
+    let vars = eessi_vars(&t, "2023.06");
+    let list = "\
+Foo-1.0-GCCcore-13.2.0.eb --filter-deps=foo(bar) --opt=a*b --comment=\"it's\"
+Bar-2.0-GCCcore-13.2.0.eb
+Baz-3.0-GCCcore-13.2.0.eb
+Qux-4.0-GCCcore-13.2.0.eb
+";
+    let o = run(&t, "cpu", STAMP, list, &with(&vars));
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    assert_eq!(
+        t.watch_state("cpu")["installs"]["Foo/1.0-GCCcore-13.2.0"]["args"],
+        serde_json::json!(["--filter-deps=foo(bar)", "--opt=a*b", "--comment=it's"])
+    );
+
+    t.eessi_module("CMake", "3.27.6-GCCcore-13.2.0");
+    let plan = t.root().join("paren-plan.json");
+    let plan_arg = plan.display().to_string();
+    let o = watch(
+        &t,
+        LATER,
+        &["--dry-run", "--plan-out", &plan_arg],
+        &with(&vars),
+    );
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    let p: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&plan).unwrap()).unwrap();
+    let foo = p["rebuild"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l.as_str().unwrap().starts_with("Foo-"))
+        .unwrap()
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        foo,
+        "Foo-1.0-GCCcore-13.2.0.eb --filter-deps=foo(bar) --opt=a*b \"--comment=it's\" --rebuild"
+    );
+}
+
+#[test]
 fn watch_rebuilds_only_the_installs_the_change_reaches_and_records_them_again() {
     let t = built("");
     let vars = eessi_vars(&t, "2023.06");

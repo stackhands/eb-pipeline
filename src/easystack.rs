@@ -8,7 +8,7 @@
 //! names. Only `easyconfigs` is read; EasyBuild ignores the other top-level
 //! keys as well.
 
-use crate::util::{quote, ListLine};
+use crate::util::{list_word, ListLine};
 use serde_yaml::{Mapping, Value};
 use std::path::Path;
 
@@ -68,14 +68,12 @@ fn entry(e: &Value) -> Result<ListLine, String> {
         Some(o) => eb_args(o).map_err(|m| format!("{easyconfig}: {m}"))?,
         None => Vec::new(),
     };
-    let words: Vec<&String> = std::iter::once(&easyconfig).chain(&args).collect();
-    if let Some(w) = words.iter().find(|w| w.contains(['\'', '\n', '\r'])) {
-        return Err(format!(
-            "{easyconfig}: `{w}` holds a single quote or a line break, which a build list line cannot"
-        ));
+    let mut raw = Vec::with_capacity(1 + args.len());
+    for w in std::iter::once(&easyconfig).chain(&args) {
+        raw.push(list_word(w).map_err(|e| format!("{easyconfig}: {e}"))?);
     }
     Ok(ListLine {
-        raw: words.iter().map(|w| quote(w)).collect::<Vec<_>>().join(" "),
+        raw: raw.join(" "),
         easyconfig,
         args,
     })
@@ -296,6 +294,17 @@ mod tests {
     }
 
     #[test]
+    fn an_apostrophe_and_a_shell_character_stay_one_argument() {
+        let l = &parse(
+            "easyconfigs:\n  - x.eb: {options: {amend: \"it's\", hooks: \"/tmp/a(b).py\"}}\n",
+        )
+        .unwrap()[0];
+        assert_eq!(l.args, ["--amend=it's", "--hooks=/tmp/a(b).py"]);
+        assert_eq!(l.raw, "x.eb \"--amend=it's\" --hooks=/tmp/a(b).py");
+        assert_eq!(crate::util::parse_list(&l.raw).unwrap()[0], *l);
+    }
+
+    #[test]
     fn a_plain_one_gives_the_bare_option_as_in_easybuild() {
         let l = &parse(
             "easyconfigs:\n  - x.eb: {options: {rebuild: 1, parallel: '1', a-b: [1], amend: 1, c-d: 0}}\n",
@@ -364,8 +373,8 @@ mod tests {
                 "by its long name",
             ),
             (
-                "easyconfigs:\n  - x.eb: {options: {a-b: \"it's\"}}\n",
-                "holds a single quote",
+                "easyconfigs:\n  - x.eb: {options: {a-b: \"a\\nb\"}}\n",
+                "line break",
             ),
             ("easyconfigs:\n  - ''\n", "the easyconfig name is empty"),
             ("easyconfigs: [\n", "while parsing"),

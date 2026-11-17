@@ -134,6 +134,10 @@ eb pigz-2.8-GCCcore-15.2.0.eb --rebuild
 #+end_example
 
 With =[shards]=, the run writes the lines of an easystack to =easystack-TARGET.list= in its log directory, which =stack shard= reads as its build list; with =[targets.select]=, =selected-TARGET.list= holds them.
+A word is written so that reading the line back gives the same argument, including an apostrophe.
+=stack shard= splits on white space and keeps quote characters, so a word with a space or a quote is not the same word to it.
+=plan= and =run= refuse that line when =[shards]= is on.
+Without =[shards]= the build keeps the argument, space included.
 
 ** If it fails
 
@@ -144,6 +148,7 @@ With =[shards]=, the run writes the lines of an easystack to =easystack-TARGET.l
 | =ERROR [main] -: easystack FILE: entry N: NAME: the option `OPTION`: put `8.0` in quotes; ...=                             | A number with a point without quotes.                                               | Write it in quotes, such as ='8.0'=.                                 |
 | =ERROR [main] -: easystack FILE: `easyconfigs` is not a list; start each entry with `- `=                                  | The entries under =easyconfigs:= do not start with a dash.                          | Start each entry with a dash.                                        |
 | =ERROR [main] -: easystack FILE: there is no top-level `easyconfigs` key=                                                  | A build list whose name ends in =.yml= or =.yaml=, or an easystack of another form. | Name a build list otherwise; write the entries under =easyconfigs:=. |
+| =ERROR [main] -: build list line LINE: stack shard reads words split on white space, and those words are not this line's arguments= | A word holds a space or a quote, and =[shards]= is on. =stack shard= would not read the arguments the build runs. | Write the value without a space or a quote, or run without =[shards]=. |
 | A line fails because an easyconfig it depends on is not installed                                                          | The file lists the easyconfigs by name, and the dependency comes later.             | Build from a file of =stack solve= or =stack order=.                 |
 
 ** Related

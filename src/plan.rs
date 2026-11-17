@@ -6,7 +6,7 @@ use crate::easystack::is_easystack;
 use crate::exit::{self, Fail};
 use crate::resolve::{Role, Scope};
 use crate::tools::Tool;
-use crate::util::{parse_list, quote, ListLine};
+use crate::util::{list_word, parse_list, quote, ListLine};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -224,10 +224,14 @@ impl<'a> Planner<'a> {
 
     /// Apply the target's selector to the list lines, in order. Kept lines
     /// carry the arguments `strip` leaves; the others are recorded. Without a
-    /// selector every line is kept as read and nothing is recorded.
-    pub fn select_lines(&self, lines: &[ListLine]) -> (Vec<ListLine>, Vec<Deselected>) {
+    /// selector every line is kept as read and nothing is recorded. A stripped
+    /// line that cannot be written as one build list line is an error.
+    pub fn select_lines(
+        &self,
+        lines: &[ListLine],
+    ) -> Result<(Vec<ListLine>, Vec<Deselected>), Fail> {
         let Some(sel) = &self.scope.target.select else {
-            return (lines.to_vec(), Vec::new());
+            return Ok((lines.to_vec(), Vec::new()));
         };
         let mut kept = Vec::new();
         let mut out = Vec::new();
@@ -235,11 +239,11 @@ impl<'a> Planner<'a> {
             let r = crate::select::select_line(sel, l);
             if r.planned {
                 let raw = if sel.strip {
-                    std::iter::once(&l.easyconfig)
-                        .chain(&r.args)
-                        .map(|a| quote(a))
-                        .collect::<Vec<_>>()
-                        .join(" ")
+                    let mut words = Vec::new();
+                    for a in std::iter::once(&l.easyconfig).chain(&r.args) {
+                        words.push(list_word(a)?);
+                    }
+                    words.join(" ")
                 } else {
                     l.raw.clone()
                 };
@@ -255,7 +259,7 @@ impl<'a> Planner<'a> {
                 });
             }
         }
-        (kept, out)
+        Ok((kept, out))
     }
 
     /// Where the selected build list lives, when the target has a selector.
@@ -866,7 +870,23 @@ pub fn build_plan(
     });
 
     // shard units come from the selected list, so only the whole list is filtered
-    let (kept, deselected) = p.select_lines(lines);
+    let (kept, deselected) = p.select_lines(lines)?;
+    if site.shards_on().is_some() {
+        for l in &kept {
+            // stack shard splits the line on white space and does not drop
+            // quotes. A word with a space or a quote is a different word to
+            // it than to the build, so the plan would not be the line's plan.
+            let split = l.raw.split_whitespace();
+            let words =
+                std::iter::once(l.easyconfig.as_str()).chain(l.args.iter().map(String::as_str));
+            if !split.eq(words) {
+                return Err(Fail::usage(format!(
+                    "build list line `{}`: stack shard reads words split on white space, and those words are not this line's arguments; write each argument without a space or a quote, or run without [shards]",
+                    l.raw
+                )));
+            }
+        }
+    }
     let units: Vec<Unit> = match shard_units {
         Some(u) if !u.is_empty() => u.to_vec(),
         _ if p.scope.target.select.is_some() && kept.is_empty() => vec![],
