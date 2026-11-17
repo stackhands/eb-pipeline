@@ -11,7 +11,7 @@ Each command has its own options; =docs/examples/cli.sh= prints every help text 
 
 #+begin_example
 eb-pipeline <COMMAND>
-eb-pipeline check [OPTIONS] --site <SITE> [--list <LIST> --stack-checks <STACK_CHECKS>]
+eb-pipeline check [OPTIONS]
 eb-pipeline schema
 eb-pipeline init [OPTIONS]
 eb-pipeline explain [OPTIONS] --site <SITE>
@@ -57,6 +57,7 @@ Options:
 Examples:
   eb-pipeline init --template small-cluster --out site.toml
   eb-pipeline check --site site.toml
+  eb-pipeline check --list stack.yml --check-from-commit --easyconfigs-repo DIR
   eb-pipeline targets --site site.toml --format json
   eb-pipeline plan --site site.toml --list list.txt --target cpu --build-type production --out plan.json
   eb-pipeline run --site site.toml --list list.txt --target cpu --build-type production --result result.json
@@ -139,16 +140,21 @@ An option with a variable in the table takes its value from that variable when t
 
 *** check
 
-| Option                 | Variable                | Meaning                                                                                                                                                                                                                            |
-|------------------------+-------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| =--site FILE=          | =EB_PIPELINE_SITE=      | The site file; required.                                                                                                                                                                                                           |
-| =--lists-dir DIR=      | =EB_PIPELINE_LISTS_DIR= | A directory that must hold every file that the =build_lists= of a target names. A missing file is an error of the site file.                                                                                                       |
-| =--probe-tools=        |                         | Start =BIN --version= for each sibling tool that an enabled phase calls, and fail when one cannot start, prints no version, or prints one below the =min_version= of its =[site.tools]= table.                                      |
-| =--list FILE=          | =EB_PIPELINE_LIST=      | The build list or easystack passed to =--stack-checks=. Required with =--stack-checks=; inert without it.                                                                                                                           |
-| =--target NAME=        | =EB_PIPELINE_TARGET=    | Use only this target's =cpu_target= and expanded source paths. Requires =--stack-checks=. Without it, target-dependent values from every target are used.                                                                           |
-| =--stack-checks LIST=  |                         | Comma-separated =files=, =arch=, =cuda-cc=, =generation=, =provided= or =known-failures=. Each names an =eb-stack stack= subprocess. Requires =--list=.                                                                           |
+| Option                     | Variable                | Meaning                                                                                                                                                                                                                            |
+|----------------------------+-------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =--site FILE=              | =EB_PIPELINE_SITE=      | The site file. Required unless =--check-from-commit= is set.                                                                                                                                                                       |
+| =--lists-dir DIR=          | =EB_PIPELINE_LISTS_DIR= | A directory that must hold every file that the =build_lists= of a target names. A missing file is an error of the site file.                                                                                                      |
+| =--probe-tools=            |                         | Start =BIN --version= for each sibling tool that an enabled phase calls, and fail when one cannot start, prints no version, or prints one below the =min_version= of its =[site.tools]= table.                                     |
+| =--list FILE=              | =EB_PIPELINE_LIST=      | The build list or easystack passed to =--stack-checks= or =--check-from-commit=.                                                                                                                                                    |
+| =--target NAME=            | =EB_PIPELINE_TARGET=    | Use only this target's =cpu_target= and expanded source paths. Requires =--stack-checks=. Without it, target-dependent values from every target are used.                                                                          |
+| =--stack-checks LIST=      |                         | Comma-separated =files=, =arch=, =cuda-cc=, =generation=, =provided= or =known-failures=. Each names an =eb-stack stack= subprocess. Requires =--list= and =--site=.                                                              |
+| =--check-from-commit=      |                         | Run =eb-stack stack from-commit --json= on an easystack =--list=; off by default. Requires =--list=.                                                                                                                               |
+| =--easyconfigs-repo DIR=   |                         | Passed to =eb-stack= when the easystack has =from-commit= pins.                                                                                                                                                                    |
+| =--easyblocks-repo DIR=    |                         | Passed to =eb-stack= when the easystack has =include-easyblocks-from-commit= pins.                                                                                                                                                 |
+| =--easybuild-version X.Y.Z= |                        | EasyBuild release version; overrides =eb-X.Y.Z= in the list file name.                                                                                                                                                             |
 
 =check= writes =INFO [check] NAME: site file is valid= to stderr when the file is valid, where =NAME= is =site.name=.
+When =--check-from-commit= runs, =eb-pipeline= forwards =eb-stack='s report and exits with its status; exit 1 means at least one pin is already in the release tag. See [[file:../howto/check-from-commit-pins.org][Check from-commit pins before building]].
 Before that line it writes a =WARN= line for each of these settings:
 
 - =modules.unuse_path= with a first =modules.init= entry that is not an absolute path;

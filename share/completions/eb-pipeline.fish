@@ -51,7 +51,11 @@ cuda-cc\t'`stack cuda-cc`, with the robot trees. `eb-stack` checks its accelerat
 generation\t'`stack generation` on the easystack'
 provided\t'`stack provided` on a plain build list, with `[sbom].lock` as `--baseline-lock`'
 known-failures\t'`stack known-failures`, with robot trees and each selected `cpu_target`'"
+complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand check" -l easyconfigs-repo -d 'easybuild-easyconfigs checkout for `from-commit` pins' -r -F
+complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand check" -l easyblocks-repo -d 'easybuild-easyblocks checkout for `include-easyblocks-from-commit`' -r -F
+complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand check" -l easybuild-version -d 'EasyBuild release `X.Y.Z`. Overrides `eb-X.Y.Z` in the list file name' -r
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand check" -l probe-tools -d 'Run each needed tool\'s `--version` and enforce min_version'
+complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand check" -l check-from-commit -d 'Ask `eb-stack stack from-commit` whether pins are already in the EasyBuild release tag'
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand check" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand schema" -s h -l help -d 'Print help'
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand init" -l template -d 'Template name; `--list` prints the names' -r
