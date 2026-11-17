@@ -52,6 +52,22 @@ expect_status 0
 expect_line '[build] eb Example-1.0-GCCcore-15.2.0.eb'
 expect_line '[build] eb zlib-1.3.1-GCCcore-15.2.0.eb --rebuild'
 expect_line 'INFO [run] cpu: dry run: nothing executed'
+# The page shows the dry run, the run log and the result. A reader
+# compares those blocks with what this script just printed, including
+# the checks phase a site file without [checks] leaves out.
+page=$pages/tutorials/first-build-list.org
+grep -F '# [checks] not configured' "$page" >/dev/null || {
+    echo "the tutorial dry-run example has no '# [checks] not configured' line" >&2
+    exit 1
+}
+grep -F 'INFO [checks] cpu: not configured' "$page" >/dev/null || {
+    echo "the tutorial run example has no checks event" >&2
+    exit 1
+}
+grep -F '"checks",' "$page" >/dev/null || {
+    echo "the tutorial result example leaves checks out of not_configured" >&2
+    exit 1
+}
 
 run 'eb-pipeline run --site site.toml --list build.list --target cpu --build-type production --result result.json
 echo $?'

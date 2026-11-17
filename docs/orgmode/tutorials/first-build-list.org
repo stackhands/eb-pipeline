@@ -29,7 +29,7 @@ Clone the repository, check out the commit this tutorial was checked with, and i
 #+begin_src bash
 git clone https://github.com/stackhands/eb-pipeline.git
 cd eb-pipeline
-git checkout ef2fbe2
+git checkout 741099ee
 cargo install --locked --path .
 #+end_src
 
@@ -119,12 +119,15 @@ eb-pipeline run --site site.toml --list build.list --target cpu --build-type pro
 # [admission] not configured
 [build] eb Example-1.0-GCCcore-15.2.0.eb
 [build] eb zlib-1.3.1-GCCcore-15.2.0.eb --rebuild
+# [checks] not configured
 # [caches] not configured
 # [logs] not configured
 INFO [run] cpu: dry run: nothing executed
 #+end_example
 
 A run goes through its phases in this order, and this site file configures only =build=, which starts one =eb= for each line, with the line's options.
+=checks= comes after =build= and before =caches=.
+This site file has no =[checks]= table, so that phase is left out and the dry run says so.
 =--target cpu= picks the target, and =--build-type production= names the kind of build, for which a target can have settings of its own.
 
 ** Run the build list
@@ -141,6 +144,7 @@ INFO [licences] cpu: not configured
 INFO [shard] cpu: not configured
 INFO [sources] cpu: not configured
 INFO [admission] cpu: not configured
+INFO [checks] cpu: not configured
 INFO [caches] cpu: not configured
 INFO [logs] cpu: not configured
 INFO [build] cpu: Example-1.0-GCCcore-15.2.0: start
@@ -200,6 +204,7 @@ cat result.json
     "shard",
     "sources",
     "admission",
+    "checks",
     "caches",
     "logs"
   ],
@@ -213,6 +218,10 @@ cat result.json
       "duration_seconds": 0.041,
       "name": "build",
       "status": "ok"
+    },
+    {
+      "name": "checks",
+      "status": "not configured"
     },
 ...
   ],
@@ -270,6 +279,7 @@ INFO [licences] cpu: not configured
 INFO [shard] cpu: not configured
 INFO [sources] cpu: not configured
 INFO [admission] cpu: not configured
+INFO [checks] cpu: not configured
 INFO [caches] cpu: not configured
 INFO [logs] cpu: not configured
 INFO [build] cpu: Example-1.0-GCCcore-15.2.0: start
