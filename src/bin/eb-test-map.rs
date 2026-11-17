@@ -11,6 +11,9 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
+use eb_pipeline::easystack;
+use serde_json::{Map, Value};
+
 /// Toolchains a build list carries that are not applications.
 const TOOLCHAINS: &[&str] = &[
     "GCC",
@@ -26,9 +29,16 @@ const TOOLCHAINS: &[&str] = &[
 
 struct Args {
     map: String,
-    list: String,
+    list: Option<String>,
+    result: Option<String>,
     extra_toolchains: BTreeSet<String>,
     allow_unmapped: bool,
+    format: OutputFormat,
+}
+
+enum OutputFormat {
+    Plain,
+    Reframe,
 }
 
 fn main() -> ExitCode {
@@ -45,17 +55,11 @@ fn run() -> Result<ExitCode, String> {
     let args = parse(env::args().skip(1))?;
     let map =
         fs::read_to_string(&args.map).map_err(|e| format!("cannot read {}: {e}", args.map))?;
-    let list =
-        fs::read_to_string(&args.list).map_err(|e| format!("cannot read {}: {e}", args.list))?;
     let rows = parse_map(&map)?;
+    let packages = package_names(&args)?;
     let mut tests = BTreeSet::new();
     let mut missing = Vec::new();
-    for (line_no, line) in list.lines().enumerate() {
-        let line = strip_comment(line);
-        if line.is_empty() {
-            continue;
-        }
-        let name = package_name(line).map_err(|e| format!("list line {}: {e}", line_no + 1))?;
+    for name in packages {
         if is_toolchain(&name, &args.extra_toolchains) {
             continue;
         }
@@ -83,16 +87,22 @@ fn run() -> Result<ExitCode, String> {
     }
     let mut out = io::stdout().lock();
     for test in &tests {
-        writeln!(out, "{test}").map_err(|e| format!("cannot write the test names: {e}"))?;
+        let line = match args.format {
+            OutputFormat::Plain => test.clone(),
+            OutputFormat::Reframe => format!("-n ^{}$", escape_regex_literal(test)),
+        };
+        writeln!(out, "{line}").map_err(|e| format!("cannot write the test names: {e}"))?;
     }
     Ok(ExitCode::SUCCESS)
 }
 
 fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut map = None;
-    let mut list = None;
+    let mut list: Option<String> = None;
+    let mut result: Option<String> = None;
     let mut extra_toolchains = BTreeSet::new();
     let mut allow_unmapped = false;
+    let mut format = OutputFormat::Plain;
     let mut words = words.peekable();
     while let Some(word) = words.next() {
         match word.as_str() {
@@ -101,7 +111,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 std::process::exit(0);
             }
             "--allow-unmapped" => allow_unmapped = true,
-            "--map" | "--list" | "--toolchain" => {
+            "--map" | "--list" | "--result" | "--toolchain" | "--format" => {
                 let value = words
                     .next()
                     .filter(|v| !v.is_empty())
@@ -109,9 +119,11 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 match word.as_str() {
                     "--map" => map = Some(value),
                     "--list" => list = Some(value),
+                    "--result" => result = Some(value),
                     "--toolchain" => {
                         extra_toolchains.insert(value);
                     }
+                    "--format" => format = parse_format(&value)?,
                     _ => unreachable!(),
                 }
             }
@@ -121,17 +133,31 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
             _ if word.starts_with("--list=") => {
                 list = Some(need_value("--list", &word["--list=".len()..])?)
             }
+            _ if word.starts_with("--result=") => {
+                result = Some(need_value("--result", &word["--result=".len()..])?)
+            }
             _ if word.starts_with("--toolchain=") => {
                 extra_toolchains.insert(need_value("--toolchain", &word["--toolchain=".len()..])?);
+            }
+            _ if word.starts_with("--format=") => {
+                format = parse_format(need_value("--format", &word["--format=".len()..])?.as_str())?
             }
             _ => return Err(format!("does not know `{word}`")),
         }
     }
+    if list.is_some() && result.is_some() {
+        return Err("pass either --list or --result, not both".into());
+    }
+    if list.is_none() && result.is_none() {
+        return Err("--list or --result is required".into());
+    }
     Ok(Args {
         map: map.ok_or_else(|| "--map is required".to_string())?,
-        list: list.ok_or_else(|| "--list is required".to_string())?,
+        list,
+        result,
         extra_toolchains,
         allow_unmapped,
+        format,
     })
 }
 
@@ -150,6 +176,111 @@ fn strip_comment(line: &str) -> &str {
     } else {
         line
     }
+}
+
+fn parse_format(value: &str) -> Result<OutputFormat, String> {
+    match value {
+        "text" => Ok(OutputFormat::Plain),
+        "reframe" => Ok(OutputFormat::Reframe),
+        _ => Err(format!(
+            "unknown --format `{value}`; expected `text` or `reframe`"
+        )),
+    }
+}
+
+fn package_names(args: &Args) -> Result<Vec<String>, String> {
+    if let Some(path) = &args.list {
+        package_names_from_list(path)
+    } else if let Some(path) = &args.result {
+        package_names_from_result(path)
+    } else {
+        unreachable!("validated in parse")
+    }
+}
+
+fn package_names_from_list(path: &str) -> Result<Vec<String>, String> {
+    let list_text = fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+    if easystack::is_easystack(Path::new(path)) {
+        let lines = easystack::parse(&list_text).map_err(|e| format!("easystack {path}: {e}"))?;
+        lines
+            .into_iter()
+            .enumerate()
+            .map(|(i, line)| {
+                package_name(&line.easyconfig)
+                    .map_err(|e| format!("easystack entry {}: {e}", i + 1))
+            })
+            .collect()
+    } else {
+        let mut out = Vec::new();
+        for (line_no, line) in list_text.lines().enumerate() {
+            let line = strip_comment(line);
+            if line.is_empty() {
+                continue;
+            }
+            out.push(package_name(line).map_err(|e| format!("list line {}: {e}", line_no + 1))?);
+        }
+        Ok(out)
+    }
+}
+
+fn package_names_from_result(path: &str) -> Result<Vec<String>, String> {
+    let text = fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+    let value: Value =
+        serde_json::from_str(&text).map_err(|e| format!("cannot parse {path}: {e}"))?;
+    let obj = object(&value, "result")?;
+    let kind = req_str(obj, "kind", "result")?;
+    if kind != "result" {
+        return Err(format!("expected kind `result`, found `{kind}`"));
+    }
+    match obj.get("schema_version") {
+        Some(Value::Number(n)) if n.as_u64() == Some(1) => {}
+        Some(_) => return Err("schema_version must be 1".into()),
+        None => return Err("missing `schema_version`".into()),
+    }
+    let lines = match obj.get("lines") {
+        Some(Value::Array(items)) => items,
+        Some(_) => return Err("`lines` must be an array".into()),
+        None => return Err("missing `lines`".into()),
+    };
+    let mut names = Vec::new();
+    for (i, item) in lines.iter().enumerate() {
+        let line = object(item, &format!("lines[{i}]"))?;
+        let status = req_str(line, "status", &format!("lines[{i}]"))?;
+        if status == "success" {
+            let easyconfig = req_str(line, "easyconfig", &format!("lines[{i}]"))?;
+            names
+                .push(package_name(easyconfig).map_err(|e| format!("lines[{i}].easyconfig: {e}"))?);
+        }
+    }
+    Ok(names)
+}
+
+fn object<'a>(value: &'a Value, what: &str) -> Result<&'a Map<String, Value>, String> {
+    value
+        .as_object()
+        .ok_or_else(|| format!("{what} must be a JSON object"))
+}
+
+fn req_str<'a>(obj: &'a Map<String, Value>, key: &str, what: &str) -> Result<&'a str, String> {
+    match obj.get(key) {
+        Some(Value::String(s)) => Ok(s),
+        Some(_) => Err(format!("{what}.{key} must be a string")),
+        None => Err(format!("{what} is missing `{key}`")),
+    }
+}
+
+fn escape_regex_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if matches!(
+            c,
+            '\\' | '.' | '^' | '$' | '|' | '?' | '*' | '+' | '(' | ')' | '[' | ']' | '{' | '}'
+        ) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// `software` and `test` rows. A `#` line is a comment.
@@ -249,5 +380,13 @@ mod tests {
             ]
         );
         assert!(parse_map("GROMACS\n").unwrap_err().contains("no test name"));
+    }
+
+    #[test]
+    fn reframe_selectors_escape_regex_characters() {
+        assert_eq!(
+            escape_regex_literal("gromacs+gpu(v2)"),
+            "gromacs\\+gpu\\(v2\\)"
+        );
     }
 }

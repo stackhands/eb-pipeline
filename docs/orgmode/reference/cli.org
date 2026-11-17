@@ -369,13 +369,16 @@ Exit 0 means the table was written. Exit 2 is a missing or invalid input.
 =run= does not write this report.
 
 #+begin_example
-eb-junit --result FILE... [--out FILE]
+eb-junit [--result FILE]... [--reframe-report FILE]... [--out FILE]
 #+end_example
 
 | Option | Meaning |
 |--------+---------|
-| =--result FILE= | A result file written by =eb-pipeline run --result=. Repeat for each file. Required. |
+| =--result FILE= | A result file written by =eb-pipeline run --result=. Repeat for each file. |
+| =--reframe-report FILE= | A ReFrame report JSON written by =reframe --report-file=. Repeat for each file. |
 | =--out FILE= | Write the report to =FILE=. =-= or absent prints it on stdout. |
+
+At least one of =--result= or =--reframe-report= is required.
 
 Exit 0 means the report was written, including when a run's own exit code is not 0.
 Exit 2 is a missing file, a file that is not a result of schema version 1, or a report that could not be written.

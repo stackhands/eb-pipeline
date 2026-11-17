@@ -9,13 +9,16 @@ It copies each line's recorded status into a test case.
 It does not decide why a line failed, it does not read a build list, and it does not start =eb=, =eb-stack=, =eb-keep-logs=, or =eb-staged-rebuild=.
 
 #+begin_example
-eb-junit --result FILE... [--out FILE]
+eb-junit [--result FILE]... [--reframe-report FILE]... [--out FILE]
 #+end_example
 
 | Option | Meaning |
 |--------+---------|
-| =--result FILE= | One result file. Repeat the option for another file. Required. |
+| =--result FILE= | One result file. Repeat the option for another file. |
+| =--reframe-report FILE= | One ReFrame report JSON from =reframe --report-file=. Repeat the option for another file. |
 | =--out FILE= | Write the document to =FILE=. =-= or absent prints it on stdout. An existing file is overwritten. |
+
+At least one of =--result= or =--reframe-report= is required.
 
 Exit 0 means the document was written, including when =exit_code= in a result is not 0.
 Exit 2 means an argument is missing, a file cannot be read or parsed, a result is not schema version 1, a required field has the wrong type, or the document cannot be written.
@@ -35,6 +38,10 @@ A newline in an attribute is written as a space.
 | =testsuite= | One result file, in the order given. =name= and =hostname= are =SITE/TARGET= and =TARGET=. =timestamp= is =started_at= when the result has it. =time= is the result's =duration_seconds= when it has one, otherwise the sum of the line times it does have. |
 | =property= | One recorded field, for a reader that keeps properties. GitLab does not display these. |
 | =testcase= | One recorded line, then a =TARGET/run= case when the rules below add one. |
+
+With =--reframe-report=, each run in that file is another =testsuite=.
+Its =testcases= array becomes cases in order.
+A =result= of =success= has no child element, =skipped= is a =skipped= case, and every other result is a =failure= whose =type= and =message= are that result string.
 
 A property is present when the result has that field.
 

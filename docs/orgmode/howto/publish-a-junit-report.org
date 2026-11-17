@@ -42,7 +42,13 @@ GitLab shows a test report from JUnit XML, and a Jacamar runner starts ordinary 
    eb-junit --result result-zen2.json --result result-zen4.json --out junit.xml
    #+end_src
 
-3. On GitHub Actions, add the report next to the result upload.
+3. To fold ReFrame's own report into the same XML, pass =--reframe-report=:
+
+   #+begin_src bash
+   eb-junit --result result-cpu.json --reframe-report reframe-report.json --out junit-cpu.xml
+   #+end_src
+
+4. On GitHub Actions, add the report next to the result upload.
    =if: always()= runs it when the build step failed.
    This is the same upload action as =examples/ci/github-actions.yml=:
 
@@ -56,7 +62,7 @@ GitLab shows a test report from JUnit XML, and a Jacamar runner starts ordinary 
        path: junit-${{ matrix.target }}.xml
    #+end_src
 
-4. On GitLab, including a job a Jacamar runner starts, publish the XML as a JUnit report and keep the job's exit status as the run's.
+5. On GitLab, including a job a Jacamar runner starts, publish the XML as a JUnit report and keep the job's exit status as the run's.
    =artifacts:when: always= uploads it when the run failed.
 
    #+begin_src yaml

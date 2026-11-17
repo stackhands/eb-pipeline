@@ -1,0 +1,1 @@
+`eb-test-map` now reads `--list` as either a plain build list or a `.yml`/`.yaml` easystack, accepts `--result` to map only `status == "success"` lines from a run result, and offers `--format reframe` to print escaped `-n ^...$` selectors.
