@@ -1,0 +1,1 @@
+An explanation page says why a rotation of the log tree takes eb-pipeline's lock and eb-keep-logs' lock, always in that order, why a run does not wait for another rotate, and what the locks do not cover, with a figure of who takes which lock.

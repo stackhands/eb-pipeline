@@ -86,3 +86,4 @@ A run waits for the first lock only at its start, before it holds any other, and
 - [[file:site-file.org][The site file]], for =[logs]=, =[rebuild]= and =[admission]=
 - [[file:plan-and-result.org][The plan and result files]], for the statuses of the =logs= phase and of a line
 - [[file:exit-status.org][Exit status]]
+- [[file:../explanation/log-rotation.org][Why the rotation takes two locks]], for why the locks are taken as they are

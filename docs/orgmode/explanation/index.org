@@ -11,4 +11,5 @@ Nothing here is a step to follow.
 .. toctree::
    :maxdepth: 1
 
+   log-rotation
 #+end_export

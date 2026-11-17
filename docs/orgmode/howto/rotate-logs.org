@@ -104,6 +104,7 @@ A run that does not rotate leaves its =logs= phase =skipped=, with the reason in
 ** Related
 
 - [[file:../reference/log-tree.org][The log tree and its locks]]
+- [[file:../explanation/log-rotation.org][Why the rotation takes two locks]]
 - [[file:../reference/site-file.org][The site file]], for =[logs]=
 - [[file:../reference/plan-and-result.org][The plan and result files]], for the statuses of the =logs= phase
 - The [[https://stackhands.github.io/eb-keep-logs/][eb-keep-logs documentation]], for what =rotate= does to a run directory
