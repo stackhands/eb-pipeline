@@ -37,10 +37,17 @@ expect_line "$archive: OK"
 run "tar -xJf $archive
 ls ${archive%.tar.xz}"
 expect_status 0
-expect_line 'eb-pipeline'
+for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cvmfs; do
+    expect_line "$cmd"
+done
 
-run "install -D -m 755 ${archive%.tar.xz}/eb-pipeline ~/.local/bin/eb-pipeline
-command -v eb-pipeline
+run "for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cvmfs; do
+install -D -m 755 ${archive%.tar.xz}/\$cmd ~/.local/bin/\$cmd
+done
+for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cvmfs; do
+command -v \$cmd
+\$cmd --help >/dev/null
+done
 eb-pipeline --version"
 expect_status 0
 expect_line 'eb-pipeline 0.3.0'

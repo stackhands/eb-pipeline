@@ -73,7 +73,13 @@ for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cv
 done
 ```
 
-A release tarball ships `eb-pipeline` only; build from source for the companions.
+A release tarball ships six commands:
+
+```bash
+for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cvmfs; do
+  command -v "$cmd" && "$cmd" --help >/dev/null
+done
+```
 
 [Install eb-pipeline](docs/orgmode/howto/install.org) has the release binaries
 and what to do when the build fails.

@@ -51,16 +51,23 @@ Until the next release, install from source to have them.
    CHANGELOG.md
    LICENSE
    README.md
+   eb-cvmfs
+   eb-junit
    eb-pipeline
+   eb-retry-list
+   eb-shard-weights
+   eb-test-map
    #+end_example
 
-   Release 0.3.0 ships =eb-pipeline= only.
-   The companion commands =eb-retry-list=, =eb-shard-weights=, =eb-test-map=, =eb-junit= and =eb-cvmfs= need a source install below.
+   A release archive ships all six commands:
+   =eb-pipeline=, =eb-retry-list=, =eb-shard-weights=, =eb-test-map=, =eb-junit= and =eb-cvmfs=.
 
-3. Install the binary:
+3. Install the binaries:
 
    #+begin_src bash
-   install -D -m 755 eb-pipeline-x86_64-unknown-linux-musl/eb-pipeline ~/.local/bin/eb-pipeline
+   for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cvmfs; do
+     install -D -m 755 "eb-pipeline-x86_64-unknown-linux-musl/$cmd" "$HOME/.local/bin/$cmd"
+   done
    #+end_src
 
 ** Install from source

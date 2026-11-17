@@ -1,0 +1,6 @@
+eb-cvmfs
+eb-junit
+eb-pipeline
+eb-retry-list
+eb-shard-weights
+eb-test-map
