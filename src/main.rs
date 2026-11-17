@@ -93,6 +93,9 @@ enum Cmd {
         /// Write here; absent or `-` prints on stdout. An existing file is refused.
         #[arg(long)]
         out: Option<PathBuf>,
+        /// After writing a file, print next steps on stderr (also when `EB_PIPELINE_INIT_HINTS=1`).
+        #[arg(long, env = "EB_PIPELINE_INIT_HINTS", value_parser = clap::builder::BoolishValueParser::new())]
+        hints: bool,
     },
     /// Print the resolved configuration of one or all targets.
     Explain {
@@ -423,7 +426,12 @@ fn cmd_metrics(path: &Path, format: StatusFormat) -> Result<i32, Fail> {
     Ok(exit::OK)
 }
 
-fn cmd_init(template: Option<&str>, list: bool, out: Option<&Path>) -> Result<i32, Fail> {
+fn cmd_init(
+    template: Option<&str>,
+    list: bool,
+    out: Option<&Path>,
+    hints: bool,
+) -> Result<i32, Fail> {
     if list {
         for t in templates::TEMPLATES {
             println!("{:<16} {}", t.name, t.summary);
@@ -441,9 +449,15 @@ fn cmd_init(template: Option<&str>, list: bool, out: Option<&Path>) -> Result<i3
                 .join(", ")
         ))
     })?;
-    match out {
-        None => print!("{}", t.text),
-        Some(p) if p == Path::new("-") => print!("{}", t.text),
+    let wrote_path = match out {
+        None => {
+            print!("{}", t.text);
+            None
+        }
+        Some(p) if p == Path::new("-") => {
+            print!("{}", t.text);
+            None
+        }
         Some(p) => {
             use std::io::Write;
             let mut f = std::fs::OpenOptions::new()
@@ -459,6 +473,28 @@ fn cmd_init(template: Option<&str>, list: bool, out: Option<&Path>) -> Result<i3
                 "init",
                 "-",
                 &format!("wrote template {} to {}", t.name, p.display()),
+            );
+            Some(p)
+        }
+    };
+    if hints {
+        if let Some(p) = wrote_path {
+            eprintln!(
+                "INFO [init] hint: check the site file with `eb-pipeline check --site {}`",
+                p.display()
+            );
+            if t.name == "eessi-site" || t.name == "small-cluster" {
+                eprintln!(
+                    "INFO [init] hint: list target names with `eb-pipeline targets --site {}` (needs a build from the main branch; release 0.3.0 has no targets command)",
+                    p.display()
+                );
+                eprintln!(
+                    "INFO [init] hint: see docs/orgmode/howto/install.org to install from source"
+                );
+            }
+        } else {
+            eprintln!(
+                "INFO [init] hint: write the template with --out site.toml to print next steps"
             );
         }
     }
@@ -1114,7 +1150,8 @@ fn main() {
             template,
             list,
             out,
-        } => cmd_init(template.as_deref(), *list, out.as_deref()),
+            hints,
+        } => cmd_init(template.as_deref(), *list, out.as_deref(), *hints),
         Cmd::Explain {
             site,
             target,
