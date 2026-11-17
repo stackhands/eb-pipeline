@@ -11,9 +11,10 @@ use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 
 const KNOWN_STATUSES: &[&str] = &["failed", "refused", "pending", "skipped", "unreached"];
+const RETRYABLE_CLASSES: &[&str] = &["interrupted", "resource", "timeout"];
 
 struct Args {
     result: Option<String>,
@@ -22,11 +23,18 @@ struct Args {
     list: String,
     statuses: Option<BTreeSet<String>>,
     out: Option<String>,
+    classify: bool,
+}
+
+#[derive(Clone)]
+struct Outcome {
+    status: String,
+    log: Option<String>,
 }
 
 struct RunOutcomes {
     exit_code: i64,
-    outcomes: BTreeMap<String, VecDeque<String>>,
+    outcomes: BTreeMap<String, VecDeque<Outcome>>,
     deselected: BTreeMap<String, usize>,
 }
 
@@ -61,6 +69,11 @@ fn run() -> Result<ExitCode, String> {
     };
 
     let selected = select_retry_lines(&lines, &recorded, args.statuses.as_ref());
+    let selected = if args.classify {
+        classify_retry_lines(selected)?
+    } else {
+        selected.into_iter().map(|line| line.raw).collect()
+    };
     let mut text = selected.join("\n");
     if !selected.is_empty() {
         text.push('\n');
@@ -85,6 +98,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut list = None;
     let mut statuses: Option<BTreeSet<String>> = None;
     let mut out = None;
+    let mut classify = false;
     let mut words = words.peekable();
 
     while let Some(word) = words.next() {
@@ -97,6 +111,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 println!("eb-retry-list {}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
             }
+            "--classify" => classify = true,
             "--result" | "--summary" | "--target" | "--list" | "--status" | "--out" => {
                 let value = words
                     .next()
@@ -159,6 +174,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
         list: list.ok_or_else(|| "--list is required".to_string())?,
         statuses,
         out,
+        classify,
     })
 }
 
@@ -320,8 +336,8 @@ fn collect_outcomes(
     items: &[Value],
     path: &Path,
     field: &str,
-) -> Result<BTreeMap<String, VecDeque<String>>, String> {
-    let mut map: BTreeMap<String, VecDeque<String>> = BTreeMap::new();
+) -> Result<BTreeMap<String, VecDeque<Outcome>>, String> {
+    let mut map: BTreeMap<String, VecDeque<Outcome>> = BTreeMap::new();
     for (i, item) in items.iter().enumerate() {
         let obj = item
             .as_object()
@@ -339,32 +355,42 @@ fn collect_outcomes(
             .get("status")
             .and_then(Value::as_str)
             .ok_or_else(|| format!("{}: {field}[{i}].status must be a string", path.display()))?;
-        map.entry(ec.to_string())
-            .or_default()
-            .push_back(status.to_string());
+        let log = obj.get("log").and_then(Value::as_str).map(str::to_string);
+        map.entry(ec.to_string()).or_default().push_back(Outcome {
+            status: status.to_string(),
+            log,
+        });
     }
     Ok(map)
+}
+
+struct RetryLine {
+    raw: String,
+    log: Option<String>,
 }
 
 fn select_retry_lines(
     lines: &[ListLine],
     recorded: &RunOutcomes,
     explicit_statuses: Option<&BTreeSet<String>>,
-) -> Vec<String> {
+) -> Vec<RetryLine> {
     let mut outcomes = recorded.outcomes.clone();
     let mut deselected = recorded.deselected.clone();
     let mut out = Vec::new();
     for line in lines {
-        if let Some(status) = outcomes
+        if let Some(outcome) = outcomes
             .get_mut(&line.easyconfig)
             .and_then(VecDeque::pop_front)
         {
             let keep = match explicit_statuses {
-                Some(set) => set.contains(&status),
-                None => status != "success",
+                Some(set) => set.contains(&outcome.status),
+                None => outcome.status != "success",
             };
             if keep {
-                out.push(line.raw.clone());
+                out.push(RetryLine {
+                    raw: line.raw.clone(),
+                    log: outcome.log,
+                });
             }
             continue;
         }
@@ -378,11 +404,62 @@ fn select_retry_lines(
                 None => true,
             };
             if keep {
-                out.push(line.raw.clone());
+                out.push(RetryLine {
+                    raw: line.raw.clone(),
+                    log: None,
+                });
             }
         }
     }
     out
+}
+
+fn classify_retry_lines(lines: Vec<RetryLine>) -> Result<Vec<String>, String> {
+    let mut retryable = Vec::new();
+    for line in lines {
+        let log = line
+            .log
+            .as_deref()
+            .ok_or_else(|| format!("cannot classify `{}`: no log was recorded", line.raw))?;
+        let output = Command::new("eb-stack")
+            .args(["stack", "bot-classify", "--json"])
+            .arg(log)
+            .output()
+            .map_err(|e| format!("cannot run eb-stack for {log}: {e}"))?;
+        if !output.status.success() {
+            let detail = String::from_utf8_lossy(&output.stderr);
+            let detail = detail.trim();
+            let detail = if detail.is_empty() {
+                String::new()
+            } else {
+                format!(": {detail}")
+            };
+            return Err(format!(
+                "eb-stack failed for {log} with {}{detail}",
+                output.status
+            ));
+        }
+        let report: Value = serde_json::from_slice(&output.stdout)
+            .map_err(|e| format!("eb-stack returned invalid JSON for {log}: {e}"))?;
+        let jobs = report
+            .get("jobs")
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("eb-stack JSON for {log} has no `jobs` array"))?;
+        if jobs.len() != 1 {
+            return Err(format!(
+                "eb-stack JSON for {log} classified {} jobs, expected 1",
+                jobs.len()
+            ));
+        }
+        if jobs[0]
+            .get("sub_class")
+            .and_then(Value::as_str)
+            .is_some_and(|class| RETRYABLE_CLASSES.contains(&class))
+        {
+            retryable.push(line.raw);
+        }
+    }
+    Ok(retryable)
 }
 
 #[cfg(test)]
@@ -400,9 +477,9 @@ mod tests {
     #[test]
     fn default_statuses_keep_every_unfinished_line_and_drop_success() {
         let mut outcomes = BTreeMap::new();
-        outcomes.insert("A.eb".into(), VecDeque::from(["success".into()]));
-        outcomes.insert("B.eb".into(), VecDeque::from(["failed".into()]));
-        outcomes.insert("C.eb".into(), VecDeque::from(["refused".into()]));
+        outcomes.insert("A.eb".into(), VecDeque::from([outcome("success")]));
+        outcomes.insert("B.eb".into(), VecDeque::from([outcome("failed")]));
+        outcomes.insert("C.eb".into(), VecDeque::from([outcome("refused")]));
         let mut deselected = BTreeMap::new();
         deselected.insert("Skip.eb".into(), 1);
         let rec = RunOutcomes {
@@ -418,7 +495,10 @@ mod tests {
             line("D.eb", "D.eb --from-pr=9"),
         ];
         assert_eq!(
-            select_retry_lines(&lines, &rec, None),
+            select_retry_lines(&lines, &rec, None)
+                .into_iter()
+                .map(|line| line.raw)
+                .collect::<Vec<_>>(),
             vec!["B.eb --rebuild", "C.eb", "D.eb --from-pr=9"]
         );
     }
@@ -426,8 +506,8 @@ mod tests {
     #[test]
     fn explicit_status_filters_to_that_status_only() {
         let mut outcomes = BTreeMap::new();
-        outcomes.insert("A.eb".into(), VecDeque::from(["failed".into()]));
-        outcomes.insert("B.eb".into(), VecDeque::from(["skipped".into()]));
+        outcomes.insert("A.eb".into(), VecDeque::from([outcome("failed")]));
+        outcomes.insert("B.eb".into(), VecDeque::from([outcome("skipped")]));
         let rec = RunOutcomes {
             exit_code: 1,
             outcomes,
@@ -436,8 +516,18 @@ mod tests {
         let lines = vec![line("A.eb", "A.eb"), line("B.eb", "B.eb")];
         let only_failed = BTreeSet::from(["failed".into()]);
         assert_eq!(
-            select_retry_lines(&lines, &rec, Some(&only_failed)),
+            select_retry_lines(&lines, &rec, Some(&only_failed))
+                .into_iter()
+                .map(|line| line.raw)
+                .collect::<Vec<_>>(),
             vec!["A.eb"]
         );
+    }
+
+    fn outcome(status: &str) -> Outcome {
+        Outcome {
+            status: status.into(),
+            log: None,
+        }
     }
 }

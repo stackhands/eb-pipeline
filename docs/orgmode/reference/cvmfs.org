@@ -1,0 +1,48 @@
+#+TITLE: The eb-cvmfs command
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* The eb-cvmfs command
+
+=eb-cvmfs= brackets one synchronization command in a CVMFS transaction.
+It is a companion command, not a phase that =eb-pipeline run= enables by default.
+
+#+begin_example
+eb-cvmfs [--dry-run] REPOSITORY -- COMMAND [ARG...]
+#+end_example
+
+| Argument or option | Meaning |
+|--------------------+---------|
+| =REPOSITORY= | The CVMFS repository name passed to =cvmfs_server transaction=, =publish= and =abort=. |
+| =--= | Ends =eb-cvmfs= options and starts the synchronization command. |
+| =COMMAND [ARG...]= | The site's synchronization command and its arguments. It is started directly, without a shell. |
+| =--dry-run= | Print every command in the bracket without checking, opening, changing, publishing or aborting the repository. |
+
+** Execution order
+
+Without =--dry-run=, =eb-cvmfs=:
+
+1. runs =cvmfs_server list= and refuses the repository when its entry says =in transaction=;
+2. runs =cvmfs_server transaction REPOSITORY=;
+3. starts =COMMAND [ARG...]=;
+4. runs =cvmfs_server publish REPOSITORY= when the command exits 0, or =cvmfs_server abort -f REPOSITORY= when it does not.
+
+An abort failure is reported, but does not replace the synchronization command's exit status.
+A synchronization command that cannot be found is treated as exit 127; another failure to start it is exit 126.
+=eb-cvmfs= performs no tarball build or packaging step.
+
+** Exit status
+
+| Status | Meaning |
+|--------+---------|
+| =0= | The synchronization and publish succeeded, or =--dry-run= printed the commands. |
+| =2= | The arguments are invalid, =cvmfs_server list= cannot start or fails, or the repository is already in a transaction. |
+| transaction status | =cvmfs_server transaction= failed. |
+| synchronization status | The synchronization failed; =eb-cvmfs= attempted =abort -f=. |
+| publish status | Synchronization succeeded and =cvmfs_server publish= failed. |
+| =126= or =127= | The synchronization command could not start; =eb-cvmfs= attempted =abort -f=. |
+
+** See also
+
+- [[file:../howto/publish-caches-with-cvmfs.org][Publish cache updates with CVMFS]]
+- [[file:site-file.org][The site file]], for =[caches]=
