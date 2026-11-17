@@ -406,8 +406,7 @@ mod tests {
                 "EESSI/2023.06".into(),
                 "Other/1.0".into(),
                 "EESSI/2025.06".into(),
-            ])
-            .as_deref(),
+            ]),
             Some("2025.06")
         );
         assert_eq!(
