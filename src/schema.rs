@@ -597,6 +597,21 @@ fn d_when() -> String {
 }
 
 doc_struct! {
+    /// Host ABI fingerprint checks that trigger selective watch rebuilds.
+    AbiDrift {
+        #[serde(default)]
+        enabled: bool => ("boolean", "false", false,
+            "Set true to compare a host ABI fingerprint during `watch`; false leaves `watch` byte-identical to earlier behavior."),
+        #[serde(default)]
+        probe: BTreeMap<String, String> => ("table of string", "{}", false,
+            "One shell command per fingerprint field; `watch` runs each in the target environment and stores the field's trimmed standard output."),
+        #[serde(default)]
+        providers: BTreeMap<String, Vec<String>> => ("table of array of string", "{}", false,
+            "One list of provider easyconfig file names per field; when a field changes, `watch` gives these names to `eb-stack rebuild-set --changed`."),
+    }
+}
+
+doc_struct! {
     /// What each install was built against in EESSI, and the rebuild of the
     /// installs an EESSI change reaches.
     Watch {
@@ -615,6 +630,8 @@ doc_struct! {
         #[serde(default = "yes")]
         rebuild_review: bool => ("boolean", "true", false,
             "Rebuild an install when a dependency `eb-stack rebuild-set` classes `review`, such as one only its build used, changed or vanished; false keeps it and warns."),
+        abi_drift: Option<AbiDrift> => ("table", "none", false,
+            "Opt-in host ABI drift checks for `watch`, with one probe command per field and one provider easyconfig list per field."),
     }
 }
 
@@ -687,6 +704,7 @@ pub const SECTIONS: &[(&str, &[FieldDoc])] = &[
     ("notify", Notify::FIELDS),
     ("sbom", Sbom::FIELDS),
     ("watch", Watch::FIELDS),
+    ("watch.abi_drift", AbiDrift::FIELDS),
 ];
 
 /// Render the key reference as plain text.
@@ -795,6 +813,7 @@ mod tests {
             LicenceRequired,
             Notify,
             Sbom,
+            AbiDrift,
             Watch,
         );
         // Every documented table appears in the printed reference.

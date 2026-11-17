@@ -6,6 +6,7 @@
 
 With a =[watch]= table in the site file, =run= records what each install it builds was built against in the European Environment for Scientific Software Installations (EESSI): the EESSI version and CPU subdirectory, the CVMFS revision of the repository, and each EESSI module that the install depends on, with an identity that changes when that module changes.
 =eb-pipeline watch= compares the record with the EESSI that the module environment loads now, and rebuilds only the installs that a change reaches.
+With =[watch.abi_drift]= enabled, =watch= also compares configured host ABI fields against the recorded baseline, maps changed fields to provider easyconfigs, and gives those names to =eb-stack rebuild-set --changed=.
 When =REPOSITORY/versions= holds a =YYYY.MM= directory newer than that loaded =EESSI_VERSION=, =watch= exits 75 and stops: it has detected the directory, and it does not ask eb-stack what the new generation would rebuild.
 =watch --adopt= still records the generation that is loaded.
 [[file:site-file.org][The site file]] lists the keys of the table, and [[file:cli.org][The eb-pipeline command]] the options of =watch=.
@@ -146,6 +147,7 @@ unaffected:
 
 Otherwise it looks up each recorded dependency in the EESSI module trees: a dependency whose identity is not the recorded one has =changed=, and one that the trees no longer hold has =vanished=.
 A change that a failed rebuild left pending counts again.
+With =[watch.abi_drift]= enabled, changed ABI fields add provider-module changes through =eb-stack rebuild-set --changed=, with the field name prefixed in =edge_kind=.
 Each install then gets an action:
 
 | Action       | When                                                                                                                                                       |
@@ -434,10 +436,17 @@ cat site/zen4/.eb-pipeline-watch/zen4.json
 
 | Key              | Type    | Meaning                                    |
 |------------------+---------+--------------------------------------------|
+| =abi_baseline=   | object  | The last host ABI fingerprint that =watch= compared against, when =[watch.abi_drift]= is enabled. |
 | =installs=       | object  | Each recorded install, by its module name. |
 | =kind=           | string  | =watch-state=.                             |
 | =schema_version= | integer | =1=.                                       |
 | =target=         | string  | The name of the target.                    |
+
+*** =abi_baseline=
+
+| Key      | Type   | Meaning                                      |
+|----------+--------+----------------------------------------------|
+| =fields= | object | Field name to trimmed command output value.  |
 
 *** Each entry of =installs=
 
