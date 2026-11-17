@@ -71,3 +71,4 @@ jobs:
           bash docs/examples/tutorial.sh
           bash docs/examples/cli.sh
           bash docs/examples/files.sh
+          bash docs/examples/templates.sh

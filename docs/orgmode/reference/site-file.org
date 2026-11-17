@@ -428,4 +428,5 @@ When the gate's problems are the only ones of the file, =run= exits 78; =check= 
 - [[file:cli.org][The eb-pipeline command]] and [[file:environment.org][Environment variables]]
 - [[file:exit-status.org][Exit status]]
 - [[file:log-tree.org][The log tree and its locks]]
+- [[file:templates.org][The site file templates]], two complete site files to start from
 - The fields of the site file in [[file:../api/eb_pipeline/schema/index.html][eb_pipeline::schema]], whose doc comments are the text =eb-pipeline schema= prints.

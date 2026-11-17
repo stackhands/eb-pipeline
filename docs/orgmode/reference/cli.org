@@ -143,6 +143,8 @@ the key, its type, whether it is required or its default, and what it does.
 | =--list=          | Print the name and summary of each template, one per line, and nothing else.                                                                                                 |
 | =--out FILE=      | Write the template to =FILE= instead of stdout, and write =INFO [init] -: wrote template NAME to FILE= to stderr. =-= is stdout. An existing =FILE= is refused, with exit 2. |
 
+[[file:templates.org][The site file templates]] shows each template.
+
 *** explain
 
 | Option              | Variable                 | Meaning                                                                                            |
