@@ -2,6 +2,7 @@
 
 use serde_json::Value;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -315,8 +316,20 @@ fn driver_named(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some((_, value)) = vars.iter().find(|(name, _)| *name == "DRIVER_UMASK") {
+        let mode = u32::from_str_radix(value, 8).unwrap();
+        // SAFETY: `umask` is async-signal-safe and the closure allocates nothing.
+        unsafe {
+            c.pre_exec(move || {
+                libc::umask(mode);
+                Ok(())
+            });
+        }
+    }
     for (k, v) in vars {
-        c.env(k, v);
+        if *k != "DRIVER_UMASK" {
+            c.env(k, v);
+        }
     }
     let _g = SPAWN.lock().unwrap();
     c.spawn().unwrap()
@@ -375,6 +388,170 @@ fn success_exits_zero_and_records_lines() {
         "{}",
         o.stderr
     );
+}
+
+#[test]
+fn metrics_file_is_opt_in_and_atomically_replaced_after_a_run() {
+    let env = setup("");
+    let metrics = env.dir.path().join("pipeline.prom");
+    assert!(!metrics.exists());
+
+    let o = go(&env, LIST, &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(!metrics.exists());
+
+    std::fs::write(&metrics, "stale\n").unwrap();
+    std::fs::set_permissions(&metrics, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let metrics_arg = metrics.to_str().unwrap();
+    let child = driver(
+        &env,
+        LIST,
+        &[("DRIVER_UMASK", "077")],
+        &["--metrics-file", metrics_arg],
+    );
+    let o = finish(&env, child);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let text = std::fs::read_to_string(&metrics).unwrap();
+    assert!(text.contains("eb_pipeline_last_run_result{"), "{text}");
+    assert!(text.contains("eb_pipeline_items_built{"), "{text}");
+    assert!(text.contains("} 2\n"), "{text}");
+    assert!(!text.contains("stale"), "{text}");
+    assert_eq!(
+        std::fs::metadata(&metrics).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+    assert!(
+        !std::fs::read_dir(env.dir.path()).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".tmp"))
+    );
+}
+
+#[test]
+fn a_result_write_failure_does_not_leave_requested_metrics_stale() {
+    let env = setup("");
+    std::fs::create_dir(env.dir.path().join("result.json")).unwrap();
+    let metrics = env.dir.path().join("pipeline.prom");
+    std::fs::write(&metrics, "stale\n").unwrap();
+    let metrics_arg = metrics.to_str().unwrap();
+
+    let child = driver(&env, LIST, &[], &["--metrics-file", metrics_arg]);
+    let o = finish(&env, child);
+
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    assert!(o.stderr.contains("cannot write"), "{}", o.stderr);
+    assert!(o.stderr.contains("result.json"), "{}", o.stderr);
+    let text = std::fs::read_to_string(metrics).unwrap();
+    assert!(text.contains("eb_pipeline_last_run_result{"), "{text}");
+    assert!(!text.contains("stale"), "{text}");
+}
+
+#[test]
+fn failures_of_both_requested_outputs_are_reported_in_option_order() {
+    let env = setup("");
+    std::fs::create_dir(env.dir.path().join("result.json")).unwrap();
+    let metrics = env.dir.path().join("pipeline.prom");
+    std::fs::create_dir(&metrics).unwrap();
+    let metrics_arg = metrics.to_str().unwrap();
+
+    let child = driver(&env, LIST, &[], &["--metrics-file", metrics_arg]);
+    let o = finish(&env, child);
+
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    let result_at = o.stderr.find("result.json").unwrap();
+    let metrics_at = o.stderr.find("cannot write metrics").unwrap();
+    assert!(result_at < metrics_at, "{}", o.stderr);
+}
+
+fn output_alias(original: &Path, kind: &str) -> PathBuf {
+    match kind {
+        "lexical" => original.to_path_buf(),
+        "canonical" => {
+            let alias = original.with_extension("symlink");
+            std::os::unix::fs::symlink(original, &alias).unwrap();
+            alias
+        }
+        "hard-link" => {
+            let alias = original.with_extension("hardlink");
+            std::fs::hard_link(original, &alias).unwrap();
+            alias
+        }
+        _ => unreachable!(),
+    }
+}
+
+fn assert_metrics_alias_refused(
+    env: &Env,
+    metrics: &Path,
+    resume: Option<&Path>,
+    json_option: &str,
+) {
+    let mut extra = vec!["--metrics-file", metrics.to_str().unwrap()];
+    if let Some(resume) = resume {
+        extra.extend(["--resume-result", resume.to_str().unwrap()]);
+    }
+    let child = driver(env, LIST, &[], &extra);
+    let o = child.wait_with_output().unwrap();
+
+    assert_eq!(o.status.code(), Some(2), "{:?}", o.status);
+    let stderr = String::from_utf8(o.stderr).unwrap();
+    assert!(
+        stderr.contains(&format!(
+            "{json_option} and --metrics-file must name different files"
+        )),
+        "{stderr}"
+    );
+    assert!(calls(env, "eb.calls").is_empty());
+}
+
+#[test]
+fn metrics_cannot_alias_result_lexically_canonically_or_by_hard_link() {
+    for kind in ["lexical", "canonical", "hard-link"] {
+        let env = setup("");
+        let result = env.dir.path().join("result.json");
+        std::fs::write(&result, "keep result\n").unwrap();
+        let metrics = output_alias(&result, kind);
+
+        assert_metrics_alias_refused(&env, &metrics, None, "--result");
+
+        assert_eq!(
+            std::fs::read_to_string(&result).unwrap(),
+            "keep result\n",
+            "{kind}"
+        );
+    }
+}
+
+#[test]
+fn metrics_cannot_alias_resume_result_lexically_canonically_or_by_hard_link() {
+    for kind in ["lexical", "canonical", "hard-link"] {
+        let env = setup("");
+        let resume = env.dir.path().join("prior.json");
+        std::fs::write(&resume, "keep prior\n").unwrap();
+        let metrics = output_alias(&resume, kind);
+
+        assert_metrics_alias_refused(&env, &metrics, Some(&resume), "--resume-result");
+
+        assert_eq!(
+            std::fs::read_to_string(&resume).unwrap(),
+            "keep prior\n",
+            "{kind}"
+        );
+        assert!(!env.dir.path().join("result.json").exists(), "{kind}");
+    }
+}
+
+#[test]
+fn metrics_cannot_share_one_file_with_both_json_roles() {
+    let env = setup("");
+    let shared = env.dir.path().join("result.json");
+    std::fs::write(&shared, "keep shared\n").unwrap();
+
+    assert_metrics_alias_refused(&env, &shared, Some(&shared), "--result");
+
+    assert_eq!(std::fs::read_to_string(&shared).unwrap(), "keep shared\n");
 }
 
 #[test]

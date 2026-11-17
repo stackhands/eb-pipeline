@@ -362,6 +362,52 @@ fn resume_records_a_digest_and_skips_a_unit_whose_module_remains() {
 }
 
 #[test]
+fn result_may_atomically_replace_the_resume_result_after_it_is_read() {
+    let w = world(resume(1));
+    let list = "Foo-1.0-foss-2025a.eb\n";
+    let shared = w.root.join("result.json");
+    let first = invoke(
+        &w,
+        "run",
+        Some(list),
+        &[],
+        &[
+            "--run-id",
+            "r1",
+            "--log-stamp",
+            "20260101_000004",
+            "--result",
+            shared.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(first.code, 0, "{}", first.stderr);
+
+    let second = invoke(
+        &w,
+        "run",
+        Some(list),
+        &[],
+        &[
+            "--run-id",
+            "r2",
+            "--log-stamp",
+            "20260101_000005",
+            "--resume-result",
+            shared.to_str().unwrap(),
+            "--result",
+            shared.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(second.code, 0, "{}", second.stderr);
+    assert!(second.stderr.contains("resumed"), "{}", second.stderr);
+    let result = second.result.unwrap();
+    assert_eq!(result["run_id"], "r2");
+    assert_eq!(result["counts"]["skipped"], 1);
+    let on_disk: Value = serde_json::from_str(&std::fs::read_to_string(&shared).unwrap()).unwrap();
+    assert_eq!(on_disk, result);
+}
+
+#[test]
 fn a_changed_hash_file_refuses_the_resume() {
     let w = world(resume(1));
     let list = "Foo-1.0-foss-2025a.eb\n";

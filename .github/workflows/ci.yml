@@ -33,6 +33,37 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Tests
         run: cargo test --locked
+      - name: Install promtool 3.16.0
+        run: |
+          set -euo pipefail
+          base=https://github.com/prometheus/prometheus/releases/download/v3.16.0
+          archive=prometheus-3.16.0.linux-amd64.tar.gz
+          curl --proto '=https' --tlsv1.2 -fsSLO "$base/$archive"
+          curl --proto '=https' --tlsv1.2 -fsSLO "$base/sha256sums.txt"
+          grep " $archive\$" sha256sums.txt | sha256sum --check
+          tar -xzf "$archive" --strip-components=1 "prometheus-3.16.0.linux-amd64/promtool"
+      - name: Validate generated Prometheus metrics
+        run: |
+          cat > result.json <<'EOF'
+          {
+            "kind": "result",
+            "site": "example",
+            "target": "cpu",
+            "build_type": "production",
+            "run_id": "ci",
+            "sharded": false,
+            "exit_code": 0,
+            "ended_at": "2026-11-17T20:00:00Z",
+            "duration_seconds": 12.5,
+            "counts": {"success": 2, "failed": 0},
+            "phases": [{"name": "build", "status": "ok"}]
+          }
+          EOF
+          cargo run --locked --quiet --bin eb-pipeline -- metrics --result result.json > metrics.prom
+          ./promtool check metrics < metrics.prom
+          cargo run --locked --quiet --bin eb-cvmfs -- \
+            --dry-run --metrics-file cvmfs.prom repo.example -- true > /dev/null
+          ./promtool check metrics < cvmfs.prom
       - name: Examples hold placeholders only
         run: cargo test --locked --test examples
 

@@ -57,6 +57,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 [ -n "${STUB_EB_STACK_FAIL:-}" ] && { echo "error: stub failure"; exit 1; }
+[ "$cmd" = stack-sbom ] && [ -n "${STUB_SBOM_DELAY:-}" ] && sleep "$STUB_SBOM_DELAY"
 [ "$cmd" = stack-sbom ] && [ -n "${STUB_SBOM_FAIL:-}" ] && { echo "error: sbom"; exit 1; }
 mkdir -p "$out"
 touch "$D/deps.tsv" "$D/order.txt" "$D/missing.txt"
@@ -338,31 +339,41 @@ pub fn eb_pipeline(t: &T, args: &[&str], vars: &[(&str, &str)]) -> Output {
 
 /// `run` of `list` for `target` in the run directory `stamp`.
 pub fn run(t: &T, target: &str, stamp: &str, list: &str, vars: &[(&str, &str)]) -> Output {
+    run_extra(t, target, stamp, list, &[], vars)
+}
+
+/// `run` with additional command-line arguments.
+pub fn run_extra(
+    t: &T,
+    target: &str,
+    stamp: &str,
+    list: &str,
+    extra: &[&str],
+    vars: &[(&str, &str)],
+) -> Output {
     let list_path = t.root().join(format!("list-{target}.txt"));
     std::fs::write(&list_path, list).unwrap();
     let site = t.site.display().to_string();
     let list_arg = list_path.display().to_string();
     let result = t.root().join(format!("result-{target}.json"));
     let result_arg = result.display().to_string();
-    eb_pipeline(
-        t,
-        &[
-            "run",
-            "--site",
-            &site,
-            "--list",
-            &list_arg,
-            "--target",
-            target,
-            "--build-type",
-            "production",
-            "--log-stamp",
-            stamp,
-            "--result",
-            &result_arg,
-        ],
-        vars,
-    )
+    let mut args = vec![
+        "run",
+        "--site",
+        &site,
+        "--list",
+        &list_arg,
+        "--target",
+        target,
+        "--build-type",
+        "production",
+        "--log-stamp",
+        stamp,
+        "--result",
+        &result_arg,
+    ];
+    args.extend_from_slice(extra);
+    eb_pipeline(t, &args, vars)
 }
 
 pub fn stderr(o: &Output) -> String {

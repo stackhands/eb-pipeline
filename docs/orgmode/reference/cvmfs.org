@@ -8,7 +8,7 @@
 It is a companion command, not a phase that =eb-pipeline run= enables by default.
 
 #+begin_example
-eb-cvmfs [--dry-run] REPOSITORY -- COMMAND [ARG...]
+eb-cvmfs [--dry-run] [--metrics-file PATH] REPOSITORY -- COMMAND [ARG...]
 #+end_example
 
 | Argument or option | Meaning |
@@ -17,6 +17,7 @@ eb-cvmfs [--dry-run] REPOSITORY -- COMMAND [ARG...]
 | =--= | Ends =eb-cvmfs= options and starts the synchronization command. |
 | =COMMAND [ARG...]= | The site's synchronization command and its arguments. It is started directly, without a shell. |
 | =--dry-run= | Print every command in the bracket without checking, opening, changing, publishing or aborting the repository. |
+| =--metrics-file PATH= | Atomically replace =PATH= with Prometheus text after each valid invocation. Without it, no metrics or lock file is written. |
 
 ** Execution order
 
@@ -31,11 +32,35 @@ An abort failure is reported, but does not replace the synchronization command's
 A synchronization command that cannot be found is treated as exit 127; another failure to start it is exit 126.
 =eb-cvmfs= performs no tarball build or packaging step.
 
+** Metrics
+
+The metrics file contains these gauges, all labelled with =repository=:
+
+| Family | Meaning |
+|--------+---------|
+| =eb_cvmfs_last_result= | 1 when the latest invocation succeeded, otherwise 0. |
+| =eb_cvmfs_exit_code= | The exit code of the latest invocation. |
+| =eb_cvmfs_last_publish_timestamp_seconds= | Unix time of the latest successful publish known in this file. It is absent until a publish succeeds. A later failure preserves it. |
+| =eb_cvmfs_last_transaction_duration_seconds= | Seconds from starting the successful =transaction= command through a =publish= or =abort= command that reached an exit status. It is absent when no transaction opened or the final command could not start. |
+| =eb_cvmfs_aborts= | Abort commands that started during the latest invocation: 0 or 1. This is an invocation gauge, not a cumulative counter. |
+
+The file describes one repository.
+Invocations using the same path take an exclusive sibling lock before checking the repository and hold it through the atomic metrics replacement.
+This makes preservation of the last successful publish robust when invocations overlap.
+The lock is named =.FILE.lock= and remains for reuse.
+
+The replacement uses a temporary file in =PATH='s directory and preserves the permission bits of an existing regular file.
+The temporary file belongs to the account running =eb-cvmfs=, so replacing a file owned by another account cannot preserve that ownership without extra privileges.
+A metrics write failure is reported after the repository operation.
+It changes a successful invocation to exit 1, but does not mask an existing transaction, synchronization or publish failure.
+=--dry-run --metrics-file PATH= updates the result, exit-code and abort gauges, preserves a previous publish timestamp, and records no transaction duration.
+
 ** Exit status
 
 | Status | Meaning |
 |--------+---------|
 | =0= | The synchronization and publish succeeded, or =--dry-run= printed the commands. |
+| =1= | The repository operation succeeded, but the requested metrics file could not be written. |
 | =2= | The arguments are invalid, =cvmfs_server list= cannot start or fails, or the repository is already in a transaction. |
 | transaction status | =cvmfs_server transaction= failed. |
 | synchronization status | The synchronization failed; =eb-cvmfs= attempted =abort -f=. |
