@@ -155,7 +155,7 @@ fn site_values_come_from_the_environment() {
 }
 
 #[test]
-fn help_and_readme_list_the_codes_run_returns() {
+fn help_and_the_exit_status_reference_list_the_codes_run_returns() {
     let o = bin().arg("--help").output().unwrap();
     assert_eq!(o.status.code(), Some(0), "{}", text(&o));
     let help = String::from_utf8_lossy(&o.stdout).into_owned();
@@ -166,16 +166,17 @@ fn help_and_readme_list_the_codes_run_returns() {
         .take_while(|l| !l.is_empty())
         .filter_map(|l| l.split_whitespace().next()?.parse().ok())
         .collect();
-    let readme =
-        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("README.md"))
-            .unwrap();
-    let readme_codes: Vec<u32> = readme
+    let page = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/orgmode/reference/exit-status.org"),
+    )
+    .unwrap();
+    let page_codes: Vec<u32> = page
         .lines()
-        .skip_while(|l| *l != "## Exit codes")
+        .skip_while(|l| *l != "** Statuses")
         .skip_while(|l| !l.starts_with('|'))
         .take_while(|l| l.starts_with('|'))
         .filter_map(|l| l.trim_matches('|').split('|').next()?.trim().parse().ok())
         .collect();
     assert_eq!(help_codes, [0, 1, 2, 75, 78, 130, 143], "{help}");
-    assert_eq!(readme_codes, help_codes);
+    assert_eq!(page_codes, help_codes);
 }

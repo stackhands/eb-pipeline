@@ -1,0 +1,1 @@
+The reference has a page on exit statuses: what leads to each of 0, 1, 2, 75, 78, 130 and 143, the order in which `run` picks one when several apply, and what a run does with each exit status of `eb`, eb-stack, eb-staged-rebuild, eb-keep-logs and the cache command.

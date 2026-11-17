@@ -1,0 +1,331 @@
+#+TITLE: Run your first build list
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Run your first build list
+
+By the end of this tutorial you will have run a build list through eb-pipeline, read the result file it wrote, and seen what a line that fails does to the run and to its exit status.
+Everything runs on one Linux machine, as an ordinary user, in a directory under your home.
+A stand-in for EasyBuild's =eb= command, six lines of shell, takes the place of EasyBuild and prints what it was asked to do, so you need no cluster, no Slurm and no EasyBuild.
+
+** What you will need
+
+- A Linux machine with =git= and Rust 1.90 or newer:
+
+  #+begin_src bash
+  cargo --version
+  #+end_src
+
+  #+begin_example
+  cargo 1.90.0 (840b83a10 2025-07-30)
+  #+end_example
+
+  If the shell answers =cargo: command not found=, install Rust with [[https://rustup.rs][rustup]] first.
+
+** Install eb-pipeline
+
+Clone the repository, check out the commit this tutorial was checked with, and install the program from it:
+
+#+begin_src bash
+git clone https://github.com/stackhands/eb-pipeline.git
+cd eb-pipeline
+git checkout ef2fbe2
+cargo install --locked --path .
+#+end_src
+
+Cargo builds =eb-pipeline= and installs it in the =bin= directory of its home, =~/.cargo/bin= unless =CARGO_HOME= names another, which rustup puts on your =PATH=.
+Ask it for its version:
+
+#+begin_src bash
+eb-pipeline --version
+#+end_src
+
+#+begin_example
+eb-pipeline 0.3.0
+#+end_example
+
+** Make a directory to work in
+
+Every step from here on runs in one directory, which the commands call =$WORK=:
+
+#+begin_src bash
+export WORK=$HOME/eb-tutorial
+mkdir -p "$WORK"
+cd "$WORK"
+#+end_src
+
+In the output on this page, =$WORK= stands for that directory as your shell prints it, such as =/home/alice/eb-tutorial=.
+
+** Put a stand-in for EasyBuild on your =PATH=
+
+eb-pipeline builds each line of a build list by starting EasyBuild's =eb=.
+This stand-in prints the arguments it gets and the EasyBuild settings in its environment, and fails for an easyconfig whose name starts with =Broken-=:
+
+#+INCLUDE: "first-build-list/eb.sh" src bash
+
+Put its directory first on your =PATH=, so that eb-pipeline starts it rather than an EasyBuild you may have:
+
+#+begin_src bash
+export PATH="$WORK/bin:$PATH"
+command -v eb
+#+end_src
+
+#+begin_example
+$WORK/bin/eb
+#+end_example
+
+** Write a site file
+
+A /site file/ describes a site to eb-pipeline: how each phase of a run starts, the targets it builds for, and the paths EasyBuild works in.
+This one starts every phase on this machine, =kind = "local"=, has one target, =cpu=, keeps every path under =$WORK=, and loads no modules, =init = []=:
+
+#+INCLUDE: "first-build-list/site.sh" src bash
+
+Check it:
+
+#+begin_src bash
+eb-pipeline check --site site.toml
+#+end_src
+
+#+begin_example
+INFO [check] example: site file is valid
+#+end_example
+
+=example= is the site's =name=; for a file it refuses, =check= prints an =ERROR= line for each problem and exits with status 2.
+
+** Write a build list
+
+A /build list/ names one easyconfig per line, with any options for =eb= after it:
+
+#+begin_src bash
+cat > build.list <<'EOF'
+Example-1.0-GCCcore-15.2.0.eb
+zlib-1.3.1-GCCcore-15.2.0.eb --rebuild
+EOF
+#+end_src
+
+** See what a run would start
+
+=run --dry-run= prints the commands a run would start, phase by phase, and starts none of them:
+
+#+begin_src bash
+eb-pipeline run --site site.toml --list build.list --target cpu --build-type production --dry-run
+#+end_src
+
+#+begin_example
+# [licences] not configured
+# [shard] not configured
+# [sources] not configured
+# [admission] not configured
+[build] eb Example-1.0-GCCcore-15.2.0.eb
+[build] eb zlib-1.3.1-GCCcore-15.2.0.eb --rebuild
+# [caches] not configured
+# [logs] not configured
+INFO [run] cpu: dry run: nothing executed
+#+end_example
+
+A run goes through its phases in this order, and this site file configures only =build=, which starts one =eb= for each line, with the line's options.
+=--target cpu= picks the target, and =--build-type production= names the kind of build, for which a target can have settings of its own.
+
+** Run the build list
+
+Run it again without =--dry-run=, with =--result= to keep a result file, and print the exit status:
+
+#+begin_src bash
+eb-pipeline run --site site.toml --list build.list --target cpu --build-type production --result result.json
+echo $?
+#+end_src
+
+#+begin_example
+INFO [licences] cpu: not configured
+INFO [shard] cpu: not configured
+INFO [sources] cpu: not configured
+INFO [admission] cpu: not configured
+INFO [caches] cpu: not configured
+INFO [logs] cpu: not configured
+INFO [build] cpu: Example-1.0-GCCcore-15.2.0: start
+INFO [build] cpu: Example-1.0-GCCcore-15.2.0: ok
+INFO [build] cpu: zlib-1.3.1-GCCcore-15.2.0: start
+INFO [build] cpu: zlib-1.3.1-GCCcore-15.2.0: ok
+0
+#+end_example
+
+eb-pipeline reports on standard error as it goes, one line per event, and exits with status 0 when every line built.
+
+** Read the result file
+
+The result file is in JavaScript Object Notation (JSON):
+
+#+begin_src bash
+cat result.json
+#+end_src
+
+#+begin_example
+{
+  "admission": [],
+  "build_type": "production",
+  "counts": {
+    "success": 2
+  },
+  "ended_at": "2026-11-17T02:40:48.852371271+00:00",
+  "exit_code": 0,
+  "kind": "result",
+  "lines": [
+    {
+      "easyconfig": "Example-1.0-GCCcore-15.2.0.eb",
+      "exit_code": 0,
+      "log": "$WORK/logs/20261117_024048/cpu/Example-1.0-GCCcore-15.2.0.stdout.log",
+      "phase": "build",
+      "status": "success",
+      "unit": "all"
+    },
+    {
+      "easyconfig": "zlib-1.3.1-GCCcore-15.2.0.eb",
+      "exit_code": 0,
+      "log": "$WORK/logs/20261117_024048/cpu/zlib-1.3.1-GCCcore-15.2.0.stdout.log",
+      "phase": "build",
+      "status": "success",
+      "unit": "all"
+    }
+  ],
+  "list": "build.list",
+  "log_dir": "$WORK/logs/20261117_024048/cpu",
+  "not_configured": [
+    "licences",
+    "shard",
+    "sources",
+    "admission",
+    "caches",
+    "logs"
+  ],
+  "phases": [
+    {
+      "name": "preflight",
+      "status": "ok"
+    },
+...
+    {
+      "name": "build",
+      "status": "ok"
+    },
+...
+  ],
+  "run_id": "20261117_024048",
+  "schema_version": 1,
+  "sharded": false,
+  "site": "example",
+  "started_at": "2026-11-17T02:40:48.811313154+00:00",
+  "target": "cpu"
+}
+#+end_example
+
+- =exit_code= is the status eb-pipeline exited with, and =counts= counts the lines by status.
+- =lines= has an entry for each line, with its =status= and the =log= that its =eb= wrote to.
+- =phases= has every phase of the run in order, and =not_configured= names the ones the site file leaves out.
+- =20261117_024048= is the time the run started, in Coordinated Universal Time (UTC), so yours differs.
+  It names the run's log directory, and it is the =run_id= too, as no =--run-id= gave another.
+
+** Read the log of a line
+
+#+begin_src bash
+cat logs/*/cpu/Example-1.0-GCCcore-15.2.0.stdout.log
+#+end_src
+
+#+begin_example
+eb Example-1.0-GCCcore-15.2.0.eb
+EASYBUILD_BUILDPATH=$WORK/scratch/build
+EASYBUILD_INSTALLPATH=$WORK/software
+EASYBUILD_TMPDIR=$WORK/scratch/tmp
+#+end_example
+
+The stand-in got the easyconfig as its argument, and the paths of the site file's =[filesystems]= as the variables that configure EasyBuild.
+
+** Watch a line fail
+
+Put a line that the stand-in fails between the other two:
+
+#+begin_src bash
+cat > build.list <<'EOF'
+Example-1.0-GCCcore-15.2.0.eb
+Broken-1.0-GCCcore-15.2.0.eb
+zlib-1.3.1-GCCcore-15.2.0.eb --rebuild
+EOF
+#+end_src
+
+Run the list again:
+
+#+begin_src bash
+eb-pipeline run --site site.toml --list build.list --target cpu --build-type production --result result.json
+echo $?
+#+end_src
+
+#+begin_example
+INFO [licences] cpu: not configured
+INFO [shard] cpu: not configured
+INFO [sources] cpu: not configured
+INFO [admission] cpu: not configured
+INFO [caches] cpu: not configured
+INFO [logs] cpu: not configured
+INFO [build] cpu: Example-1.0-GCCcore-15.2.0: start
+INFO [build] cpu: Example-1.0-GCCcore-15.2.0: ok
+INFO [build] cpu: Broken-1.0-GCCcore-15.2.0: start
+ERROR [build] cpu: Broken-1.0-GCCcore-15.2.0: failed (exit 1)
+INFO [build] cpu: zlib-1.3.1-GCCcore-15.2.0: start
+INFO [build] cpu: zlib-1.3.1-GCCcore-15.2.0: ok
+1
+#+end_example
+
+The line after the one that failed still built, and the exit status is 1: a line failed.
+The new result file counts the lines:
+
+#+begin_src bash
+grep -A3 '"counts"' result.json
+#+end_src
+
+#+begin_example
+  "counts": {
+    "failed": 1,
+    "success": 2
+  },
+#+end_example
+
+The log of the failed line ends with what the stand-in printed before it failed:
+
+#+begin_src bash
+cat logs/*/cpu/Broken-1.0-GCCcore-15.2.0.stdout.log
+#+end_src
+
+#+begin_example
+eb Broken-1.0-GCCcore-15.2.0.eb
+EASYBUILD_BUILDPATH=$WORK/scratch/build
+EASYBUILD_INSTALLPATH=$WORK/software
+EASYBUILD_TMPDIR=$WORK/scratch/tmp
+ERROR: cannot build Broken-1.0-GCCcore-15.2.0.eb
+#+end_example
+
+** Clean up
+
+Remove the work directory:
+
+#+begin_src bash
+cd
+rm -rf "$WORK"
+#+end_src
+
+** What just happened
+
+1. The site file described a site of one machine: with the =local= scheduler, every phase started there as a plain process.
+   [[file:../explanation/design.org][Why one site file drives the build]] says why everything about a site lives in that file.
+2. =run --dry-run= printed the plan, the phases of a run in their fixed order, of which this site file configures only =build=.
+   [[file:../explanation/phases.org][How a run goes through its phases]] describes them, and how one exit status sums up a run.
+3. =run= started one =eb= for each line, in the order of the list, with the paths from the site file in =EASYBUILD_= variables and its output in a log of its own.
+4. The result file recorded every phase and every line, and the exit status gave the outcome: 0 when every line built, 1 when a line failed.
+5. A line that failed did not stop the run; the lines after it still built.
+
+** Next steps
+
+- [[file:../howto/index.org][The how-to guides]], for a site file for your cluster and for the jobs that call eb-pipeline.
+- [[file:../reference/index.org][The reference]], for every command, site file key and exit status.
+- [[file:../explanation/index.org][The explanation]], for why eb-pipeline works the way it does.
+
+Checked with Rust 1.90.0 and eb-pipeline at commit ef2fbe2 on 2026-11-17.

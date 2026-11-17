@@ -1,0 +1,121 @@
+#+TITLE: Exit status
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Exit status
+
+The exit statuses of =eb-pipeline=, what leads to each, how =run= picks one when several apply, and how it reads the exit statuses of the tools it starts.
+The constants are in [[file:../api/eb_pipeline/exit/index.html][eb_pipeline::exit]].
+
+** Statuses
+
+| Status | Constant   | Meaning                                                                                              |
+|--------+------------+------------------------------------------------------------------------------------------------------|
+|      0 | =OK=       | All requested work completed.                                                                        |
+|      1 | =FAILED=   | Work was attempted and failed: a line or a phase. The result file says which.                        |
+|      2 | =USAGE=    | A usage error, an invalid site file, or a tool below its minimum version. Nothing was built.         |
+|     75 | =TEMPFAIL= | A resource is temporarily unavailable or a step is pending; run again later.                         |
+|     78 | =REFUSED=  | A precondition, admission or =eb-staged-rebuild= refused. Lines built before the refusal stay built. |
+|    130 | =SIGINT=   | Interrupted by =SIGINT=, after the running command ended.                                            |
+|    143 | =SIGTERM=  | Interrupted by =SIGTERM=, after the running command ended.                                           |
+
+The exit status is never a sum or a count; the result file holds the count of lines per status.
+An error that ends a command is written to stderr as =ERROR [main] -: MESSAGE=.
+
+** What leads to each status
+
+*** 0
+
+- =check=, =schema=, =init=, =explain=, =targets= and =plan= did what they were asked.
+- =run --dry-run= printed its commands.
+- =run=: no line failed, was refused or is pending, and no phase failed.
+  A deselected line, a phase that is not configured, an =unsharded= shard phase and a =logs= phase that another rotation made =skipped= all leave the status at 0.
+
+*** 1
+
+- =run=: the =eb= or =eb-staged-rebuild run= command of a line exited with a status that is not 0 and does not mean refused or pending; the line is =failed=.
+- =run=: the source prefetch of a line failed; the line is =failed= and is not built.
+- =run=: =eb-stack stack shard= exited with a status other than 0, 2 and =shards.planner_exit_unsharded=, or its plan could not be read; the run ends.
+- =run=: =eb-stack stack admit= exited with a status other than 0, 2 and 78; the run ends.
+- =run=: =[caches].command= exited with a status other than 0.
+- =run=: =eb-keep-logs rotate= exited with a status other than 0 and 75.
+- =run=: a log file, a log directory, the list of selected lines or the result file could not be written.
+- =plan=: the shard plan given to =--shard-plan= could not be read, or the plan could not be written to =--out=.
+
+A failed =eb-keep-logs failed= after a failed line leaves the status as it is, with a =WARN= line.
+
+*** 2
+
+- The command line has an unknown option, lacks a required one, or gives a value that is not allowed, such as a =--log-stamp= that is not a date and time in Coordinated Universal Time (UTC).
+- The site file cannot be read, is not valid, or is not valid after the =EB_PIPELINE__= variables are applied.
+- The target is not one of the site file's.
+- The list cannot be read, holds no line, or has a quote that is not closed.
+- =run=, and =check --probe-tools=: a tool that needs a =min_version= cannot be started, prints no version, or prints one below the minimum.
+  =check --probe-tools= also checks the tools without a =min_version=.
+- =init=: the template is unknown, or the =--out= file cannot be created, as when it exists.
+- =run=: =eb-stack stack shard= or =eb-stack stack admit= exited 2.
+
+*** 75
+
+- =run=: =eb-staged-rebuild run= exited 75 for a line; the line is =pending=.
+
+*** 78
+
+- =run=: every problem the site file has is in =[licences]=.
+- =run=: =admission.required= is =true= but =admission.quota_cmd= or =admission.reservations= is missing.
+- =run=: =admission.quota_cmd= and =admission.reservations= are set, and the variable that =admission.job_id_env= names is unset or not a positive integer without a leading zero.
+- =run=: a variable that =shards.installed_modules_dirs_from_env= names is unset.
+- =run=: a unit has CPU-role commands that the target's route wraps, and the variable =targets.route.receipt_digest_env= names is unset or empty.
+- =run=: =eb-stack stack admit= still refused after =admission.attempts= attempts.
+  The lines of that unit are =skipped=, with the note =admission refused=, and those of every later unit with =an earlier unit was refused=.
+- =run=: =eb-staged-rebuild run= exited 2 for a line, such as when the lock of its state root was still held after =[rebuild] lock_timeout= seconds; the line is =refused=.
+
+The refusals before the first build leave every line unbuilt.
+
+*** 130 and 143
+
+=run= passes the signal to the running command and waits for it to end.
+It starts no other command, records the phase as =interrupted=, writes the result file and exits 130 for =SIGINT= or 143 for =SIGTERM=.
+
+** When several apply
+
+A signal ends a run with 130 or 143, and a usage error with 2, whatever else happened before.
+Otherwise the first of these that applies is the status of the run:
+
+1. a line or a phase failed: 1;
+2. a line or admission was refused: 78;
+3. a line is pending: 75;
+4. none of these: 0.
+
+A run in which one line failed and another was refused exits 1.
+
+** Exit statuses of the tools a run starts
+
+| Command                       |                                        Status | What the run does                                                                                                                                                   |
+|-------------------------------+-----------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =eb=                          |                                             0 | The line is =success=.                                                                                                                                              |
+| =eb=                          |                                     any other | The line is =failed=.                                                                                                                                               |
+| =eb-stack stack shard=        |                                             0 | The run builds the units of the shard plan.                                                                                                                         |
+| =eb-stack stack shard=        | =shards.planner_exit_unsharded=, 3 by default | The planner built the plan unsharded; the shard phase is =unsharded= and the list builds as one unit.                                                               |
+| =eb-stack stack shard=        |                                             2 | The shard phase is =failed=, and the run ends with 2.                                                                                                               |
+| =eb-stack stack shard=        |                                     any other | The shard phase is =failed=, and the run ends with 1.                                                                                                               |
+| =eb-stack stack admit=        |                                             0 | The unit is admitted and builds.                                                                                                                                    |
+| =eb-stack stack admit=        |                                            78 | Refused: the run waits and asks again, as =[admission]= sets, and after the last attempt the admission phase is =refused=.                                          |
+| =eb-stack stack admit=        |                                             2 | The admission phase is =failed=, and the run ends with 2.                                                                                                           |
+| =eb-stack stack admit=        |                                     any other | The admission phase is =failed=, and the run ends with 1.                                                                                                           |
+| =eb-staged-rebuild run=       |                                             0 | The line is =success=.                                                                                                                                              |
+| =eb-staged-rebuild run=       |                                             2 | A refusal: the line is =refused=, with =translated_from= 2 and =exit_code= 78.                                                                                      |
+| =eb-staged-rebuild run=       |                                            75 | The line is =pending=.                                                                                                                                              |
+| =eb-staged-rebuild run=       |                                     any other | The line is =failed=.                                                                                                                                               |
+| =eb-keep-logs rotate=         |                                             0 | The =logs= phase is =ok=.                                                                                                                                           |
+| =eb-keep-logs rotate=         |                                            75 | Another rotation holds =LOG_ROOT/.eb-keep-logs-rotate.lock= and this one changed nothing; the =logs= phase is =skipped=, and the status of the run does not change. |
+| =eb-keep-logs rotate=         |                                     any other | The =logs= phase is =failed=.                                                                                                                                       |
+| =eb-keep-logs failed=         |                              any other than 0 | A =WARN= line; nothing else changes.                                                                                                                                |
+| =[caches].command=            |                              any other than 0 | The =caches= phase is =failed=.                                                                                                                                     |
+| any command that cannot start |                                           127 | Recorded as the command's status; its log says why it could not start.                                                                                              |
+
+** See also
+
+- [[file:cli.org][The eb-pipeline command]] and [[file:site-file.org][The site file]]
+- [[file:plan-and-result.org][The plan and result files]], for the status of each line and phase in the result file
+- [[file:../explanation/phases.org][How a run goes through its phases]], for the order of the statuses

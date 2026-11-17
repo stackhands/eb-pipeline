@@ -1,0 +1,53 @@
+#+TITLE: eb-pipeline
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* eb-pipeline
+
+eb-pipeline runs a site's EasyBuild build lists from one file in Tom's Obvious Minimal Language (TOML), the site file, which describes the site: its targets, the scheduler allocation of each phase, its paths, inode admission, modules, caches, log handling and licences.
+From the site file, a build list and a target, it plans the commands of each phase and starts them as subprocesses: eb-stack to shard the list and admit each build, EasyBuild to fetch the sources and build, eb-keep-logs to keep a failed build's logs and rotate the log tree, and eb-staged-rebuild for a line that rebuilds a live install.
+A continuous integration (CI) system, a cron job or a person on a login node then passes a list and a target, and reads an exit code and a result file.
+Nothing about a site lives in eb-pipeline: the site file holds it, and the environment can set any of its values for one deployment.
+
+New here?
+[[file:tutorials/first-build-list.org][Run your first build list]] installs eb-pipeline on one Linux machine, runs a build list against a stand-in for EasyBuild, and ends with a result file, a log for each line, and a line that fails without stopping the run.
+
+| You want to                       | Read                                       |
+|-----------------------------------+--------------------------------------------|
+| learn by doing, start to finish   | [[file:tutorials/index.org][Tutorials]]    |
+| get one task done                 | [[file:howto/index.org][How-to guides]]    |
+| understand why it works this way  | [[file:explanation/index.org][Explanation]] |
+| look up a command, file or API    | [[file:reference/index.org][Reference]]    |
+
+#+begin_export rst
+.. toctree::
+   :hidden:
+   :caption: Tutorials
+
+   tutorials/index
+
+.. toctree::
+   :hidden:
+   :caption: How-to guides
+
+   howto/index
+
+.. toctree::
+   :hidden:
+   :caption: Explanation
+
+   explanation/index
+
+.. toctree::
+   :hidden:
+   :caption: Reference
+
+   reference/index
+
+.. toctree::
+   :hidden:
+   :caption: Project
+
+   contributing
+   changelog
+#+end_export

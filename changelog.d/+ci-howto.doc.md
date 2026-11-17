@@ -1,0 +1,1 @@
+A how-to guide builds a list on every target from continuous integration (CI): the GitHub Actions workflow of `examples/ci/`, with why each target gets its own run id, when to raise `max-parallel` and what the `concurrency` group holds, and a caller script for other CI systems that exits as a run does.

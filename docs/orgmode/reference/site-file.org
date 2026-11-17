@@ -1,0 +1,432 @@
+#+TITLE: The site file
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* The site file
+
+The site file holds everything =eb-pipeline= knows about a site: its scheduler, its node types, its paths, its modules and the tools it calls.
+It is one file in Tom's Obvious Minimal Language (TOML), named by =--site=.
+=eb-pipeline schema= prints the same keys with their types and defaults; =tests/docs.rs= checks this page against them.
+
+** Format
+
+- The file starts with =schema_version = 1= and =kind = "site"=.
+- An unknown key, or a value of the wrong type, is an error.
+  =check= lists every other problem of the file at once, one =ERROR [check] NAME: PROBLEM= line each, then =ERROR [main] -: N problem(s) in the site file=, and exits 2.
+- An optional table that the file leaves out turns its phase off, and the plan and the result record the phase as =not configured=.
+  So does =enabled = false= in the tables that have =enabled=.
+- =site.name=, =site.project= and the name of each target hold letters, digits, =.=, =_= and =-= only.
+  A target name is not =.= or =..=, since it names a directory.
+- A value that holds the arguments of a command, such as =scheduler.launch= or a key of =[phase_defaults]=, is split into words as a shell splits them, with single and double quotes.
+- The variables =EB_PIPELINE__SECTION__KEY= set values over the file before it is checked; [[file:environment.org][Environment variables]] describes them.
+
+** Placeholders
+
+=eb-pipeline= replaces a placeholder in braces in these keys, and =check= refuses any other placeholder in them.
+
+| Keys                                                                                      | Placeholders                                                                                                    |
+|-------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------------------------------|
+| =scheduler.job_name_template=                                                             | ={project}=, ={build}=, ={phase}=, ={target}=                                                                   |
+| =filesystems.build_path=, the entries of =filesystems.source_paths=, =rebuild.state_root= | ={target}=                                                                                                      |
+| =targets.route.args=, the values of =targets.route.env=                                   | ={phase_dir}=, ={log_dir}=, ={work_dir}=, ={target}=, ={phase}=, ={runtime_root}=, ={shares_ro}=, ={shares_rw}= |
+| the entries of =targets.route.shares_ro= and =targets.route.shares_rw=                    | ={phase_dir}=, ={log_dir}=, ={work_dir}=, ={target}=, ={phase}=                                                 |
+
+| Placeholder      | Value                                                                                                 |
+|------------------+-------------------------------------------------------------------------------------------------------|
+| ={project}=      | =site.project=, else =site.name=                                                                      |
+| ={build}=        | the build type                                                                                        |
+| ={phase}=        | the phase that starts the command, such as =build= or =sources=                                       |
+| ={target}=       | the name of the target                                                                                |
+| ={log_dir}=      | the run's log directory, =LOG_ROOT/LOG_STAMP/TARGET=                                                  |
+| ={phase_dir}=    | =LOG_DIR/PHASE=; when =args= or a share has it, the run makes the directory before the command starts |
+| ={work_dir}=     | the target's =filesystems.build_path=                                                                 |
+| ={runtime_root}= | =targets.route.runtime_root=, empty when it is unset                                                  |
+| ={shares_ro}=    | the entries of =targets.route.shares_ro=, with their placeholders replaced, joined with =:=           |
+| ={shares_rw}=    | the same for =targets.route.shares_rw=                                                                |
+
+*** {target} in paths
+
+={target}= in =filesystems.build_path=, in an entry of =filesystems.source_paths= and in =rebuild.state_root= gives each target a path of its own.
+=plan= and =explain= show the paths with the name in place.
+
+- =build_path = "/scratch/alice/build/{target}"= gives each target an =EASYBUILD_BUILDPATH= of its own, and ={work_dir}= follows it.
+- EasyBuild looks for a source in every entry of =source_paths= and downloads a missing one into the first, so =source_paths = ["/scratch/alice/sources/{target}", "/opt/site/sources"]= gives each target a download directory of its own and still finds the sources in =/opt/site/sources=.
+- =state_root = "/opt/site/{target}/.eb-staged-rebuild"= gives each target an eb-staged-rebuild state root, and so a lock, of its own.
+
+=check= refuses ={target}= in the other paths of =[filesystems]=, and a =state_root= with ={target}= when two targets that take staged rebuilds share a =software_root=: eb-staged-rebuild locks a live tree through its state root, so one tree takes one state root.
+
+** Top level
+
+| Key              | Type           | Default  | Meaning                                                                         |
+|------------------+----------------+----------+---------------------------------------------------------------------------------|
+| =schema_version= | integer        | required | The version of the format; =1=.                                                 |
+| =kind=           | string         | required | The kind of file; =site=.                                                       |
+| =site=           | table          | required | The site and its tools.                                                         |
+| =scheduler=      | table          | required | How a run starts its commands.                                                  |
+| =phase_defaults= | table          | none     | The launch arguments of each phase role.                                        |
+| =targets=        | array of table | required | The node types to build for; at least one.                                      |
+| =filesystems=    | table          | required | The paths.                                                                      |
+| =admission=      | table          | none     | Admission of each build unit under an inode quota, with =eb-stack stack admit=. |
+| =shards=         | table          | none     | Splitting a list into shards, with =eb-stack stack shard=.                      |
+| =sources=        | table          | none     | Fetching the sources of every line before the first build.                      |
+| =modules=        | table          | required | The environment modules each command loads.                                     |
+| =caches=         | table          | none     | The command that writes module caches after a clean build.                      |
+| =logs=           | table          | none     | Keeping the logs of a failed line, and rotating the log tree.                   |
+| =rebuild=        | table          | none     | Rebuilding installed software in a staged tree, with eb-staged-rebuild.         |
+| =licences=       | table          | none     | The licence gate.                                                               |
+
+** =[site]=
+
+| Key                | Type   | Default                                           | Meaning                                                                                             |
+|--------------------+--------+---------------------------------------------------+-----------------------------------------------------------------------------------------------------|
+| =name=             | string | required                                          | The name of the site. A run exports it as =EB_PIPELINE_SITE=, and it is the default of =project=.   |
+| =project=          | string | =site.name=                                       | The value of ={project}= in =scheduler.job_name_template=.                                          |
+| =build_account=    | string | none                                              | The account that owns the installs; exported as =EB_PIPELINE_BUILD_ACCOUNT= and not read otherwise. |
+| =default_group=    | string | none                                              | The default Unix group of the installs; exported as =EB_PIPELINE_DEFAULT_GROUP=.                    |
+| =stack_generation= | string | none                                              | A label for the generation of the software stack, such as =2026.1=; not read.                       |
+| =tools=            | table  | all tools looked up on =PATH=, no minimum version | The programs of the sibling tools and the versions they need.                                       |
+
+*** =[site.tools]=
+
+| Key                 | Type  | Default                   | Meaning                                                                      |
+|---------------------+-------+---------------------------+------------------------------------------------------------------------------|
+| =eb_stack=          | table | =bin= =eb-stack=          | eb-stack, which runs =stack shard= and =stack admit=.                        |
+| =eb_keep_logs=      | table | =bin= =eb-keep-logs=      | eb-keep-logs, which runs =failed= and =rotate=.                              |
+| =eb_staged_rebuild= | table | =bin= =eb-staged-rebuild= | eb-staged-rebuild, which runs =run= for a line that rebuilds a live install. |
+
+*** =[site.tools.TOOL]=
+
+=TOOL= is =eb_stack=, =eb_keep_logs= or =eb_staged_rebuild=.
+
+| Key           | Type   | Default                                  | Meaning                                                                                                                                                                                                                                                      |
+|---------------+--------+------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =bin=         | string | the tool's own name, looked up on =PATH= | The program: a path, or a name to look up on =PATH=.                                                                                                                                                                                                         |
+| =min_version= | string | none                                     | The lowest version accepted, as dotted numbers such as =0.7.4=. When a phase that calls the tool is on, =run= starts =BIN --version= before any other command, and exits 2 when the tool cannot start, prints no dotted number, or prints a lower one first. |
+
+** =[scheduler]=
+
+| Key                 | Type            | Default                     | Meaning                                                                                                                                                 |
+|---------------------+-----------------+-----------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =kind=              | string          | required                    | =slurm= starts each command through =launch=, with the launch arguments of its role; =local= starts it as it is, and the launch arguments are not used. |
+| =launch=            | string          | =srun=                      | The launch command of =slurm=; not empty.                                                                                                               |
+| =common_args=       | array of string | =[]=                        | Arguments of every launch line, after =launch= and before =--job-name=.                                                                                 |
+| =env=               | table of string | ={}=                        | Variables set for every command; a variable that =eb-pipeline= sets itself replaces one of the same name.                                               |
+| =job_name_template= | string          | ={project}-{build}-{phase}= | The job name each launch line passes as =--job-name=.                                                                                                   |
+
+With =kind = "slurm"=, a command starts as =LAUNCH COMMON_ARGS --job-name=NAME ROLE_ARGS COMMAND=, where =ROLE_ARGS= are the launch arguments of the command's role and =COMMAND= starts with the module wrapper when there is one.
+A role without launch arguments launches a bare =srun --job-name=NAME=, and inside an allocation =srun= then starts one task for each task of the allocation, so give each role a task count, such as =-N 1 --ntasks-per-node=1=.
+
+** =[phase_defaults]=
+
+Each key holds the launch arguments of one role, for every target that does not set its own in =[targets.phases]=.
+
+| Key     | Type   | Default | Meaning                                                                                                |
+|---------+--------+---------+--------------------------------------------------------------------------------------------------------|
+| =plan=  | string | none    | =eb-stack stack shard=.                                                                                |
+| =build= | string | none    | The builds of the whole list, of the prelude and of each shard.                                        |
+| =short= | string | none    | Admission, source prefetch, =eb-keep-logs failed= and =eb-keep-logs rotate=.                           |
+| =cpu=   | string | none    | The builds of the CPU-only prerequisites that =stack shard= lifts out, which the target's route wraps. |
+| =cache= | string | none    | =[caches].command=, when the target's entry in =[[caches.targets]]= sets no =alloc=.                   |
+
+** =[[targets]]=
+
+One table per node type.
+A run builds for one target, named by =--target=.
+
+| Key                         | Type            | Default                     | Meaning                                                                                                                                                                                                                                                                                                                      |
+|-----------------------------+-----------------+-----------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =name=                      | string          | required                    | The name of the target, unique in the file. It names the target's log directory, and ={target}= expands to it.                                                                                                                                                                                                               |
+| =build_lists=               | array of string | =[]=                        | The file names of the build lists of the target; =check --lists-dir DIR= checks that each is a file in =DIR=.                                                                                                                                                                                                                |
+| =eb_optarch=                | string          | none                        | =EASYBUILD_OPTARCH=.                                                                                                                                                                                                                                                                                                         |
+| =max_parallel=              | integer         | none                        | =EASYBUILD_MAX_PARALLEL=.                                                                                                                                                                                                                                                                                                    |
+| =cuda_compute_capabilities= | string          | none                        | =EASYBUILD_CUDA_COMPUTE_CAPABILITIES=, such as =9.0=.                                                                                                                                                                                                                                                                        |
+| =cpu_target=                | string          | none                        | The CPU subdirectory of the European Environment for Scientific Software Installations (EESSI), such as =x86_64/amd/zen4=, exported in the variable =modules.eessi.cpu_override_var= names. With =[modules.eessi]= on, it is =ARCH/UARCH= or =ARCH/VENDOR/UARCH=, and =ARCH= is =x86_64=, =aarch64=, =riscv64= or =ppc64le=. |
+| =accel_target=              | string          | none                        | The accelerator subdirectory of EESSI, such as =accel/nvidia/cc90=, exported in the variable =modules.eessi.accel_override_var= names; empty means none. With =[modules.eessi]= on, it is =accel/nvidia/ccDIGITS= or =accel/amd/gfxHEX=.                                                                                     |
+| =site_prefix=               | string          | none                        | The install prefix of the target, exported as =EASYBUILD_INSTALLPATH= and =EESSI_SITE_SOFTWARE_PREFIX=; =filesystems.install_root= when unset.                                                                                                                                                                               |
+| =software_root=             | string          | =<install prefix>/software= | The live software tree of the target: =EASYBUILD_INSTALLPATH_SOFTWARE= with =export_install_vars = "split"=, and =eb-staged-rebuild --software=.                                                                                                                                                                             |
+| =modules_root=              | string          | =<install prefix>/modules=  | The live module tree of the target: =EASYBUILD_INSTALLPATH_MODULES= with =export_install_vars = "split"=, and =eb-staged-rebuild --modules=. A line's module is installed when =MODULES_ROOT/all/NAME/VERSION.lua=, or the same path without =.lua=, exists.                                                                 |
+| =staged=                    | boolean         | =rebuild.staged=            | Whether the target takes staged rebuilds.                                                                                                                                                                                                                                                                                    |
+| =ledger_config=             | string          | =rebuild.ledger_config=     | The ledger configuration of the target's staged rebuilds. The file names one target, so =check= refuses two targets that take staged rebuilds through the same file.                                                                                                                                                         |
+| =default=                   | boolean         | =false=                     | Marks the default target of the site; =explain= prints it, and nothing else reads it.                                                                                                                                                                                                                                        |
+| =phases=                    | table           | =phase_defaults=            | The launch arguments of the target, per role; a role it leaves out takes the one in =[phase_defaults]=.                                                                                                                                                                                                                      |
+| =route=                     | table           | none                        | A command that wraps the CPU-role commands of the target.                                                                                                                                                                                                                                                                    |
+| =select=                    | table           | none                        | Which lines of a list the target builds; without it, all of them.                                                                                                                                                                                                                                                            |
+| =hardware=                  | table           | none                        | The CPU of the target's build nodes.                                                                                                                                                                                                                                                                                         |
+| =cpu_hardware=              | table           | none                        | The CPU of the nodes that build the CPU-role units. When it is set, the source prefetch and build commands export a CPU class as =EB_PIPELINE_HW_VENDOR_ID=, =EB_PIPELINE_HW_CPU_FAMILY= and =EB_PIPELINE_HW_MODEL=: this one for a CPU-role unit, =hardware= for the others.                                                |
+| =fetch_profile=             | table           | none                        | A table with any keys, passed to the source prefetch commands as =EB_PIPELINE_FETCH_PROFILE=, in JavaScript Object Notation (JSON) with sorted keys.                                                                                                                                                                         |
+| =package_env=               | table of tables | ={}=                        | Variables per package name, =[targets.package_env.NAME]=, for the lines of that package; per key, they win over =[modules.package_env.NAME]=.                                                                                                                                                                                |
+| =build_types=               | table of tables | ={}=                        | Values per build type, =[targets.build_types.NAME]=.                                                                                                                                                                                                                                                                         |
+
+With =[modules.eessi]= on and =site_install = true=, EESSI-extend replaces =EASYBUILD_INSTALLPATH= when it loads, with =$EESSI_SITE_SOFTWARE_PREFIX/versions/RELEASE/software/linux/CPU_TARGET=, followed by =/ACCEL_TARGET= for an NVIDIA target when =EESSI_ACCELERATOR_INSTALL= is set.
+=explain= names that path as the target's =install_note=.
+A target that then takes staged rebuilds, with =filesystems.export_install_vars = "single"=, sets =software_root= and =modules_root= to the =software= and =modules= directories under it, and =check= refuses the file otherwise.
+
+*** =[targets.phases]=
+
+| Key     | Type   | Default | Meaning                                         |
+|---------+--------+---------+-------------------------------------------------|
+| =plan=  | string | none    | =plan= of =[phase_defaults]=, for this target.  |
+| =build= | string | none    | =build= of =[phase_defaults]=, for this target. |
+| =short= | string | none    | =short= of =[phase_defaults]=, for this target. |
+| =cpu=   | string | none    | =cpu= of =[phase_defaults]=, for this target.   |
+| =cache= | string | none    | =cache= of =[phase_defaults]=, for this target. |
+
+*** =[targets.route]=
+
+A route wraps the commands of the CPU-role units, the CPU-only prerequisites that =stack shard= lifts out, in a command of the site's: the command, its arguments, =--= when there are arguments, then the launch line and the command it wraps.
+
+| Key                  | Type            | Default     | Meaning                                                                                                                                                                                                                    |
+|----------------------+-----------------+-------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =kind=               | string          | none        | =none= or =command=. Every other key needs =command=.                                                                                                                                                                      |
+| =command=            | string          | none        | The wrapper, before the launch line; required with =kind = "command"=.                                                                                                                                                     |
+| =args=               | array of string | =[]=        | Arguments after =command=, with placeholders; when there are any, =--= follows them.                                                                                                                                       |
+| =env=                | table of string | ={}=        | Variables of the wrapped commands; the values take placeholders.                                                                                                                                                           |
+| =runtime_root=       | string          | none        | The root of the route's runtime: ={runtime_root}=, and =EB_PIPELINE_ROUTE_RUNTIME_ROOT= for the wrapped commands.                                                                                                          |
+| =shares_ro=          | array of string | =[]=        | Paths the route shares read-only: ={shares_ro}=, and =EB_PIPELINE_ROUTE_SHARES_RO=, joined with =:=.                                                                                                                       |
+| =shares_rw=          | array of string | =[]=        | Paths the route shares read-write: ={shares_rw}=, and =EB_PIPELINE_ROUTE_SHARES_RW=, joined with =:=.                                                                                                                      |
+| =receipt_digest_env= | string          | none        | The name of a variable, in letters, digits and =_=, that holds a receipt digest. =run= refuses with exit 78 when it is unset or empty, and passes its value as =EB_PIPELINE_ROUTE_RECEIPT_DIGEST=; =plan= shows =${NAME}=. |
+| =phases=             | array of string | =["build"]= | The phases whose CPU-role commands the route wraps: =build=, =sources= or both.                                                                                                                                            |
+
+A route with only =kind= and =command= puts =command= alone before the launch line.
+
+*** =[targets.select]=
+
+A build list can mark a line for some targets only, with an option of the line that names them.
+
+| Key           | Type    | Default  | Meaning                                                                                                                                                           |
+|---------------+---------+----------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =option=      | string  | required | The long option that carries the selection, with its leading dashes, such as =--only-targets=; a line carries it as =--only-targets=a,b= or =--only-targets a,b=. |
+| =value=       | string  | required | The token of this target in the option's list; not empty, and without =separator=.                                                                                |
+| =separator=   | string  | =,=      | What separates the tokens; not empty.                                                                                                                             |
+| =when_absent= | string  | =all=    | =all= builds a line without the option on this target; =none= leaves it out.                                                                                      |
+| =strip=       | boolean | =false=  | =true= removes the option from the line before =eb= gets it.                                                                                                      |
+
+=plan= and =run= apply the selection to the whole list, or to each shard unit, and drop a unit left without lines.
+With a selection, =run= writes the lines it keeps, in list order and with =strip= applied, to =LOG_DIR/selected-TARGET.list=, and passes that file to =stack shard --build-list=.
+The plan and the result list the lines left out under =deselected=, and no status count includes them.
+
+*** =[targets.hardware]=
+
+| Key          | Type    | Default | Meaning                                                    |
+|--------------+---------+---------+------------------------------------------------------------|
+| =vendor_id=  | string  | none    | The CPU vendor, as =EB_PIPELINE_HW_VENDOR_ID= carries it.  |
+| =cpu_family= | integer | none    | The CPU family, as =EB_PIPELINE_HW_CPU_FAMILY= carries it. |
+| =model=      | integer | none    | The CPU model, as =EB_PIPELINE_HW_MODEL= carries it.       |
+
+*** =[targets.cpu_hardware]=
+
+| Key          | Type    | Default | Meaning                                                |
+|--------------+---------+---------+--------------------------------------------------------|
+| =vendor_id=  | string  | none    | The CPU vendor of the nodes that build CPU-role units. |
+| =cpu_family= | integer | none    | Their CPU family.                                      |
+| =model=      | integer | none    | Their CPU model.                                       |
+
+*** =[targets.build_types.NAME]=
+
+=--build-type NAME= applies this table; a build type without one takes the values of the target.
+
+| Key            | Type    | Default      | Meaning                                       |
+|----------------+---------+--------------+-----------------------------------------------|
+| =eb_optarch=   | string  | target value | =EASYBUILD_OPTARCH= for this build type.      |
+| =max_parallel= | integer | target value | =EASYBUILD_MAX_PARALLEL= for this build type. |
+
+** =[filesystems]=
+
+| Key                          | Type            | Default            | Meaning                                                                                                                                                                                      |
+|------------------------------+-----------------+--------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =scratch=                    | string          | required           | The scratch root; not empty.                                                                                                                                                                 |
+| =tmp=                        | string          | required           | =EASYBUILD_TMPDIR=; not empty. Each =eb= makes a directory of its own in it, so targets can share it.                                                                                        |
+| =build_path=                 | string          | required           | =EASYBUILD_BUILDPATH=; not empty. ={target}= expands to the name of the target.                                                                                                              |
+| =source_paths=               | array of string | =[]=               | The entries of =EASYBUILD_SOURCEPATH=, joined with =:=. EasyBuild looks for a source in each entry and downloads a missing one into the first. ={target}= expands to the name of the target. |
+| =install_root=               | string          | required           | The install prefix of a target that sets no =site_prefix=; not empty.                                                                                                                        |
+| =export_install_vars=        | string          | =single=           | =single= exports =EASYBUILD_INSTALLPATH=; =split= exports =EASYBUILD_INSTALLPATH_SOFTWARE= and =EASYBUILD_INSTALLPATH_MODULES= from the target's =software_root= and =modules_root= instead. |
+| =log_root=                   | string          | required           | The root of the log tree, which holds a directory =LOG_STAMP/TARGET= for each run, and the locks of its rotation; not empty.                                                                 |
+| =shard_dir=                  | string          | =<scratch>/shards= | Where =stack shard= writes, in a directory per run id.                                                                                                                                       |
+| =read_only_installdir=       | boolean         | =false=            | =true= exports =EASYBUILD_READ_ONLY_INSTALLDIR=.                                                                                                                                             |
+| =read_only_installdir_value= | string          | =1=                | The value of =EASYBUILD_READ_ONLY_INSTALLDIR=.                                                                                                                                               |
+| =configs_repo=               | string          | none               | =EASYBUILD_CONFIGS_REPOPATH=.                                                                                                                                                                |
+
+** =[admission]=
+
+Before each build unit, =eb-stack stack admit= checks that the unit fits in the free inodes of the scratch quota, and reserves them for the job.
+
+| Key                 | Type    | Default        | Meaning                                                                                                                                                                                                                                                                      |
+|---------------------+---------+----------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =enabled=           | boolean | =true=         | =false= turns the phase off.                                                                                                                                                                                                                                                 |
+| =required=          | boolean | =false=        | =true= refuses the run with exit 78 when =quota_cmd= or =reservations= is missing; with =false=, the phase is then not configured.                                                                                                                                           |
+| =quota_cmd=         | string  | none           | A shell command that prints the quota as JSON: =stack admit --quota-cmd=.                                                                                                                                                                                                    |
+| =live_jobs_cmd=     | string  | none           | A shell command that prints the ids of the running jobs of the build account, such as =squeue -h -t R -u USER -o %A=: =stack admit --live-jobs-cmd=. Without it, every other job's reservation counts, also that of a job that ended without removing it, and =check= warns. |
+| =lock=              | string  | none           | The lock file that every admission takes: =stack admit --lock=. =run= takes it too, to remove the job's reservation.                                                                                                                                                         |
+| =lock_kind=         | string  | =flock=        | =flock= or =posix=, as the other holders of =lock= take it: =stack admit --lock-kind=.                                                                                                                                                                                       |
+| =reservations=      | string  | none           | The directory of reservations: =stack admit --reservations=.                                                                                                                                                                                                                 |
+| =margin=            | integer | tool default   | The inodes to keep free: =stack admit --margin=, and =stack shard --inode-margin= with =quota_total=.                                                                                                                                                                        |
+| =unknown_reserve=   | integer | =0=            | The inodes to count for each live job without a reservation: =stack admit --unknown-reserve=.                                                                                                                                                                                |
+| =default_footprint= | integer | none           | The inodes of a unit for which the shard plan gives none; required when the table is enabled.                                                                                                                                                                                |
+| =job_id_env=        | string  | =SLURM_JOB_ID= | The variable that holds the job id at run time, in letters, digits and =_=. =run= refuses with exit 78 before any build when it is unset or not a positive integer without a leading zero; =plan= shows =${NAME}=.                                                           |
+| =quota_total=       | integer | none           | The inode quota to plan with: =stack shard --inode-quota=.                                                                                                                                                                                                                   |
+| =footprints=        | string  | none           | A file of inode footprints: =stack shard --inode-footprints=.                                                                                                                                                                                                                |
+| =line_overhead=     | integer | tool default   | The inodes of a list line beyond its build tree: =stack shard --inode-line-overhead=.                                                                                                                                                                                        |
+| =attempts=          | integer | =5=            | How many times =stack admit= is asked before the run is refused; at least 1.                                                                                                                                                                                                 |
+| =wait_seconds=      | integer | =60=           | The wait before the second attempt, in seconds; it doubles before each later one.                                                                                                                                                                                            |
+| =max_wait_seconds=  | integer | =600=          | The longest wait between two attempts, in seconds.                                                                                                                                                                                                                           |
+
+A unit's footprint is the =inode_footprint= of the shard plan, else =default_footprint=.
+When an admitted unit's builds end, or the run ends first, =run= removes =RESERVATIONS/JOB.json= while it holds =lock=, taken as =lock_kind=.
+A record that another writer has replaced since, such as a =forecast= or =waiting= one, stays, with a =WARN= line.
+
+** =[shards]=
+
+=eb-stack stack shard= splits the list into units that build one after the other: the CPU-only prerequisites, the prelude, which holds what two or more shards need, then each shard.
+
+| Key                               | Type            | Default | Meaning                                                                                                                                                                                         |
+|-----------------------------------+-----------------+---------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =enabled=                         | boolean         | =true=  | =false= turns the phase off.                                                                                                                                                                    |
+| =count=                           | integer         | =1=     | The most shards to plan: =stack shard --shards=. Below 2, the phase is off and the list builds as one unit.                                                                                     |
+| =planner_exit_unsharded=          | integer         | =3=     | The exit status of =stack shard= that means it built the plan unsharded; the list then builds as one unit.                                                                                      |
+| =lift_cpu_prerequisites=          | boolean         | =false= | =true= passes =--lift-cpu-prerequisites=, which makes the CPU-only prerequisites a unit of their own.                                                                                           |
+| =easyconfigs=                     | array of string | =[]=    | The easyconfig trees to resolve the list in: =stack shard --easyconfigs=, once each; at least one when =count= is 2 or more.                                                                    |
+| =weights=                         | string          | none    | A table of build times: =stack shard --weights=.                                                                                                                                                |
+| =installed_modules_dirs=          | array of string | =[]=    | Module trees whose modules count as installed: =stack shard --installed-modules-dir=, once each. =run= leaves out a tree that does not exist yet, with a =WARN= line.                           |
+| =installed_modules_dirs_from_env= | array of string | =[]=    | Names of variables whose values, separated by =:=, =run= adds to =installed_modules_dirs=. =run= refuses with exit 78 when one is unset, an empty one adds nothing, and =plan= shows =${NAME}=. |
+
+=stack shard= runs inside the module wrapper, so what the modules of =[modules] init= set reaches it, such as the =EASYBUILD_FILTER_DEPS= of EESSI-extend.
+It writes its plan to =SHARD_DIR/RUN_ID/plan.json=, and =plan --shard-plan DIR= reads such a plan.
+A shard list holds lines of the input list only, so a line whose dependencies are not installed needs =--robot= to build them.
+
+** =[sources]=
+
+| Key          | Type            | Default | Meaning                                                                                                 |
+|--------------+-----------------+---------+---------------------------------------------------------------------------------------------------------|
+| =enabled=    | boolean         | =true=  | =false= turns the phase off.                                                                            |
+| =prefetch=   | boolean         | =true=  | Run =eb EASYCONFIG --fetch --robot= for every line before the first build; =false= turns the phase off. |
+| =extra_args= | array of string | =[]=    | Arguments of each prefetch command, after the line's own options.                                       |
+
+A prefetch command gets the options of its line, except those that start with =--rebuild=.
+A line whose prefetch fails is =failed= and is not built.
+=--fetch= takes no account of installed modules, so =--robot= fetches the sources of every dependency, those EESSI provides included.
+With =--disable-robot= in =extra_args=, a line fetches its own sources only: the prefetch command has no =--robot=, the line's =--robot= is dropped, and the paths of the line's =--robot=PATH= go first in =--robot-paths=, so that its easyconfig is still found.
+
+** =[modules]=
+
+| Key           | Type            | Default  | Meaning                                                                                                                                                                           |
+|---------------+-----------------+----------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =init=        | array of string | required | The modules to load, in order, after =module purge=, before the shard, prefetch, build, =eb-keep-logs failed= and cache commands; may be empty.                                   |
+| =unuse_path=  | boolean         | =false=  | =true= empties =MODULEPATH= after =shell_init= and before =init= loads, so that the first module of =init= needs an absolute path; =check= warns when it has none.                |
+| =shell=       | string          | =bash=   | The shell that runs the module wrapper.                                                                                                                                           |
+| =shell_init=  | string          | none     | A file to source before =module= is called, for a shell that does not define it. It is sourced without =set -e= and =set -u=; a =module= call that fails still stops the command. |
+| =eessi=       | table           | none     | The site layer of EESSI.                                                                                                                                                          |
+| =package_env= | table of tables | ={}=     | Variables per package name, =[modules.package_env.NAME]=, for the prefetch and build commands of the lines of that package.                                                       |
+
+The module wrapper starts when =init= is not empty, =unuse_path= is =true= or =shell_init= is set; [[file:environment.org][Environment variables]] describes it.
+
+*** =[modules.eessi]=
+
+| Key                    | Type    | Default                             | Meaning                                                |
+|------------------------+---------+-------------------------------------+--------------------------------------------------------|
+| =enabled=              | boolean | =true=                              | =false= ignores the table.                             |
+| =site_install=         | boolean | =false=                             | =true= exports =EESSI_SITE_INSTALL=1=.                 |
+| =bootstrap_modulepath= | string  | none                                | Exported as =EESSI_SITE_BOOTSTRAP_MODULEPATH=.         |
+| =cpu_override_var=     | string  | =EESSI_SOFTWARE_SUBDIR_OVERRIDE=    | The variable that carries the target's =cpu_target=.   |
+| =accel_override_var=   | string  | =EESSI_ACCELERATOR_TARGET_OVERRIDE= | The variable that carries the target's =accel_target=. |
+
+With the table on, every command also gets =EESSI_SITE_SOFTWARE_PREFIX=, the target's install prefix, and =check= checks the form of each target's =cpu_target= and =accel_target=.
+
+** =[caches]=
+
+| Key           | Type           | Default | Meaning                                                                                                                                                                 |
+|---------------+----------------+---------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =enabled=     | boolean        | =true=  | =false= turns the phase off.                                                                                                                                            |
+| =command=     | string         | none    | The command that writes the module caches, run once after a clean build of a target that has an entry in =[[caches.targets]]=; without it, the phase is not configured. |
+| =bindings=    | string         | none    | Passed to =command= as =EB_PIPELINE_CACHE_BINDINGS=.                                                                                                                    |
+| =init_module= | string         | none    | Passed as =EB_PIPELINE_CACHE_INIT_MODULE= for an entry that sets none.                                                                                                  |
+| =targets=     | array of table | =[]=    | One =[[caches.targets]]= table per target that has caches.                                                                                                              |
+
+A build is clean when no line failed, was refused or is pending; otherwise the =caches= phase is =skipped=.
+
+*** =[[caches.targets]]=
+
+| Key           | Type   | Default                | Meaning                                                                      |
+|---------------+--------+------------------------+------------------------------------------------------------------------------|
+| =target=      | string | required               | The name of a target; each target has one entry at most.                     |
+| =config=      | string | required               | The cache configuration file, passed as =EB_PIPELINE_CACHE_CONFIG=.          |
+| =alloc=       | string | =phase_defaults.cache= | The launch arguments of the cache command for this target.                   |
+| =init_module= | string | none                   | Passed as =EB_PIPELINE_CACHE_INIT_MODULE=, in place of =caches.init_module=. |
+
+** =[logs]=
+
+| Key           | Type    | Default | Meaning                                                             |
+|---------------+---------+---------+---------------------------------------------------------------------|
+| =enabled=     | boolean | =true=  | =false= turns the phase off.                                        |
+| =keep_failed= | boolean | =true=  | Keep the EasyBuild log of a failed line with =eb-keep-logs failed=. |
+| =rotate=      | table   | none    | Rotate the log tree with =eb-keep-logs rotate= at the end of a run. |
+
+With =keep_failed=, each =eb= gets =--tmp-logdir=LOG_DIR/easybuild-logs/STEM=, and after a line fails =run= starts =eb-keep-logs failed STATUS STEM LOG_DIR LOG_DIR/easybuild-logs/STEM=, with =EASYBUILD_OUTPUT_STYLE=basic= whatever =[scheduler.env]= sets, so that =eb --last-log= prints the log path on one line.
+
+*** =[logs.rotate]=
+
+| Key                   | Type    | Default  | Meaning                                                                   |
+|-----------------------+---------+----------+---------------------------------------------------------------------------|
+| =compress_after_days= | integer | required | =eb-keep-logs rotate --compress-after=.                                   |
+| =delete_after_days=   | integer | none     | =eb-keep-logs rotate --delete-after=; greater than =compress_after_days=. |
+
+The =logs= phase starts =eb-keep-logs rotate LOG_ROOT --compress-after DAYS --delete-after DAYS=, with =TZ=UTC=, since the log directories are named in Coordinated Universal Time (UTC).
+A run rotates only when no other run under the log root is live: each run holds =LOG_ROOT/.eb-pipeline-rotate.lock= shared from its start, and rotates when it can take it alone; otherwise the =logs= phase is =skipped=.
+Where =eb-keep-logs --help= lists =--lock-timeout=, the rotate also gets =--lock-timeout 0=, and exits 75, recorded as =skipped=, while another rotate holds =LOG_ROOT/.eb-keep-logs-rotate.lock=.
+[[file:log-tree.org][The log tree and its locks]] lists the files of a run and the locks, and gives their order.
+
+** =[rebuild]=
+
+A line goes through =eb-staged-rebuild run= instead of =eb= when all three hold:
+
+1. the target takes staged rebuilds: its =staged=, else =rebuild.staged=, is =true=;
+2. the line carries =--rebuild=, =-f= or =--force= as a whole option, which =--force-download= and =--rebuild-from-scratch= are not;
+3. the line's module is installed under the target's =modules_root=.
+
+Otherwise the line builds with =eb=; on a target that takes staged rebuilds, a line that has the option but no installed module gets a note in the plan and a =WARN= line in the run.
+
+| Key             | Type    | Default      | Meaning                                                                                                                                                                                                                                                          |
+|-----------------+---------+--------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =enabled=       | boolean | =true=       | =false= turns staged rebuilds off.                                                                                                                                                                                                                               |
+| =staged=        | boolean | =true=       | Whether a target that sets no =staged= takes staged rebuilds.                                                                                                                                                                                                    |
+| =state_root=    | string  | tool default | =eb-staged-rebuild run --state-root=. ={target}= expands to the name of the target. Unset, eb-staged-rebuild takes =EB_STAGED_REBUILD_STATE_ROOT=, which a module can set where =eb-pipeline= cannot see it, else =.eb-staged-rebuild= beside the software tree. |
+| =lock_timeout=  | integer | =600=        | =eb-staged-rebuild run --lock-timeout=: how many seconds a staged line waits for the lock of the state root, which another eb-staged-rebuild holds for the whole of its build and publish; =0= does not wait. A line whose wait runs out is =refused=.           |
+| =backend=       | string  | =auto=       | =eb-staged-rebuild run --backend=: =auto=, =bwrap=, =userns= or =installpath=.                                                                                                                                                                                   |
+| =grace_hours=   | integer | tool default | =eb-staged-rebuild run --grace-hours=.                                                                                                                                                                                                                           |
+| =prepare=       | string  | none         | A program, passed as =eb-staged-rebuild run --prepare=.                                                                                                                                                                                                          |
+| =ledger_config= | string  | none         | A file in JSON, passed as =eb-staged-rebuild run --ledger-config=, for a target that sets no =ledger_config=.                                                                                                                                                    |
+
+A staged line starts =eb-staged-rebuild run --software SOFTWARE_ROOT --modules MODULES_ROOT --backend BACKEND --run-id RUN_ID-STEM --lock-timeout SECONDS=, with the other keys of the table that are set, then =--=, the easyconfig and the options of the line.
+=STEM= is the easyconfig file name without =.eb=, with =.2=, =.3= and so on added when the list repeats a line, since eb-staged-rebuild refuses a run id it has seen.
+A line whose wait for a lock runs out is =refused=; its note and its =ERROR= line name the lock that another eb-staged-rebuild holds and, when it is the state root's, say that =lock_timeout= ran out.
+
+** =[licences]=
+
+The licence gate checks the site file only: every package that needs a licence has a group, a version threshold or an exemption.
+It does not check file permissions or group membership on the host.
+
+| Key             | Type            | Default | Meaning                                                                                                                                                            |
+|-----------------+-----------------+---------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =enabled=       | boolean         | =true=  | =false= turns the gate off.                                                                                                                                        |
+| =enforce=       | boolean         | =true=  | Run the gate: every name of =[licences.required]= needs a group, a threshold or an exemption, and a table with none of the three is refused.                       |
+| =groups=        | table of string | ={}=    | Package name to Unix group, exported as =EB_PIPELINE_LICENCE_GROUP= for the lines of that package.                                                                 |
+| =below_version= | table of string | ={}=    | Package name to a version in dotted numbers; the package's group applies below that version only, and to a version that does not parse. The package needs a group. |
+| =required=      | table           | none    | A second list of the packages that need a licence, kept apart from =groups=.                                                                                       |
+| =exempt=        | array of string | =[]=    | Names of =[licences.required]= that have no group on purpose.                                                                                                      |
+| =env=           | table of tables | ={}=    | Variables per package name, =[licences.env.NAME]=, for the prefetch and build commands of the lines of that package.                                               |
+
+The gate is on when =enabled= and =enforce= are both =true=, and only then do the lines get =EB_PIPELINE_LICENCE_GROUP= and the variables of =[licences.env]=.
+When the gate's problems are the only ones of the file, =run= exits 78; =check= and =plan= exit 2.
+
+*** =[licences.required]=
+
+| Key        | Type            | Default | Meaning                                                                |
+|------------+-----------------+---------+------------------------------------------------------------------------|
+| =software= | array of string | =[]=    | The package names that each need a group, a threshold or an exemption. |
+
+** See also
+
+- [[file:cli.org][The eb-pipeline command]] and [[file:environment.org][Environment variables]]
+- [[file:exit-status.org][Exit status]]
+- [[file:log-tree.org][The log tree and its locks]]
+- [[file:templates.org][The site file templates]], two complete site files to start from
+- The fields of the site file in [[file:../api/eb_pipeline/schema/index.html][eb_pipeline::schema]], whose doc comments are the text =eb-pipeline schema= prints.

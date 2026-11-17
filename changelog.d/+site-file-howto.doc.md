@@ -1,0 +1,1 @@
+A how-to guide writes a site file for a cluster from the small-cluster template, checks it with `check`, `--lists-dir` and `--probe-tools`, reads it back with `explain` and a dry run, and lists the messages of the common mistakes.

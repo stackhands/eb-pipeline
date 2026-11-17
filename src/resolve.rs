@@ -6,17 +6,26 @@ use crate::util::{package_of, split_args};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
+/// A phase role: which launch arguments a command takes from
+/// `[phase_defaults]` or the target's `phases`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
+    /// The planning command, `stack shard`.
     Plan,
+    /// The builds of the whole list, the prelude and each shard.
     Build,
+    /// Admission, source prefetch and log handling.
     Short,
+    /// The CPU-only prerequisite builds; the target's `route` wraps these.
     Cpu,
+    /// The module cache command of the `caches` phase.
     Cache,
 }
 
 impl Role {
+    /// Every role, in the order `[phase_defaults]` documents them.
     pub const ALL: [Role; 5] = [Role::Plan, Role::Build, Role::Short, Role::Cpu, Role::Cache];
+    /// The role's key in `[phase_defaults]` and `phases`.
     pub fn name(self) -> &'static str {
         match self {
             Role::Plan => "plan",
@@ -47,19 +56,25 @@ pub fn role_args(site: &Site, target: &Target, role: Role) -> Option<String> {
 /// Everything a phase needs to know about where it runs.
 #[derive(Clone)]
 pub struct Scope<'a> {
+    /// The site file.
     pub site: &'a Site,
+    /// The target the phase runs for.
     pub target: &'a Target,
+    /// The build type, which picks the target's `build_types` override.
     pub build_type: Option<&'a str>,
+    /// The run id, `--run-id`.
     pub run_id: String,
     /// Timestamp directory name under `filesystems.log_root`.
     pub log_stamp: String,
 }
 
 impl<'a> Scope<'a> {
+    /// The build type, `default` without one: the `{build}` of job names.
     pub fn build_name(&self) -> &str {
         self.build_type.unwrap_or("default")
     }
 
+    /// `<log_root>/<log stamp>/<target>`, where this run writes its logs.
     pub fn log_dir(&self) -> String {
         format!(
             "{}/{}/{}",
@@ -69,6 +84,8 @@ impl<'a> Scope<'a> {
         )
     }
 
+    /// The target's `software_root`, else `software` under
+    /// [`Scope::install_prefix`].
     pub fn software_root(&self) -> String {
         self.target
             .software_root
@@ -76,6 +93,8 @@ impl<'a> Scope<'a> {
             .unwrap_or_else(|| format!("{}/software", self.install_prefix()))
     }
 
+    /// The target's `modules_root`, else `modules` under
+    /// [`Scope::install_prefix`].
     pub fn modules_root(&self) -> String {
         self.target
             .modules_root
@@ -93,6 +112,7 @@ impl<'a> Scope<'a> {
         })
     }
 
+    /// The target's `site_prefix`, else `filesystems.install_root`.
     pub fn install_prefix(&self) -> String {
         self.target
             .site_prefix
@@ -152,18 +172,22 @@ impl<'a> Scope<'a> {
         self.build_type.and_then(|b| self.target.build_types.get(b))
     }
 
+    /// The build type's `eb_optarch`, else the target's.
     pub fn optarch(&self) -> Option<String> {
         self.type_override()
             .and_then(|o| o.eb_optarch.clone())
             .or_else(|| self.target.eb_optarch.clone())
     }
 
+    /// The build type's `max_parallel`, else the target's.
     pub fn max_parallel(&self) -> Option<u32> {
         self.type_override()
             .and_then(|o| o.max_parallel)
             .or(self.target.max_parallel)
     }
 
+    /// The job name of `phase`: `scheduler.job_name_template` with
+    /// `{project}`, `{build}`, `{phase}` and `{target}` filled in.
     pub fn job_name(&self, phase: &str) -> String {
         self.site
             .scheduler

@@ -1,0 +1,70 @@
+#+TITLE: What the targets of a site file share
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* What the targets of a site file share
+
+Which paths do the targets of one site file share, what goes wrong when two of them build into one path at once, and when can they build at the same time?
+
+** The problem
+
+A site file names its paths once, in =[filesystems]= and =[rebuild]=, and every target builds with them unless a path says otherwise.
+When two targets build at once with the same paths:
+
+- EasyBuild builds an easyconfig in =BUILD_PATH/NAME/VERSION/TOOLCHAIN-TOOLCHAIN_VERSION=, followed by the version suffix of the easyconfig, with no target in the path, and removes that directory when the build starts and again after it installs.
+  Two targets that build one easyconfig at once remove each other's build directory, and the build that loses it fails.
+- EasyBuild downloads a missing source into the first entry of =source_paths=, and writes the file in place.
+  A target that looks for a source that another target is still downloading finds the part that is written, and fails its checksum.
+- eb-staged-rebuild holds the lock of its state root for the whole of a staged build and publish, so the staged lines of targets that share a state root take turns.
+- =stack shard= writes its plan into =SHARD_DIR/RUN_ID=, which has no target in it, and eb-staged-rebuild refuses a run id it already holds, so two targets that run with one run id write their shard plans into one directory, and pass eb-staged-rebuild the same =RUN_ID-STEM=.
+
+** How eb-pipeline handles it
+
+*** ={target}= where a path is not safe to share
+
+={target}= in =[filesystems]= =build_path=, in the entries of =source_paths= and in =[rebuild]= =state_root= expands to the name of the target, and =plan= and =explain= show the expanded paths:
+
+- =build_path = "/scratch/alice/build/{target}"= gives each target an =EASYBUILD_BUILDPATH= of its own.
+- =source_paths = ["/scratch/alice/sources/{target}", "/opt/site/sources"]= gives each target a download directory of its own, and still finds the sources under =/opt/site/sources=.
+- =state_root = "/opt/site/{target}/.eb-staged-rebuild"= gives each target a state root, and so a lock, of its own.
+  A =state_root= left unset does the same: eb-staged-rebuild then keeps its state in =.eb-staged-rebuild= beside the =software= tree of each target.
+
+eb-staged-rebuild locks a live tree through its state root, so one tree takes one state root: =check= refuses a ={target}= state root when two targets that take staged rebuilds share a software root.
+
+*** What is safe to share
+
+=EASYBUILD_TMPDIR= is safe to share: each =eb= makes a directory of its own, =eb-*=, under it.
+So is =log_root=: each run writes under =LOG_STAMP/TARGET=, and with =[logs.rotate]= a run rotates only when no other run under the log root is live, as [[file:log-rotation.org][Why the rotation takes two locks]] explains.
+
+*** A run id per target
+
+Each target needs a run id of its own, for its shard plan and its staged rebuilds.
+The default run id, the log stamp, is the same for two runs that start in the same second, so a caller that builds several targets gives each run its own, such as the id of the continuous integration (CI) run followed by the target, as [[file:../howto/build-from-ci.org][Build a list on every target from continuous integration]] does.
+
+*** One target at a time, unless the paths are apart
+
+The example workflow of =examples/ci/= builds one target at a time, with =max-parallel: 1=, and a target that fails leaves the others running.
+Two targets can build at once only when no two of them share a build directory, a download directory or, with staged rebuilds, a state root.
+A =build_path= without ={target}= is one path for every target, so it needs storage that the build nodes of no two targets share.
+
+The =concurrency= group of the build job in that workflow, one per target, keeps two dispatches of the workflow off one target, not off one path: one dispatch can build a target while another builds a different one.
+Targets that share a path therefore need one group for the whole build job, with no target in its name.
+
+** What was considered and turned down
+
+- /={target}= in every path of =[filesystems]=./
+  The log directory of a run already ends with its target, the install tree of a target is its =site_prefix=, and EasyBuild's temporary directory is safe to share, so =check= refuses ={target}= in the other paths of =[filesystems]=.
+- /A staged line that waits for the lock with no deadline./
+  A second staged build waits up to =[rebuild]= =lock_timeout= for the lock, 600 seconds unless set, and is =refused= when the first still holds it, so the run ends with 78 instead of waiting with no end.
+
+** Limits
+
+- eb-staged-rebuild has not measured its lock between two build nodes.
+- GitHub keeps one pending job per concurrency group, so a third dispatch replaces the one that waits, which is cancelled.
+- The group belongs to the repository and has no workflow name in it, so another workflow of the repository that uses the same group waits as well.
+
+** Further reading
+
+- [[file:../howto/build-from-ci.org][Build a list on every target from continuous integration]], for the workflow and the caller script.
+- [[file:../reference/site-file.org][The site file]], for ={target}= and the keys it expands in.
+- [[file:../howto/staged-rebuilds.org][Rebuild installed software through eb-staged-rebuild]], for the state root of each target.

@@ -1,0 +1,25 @@
+// Who takes the two locks in the log root, and in which order.
+digraph locks {
+    graph [bgcolor="white", rankdir=TB, nodesep=0.6, ranksep=0.6, fontname="Helvetica"];
+    node [shape=box, style="rounded,filled", fillcolor="#f4f4f4", color="#555555", fontname="Helvetica", fontsize=11];
+    edge [color="#555555", fontname="Helvetica", fontsize=10];
+
+    live [label="A run, while it writes logs"];
+    ends [label="A run, at its end"];
+    cron [label="The cron line:\nTZ=UTC flock -w 3600 -E 75 ... eb-keep-logs rotate ..."];
+    runrotate [label="eb-keep-logs rotate --lock-timeout 0"];
+    cronrotate [label="eb-keep-logs rotate"];
+    pipeline [shape=note, fillcolor="#ffffff", label="LOG_ROOT/.eb-pipeline-rotate.lock\neb-pipeline's lock"];
+    keeplogs [shape=note, fillcolor="#ffffff", label="LOG_ROOT/.eb-keep-logs-rotate.lock\neb-keep-logs' lock"];
+
+    {rank=same; live; ends; cron;}
+    {rank=same; runrotate; cronrotate;}
+
+    live -> pipeline [label=" shared"];
+    ends -> pipeline [label=" 1. alone, without waiting;\l otherwise the run leaves the rotation\l to another\l"];
+    ends -> runrotate [label=" then starts"];
+    cron -> pipeline [label=" 1. alone, waiting up to an hour;\l otherwise exit 75\l"];
+    cron -> cronrotate [label=" then starts"];
+    runrotate -> keeplogs [label=" 2. alone, without waiting;\l otherwise exit 75\l"];
+    cronrotate -> keeplogs [label=" 2. alone, waiting up to\l --lock-timeout seconds\l"];
+}

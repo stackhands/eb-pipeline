@@ -1,0 +1,33 @@
+// The phases of one run, and what each outcome does to the rest of it.
+digraph phases {
+    graph [bgcolor="white", rankdir=TB, nodesep=0.5, ranksep=0.4, fontname="Helvetica"];
+    node [shape=box, style="rounded,filled", fillcolor="#f4f4f4", color="#555555", fontname="Helvetica", fontsize=11];
+    edge [color="#555555", fontname="Helvetica", fontsize=10];
+
+    inputs [label="Read the site file and the build list,\ncheck the licence gate and the versions of the tools"];
+    usage [label="Exit 2, or 78 when only the licence gate fails;\nno result file", fillcolor="#ffffff"];
+    preflight [label="preflight: read the variables the site file names"];
+    refused [label="Write the result file, exit 78", fillcolor="#ffffff"];
+    shard [label="shard: eb-stack stack shard splits the list into units,\nor the list builds as one unit"];
+    sources [label="sources: fetch the sources of each line;\na line whose fetch fails is not built"];
+    admit [label="admission: eb-stack stack admit, for the next unit"];
+    build [label="build: eb, or eb-staged-rebuild run, for each line of the unit;\na failed line keeps its logs, and the next line starts"];
+    more [shape=diamond, label="Another unit?", fillcolor="#ffffff"];
+    skip [label="The lines of this unit and of the later ones are skipped", fillcolor="#ffffff"];
+    caches [label="caches: only after a clean build"];
+    logs [label="logs: rotate the log tree, when no other run is live"];
+    result [label="Write the result file, and exit:\n1 if anything failed, else 78 if anything was refused,\nelse 75 if anything is pending, else 0"];
+
+    inputs -> usage [label=" invalid"];
+    inputs -> preflight [label=" valid"];
+    preflight -> refused [label=" one is unset"];
+    preflight -> shard [label=" all are set"];
+    shard -> sources -> admit;
+    admit -> build [label=" admitted"];
+    admit -> skip [label=" refused"];
+    build -> more;
+    more -> admit [label=" yes"];
+    more -> caches [label=" no"];
+    skip -> caches;
+    caches -> logs -> result;
+}

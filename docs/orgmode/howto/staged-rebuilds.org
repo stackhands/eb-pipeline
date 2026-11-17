@@ -1,0 +1,132 @@
+#+TITLE: Rebuild installed software through eb-staged-rebuild
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Rebuild installed software through eb-staged-rebuild
+
+Have =eb-pipeline run= rebuild a package that is already installed through eb-staged-rebuild, which builds it in a staged tree and swaps it in, so that jobs that run the installed copy keep their paths.
+
+** Before you start
+
+- eb-staged-rebuild on the =PATH= of the build account, or named in =[site.tools.eb_staged_rebuild]= =bin=.
+- A site file whose targets have an install prefix each, such as the one in [[file:build-from-ci.org][Build a list on every target from continuous integration]].
+- The package installed on the target already, with its module file under the target's =modules_root=.
+
+The output on this page comes from =docs/examples/staged.sh=.
+It checks the site file of [[file:build-from-ci.org][Build a list on every target from continuous integration]] with the =[rebuild]= table below, then runs a copy of it with the =local= scheduler, its paths under =$WORK= and a stand-in for eb-staged-rebuild that prints its arguments.
+
+** Steps
+
+1. Add a =[rebuild]= table to the site file:
+
+   #+begin_src toml
+   [rebuild]
+   state_root = "/opt/site/{target}/.eb-staged-rebuild"
+   lock_timeout = 600
+   #+end_src
+
+   Every target then takes staged rebuilds; =staged = false= in the table of a target leaves it out.
+   eb-staged-rebuild keeps its state, and the lock it holds for the whole of a staged build and publish, in the state root; ={target}= gives each target one of its own.
+   Without =state_root=, eb-staged-rebuild takes the same directory, =.eb-staged-rebuild= beside the =software= tree of each target, unless a module sets =EB_STAGED_REBUILD_STATE_ROOT=, so set it to tell eb-pipeline which lock a refused line waited for.
+   =lock_timeout= is how many seconds a staged line waits for that lock.
+2. If eb-staged-rebuild records what it publishes in a ledger, give each target a ledger configuration of its own, with =ledger_config= in its =[[targets]]= table: eb-staged-rebuild copies the one target that the file names into every record.
+3. Check the site file:
+
+   #+begin_src bash
+   eb-pipeline check --site site.toml
+   #+end_src
+
+   #+begin_example
+   INFO [check] example: site file is valid
+   #+end_example
+
+4. Mark the line in the build list of the target with =--rebuild=, =-f= or =--force=; =--force-download= and =--rebuild-from-scratch= do not count:
+
+   #+begin_example
+   Example-1.0-GCCcore-15.2.0.eb --rebuild
+   #+end_example
+
+5. Check that the module of the line is installed: =MODULES_ROOT/all/NAME/VERSION.lua=, or the same path without =.lua=.
+   In the copy that the script runs, the =site_prefix= of =zen4= is =$WORK/site/zen4=:
+
+   #+begin_src bash
+   ls $WORK/site/zen4/modules/all/Example
+   #+end_src
+
+   #+begin_example
+   1.0-GCCcore-15.2.0.lua
+   #+end_example
+
+6. Check the command that builds the line:
+
+   #+begin_src bash
+   eb-pipeline run --site site.toml --list zen4.list --target zen4 --build-type production --run-id 1234 --dry-run | grep "^\[build\]"
+   #+end_src
+
+   #+begin_example
+   INFO [run] zen4: dry run: nothing executed
+   [build] eb-staged-rebuild run --software $WORK/site/zen4/software --modules $WORK/site/zen4/modules --backend auto --run-id 1234-Example-1.0-GCCcore-15.2.0 --state-root $WORK/site/zen4/.eb-staged-rebuild --lock-timeout 600 -- Example-1.0-GCCcore-15.2.0.eb --rebuild
+   #+end_example
+
+   The line passes =--run-id RUN_ID-STEM=, where =STEM= is its easyconfig without =.eb=.
+   eb-staged-rebuild refuses a run id it already holds, so give each run a run id of its own, or leave the default, the log stamp.
+7. Run:
+
+   #+begin_src bash
+   eb-pipeline run --site site.toml --list zen4.list --target zen4 --build-type production --run-id 1234 --log-stamp 20261117_090000 --result result.json; echo "exit $?"
+   #+end_src
+
+   #+begin_example
+   INFO [licences] zen4: not configured
+   INFO [shard] zen4: not configured
+   INFO [sources] zen4: not configured
+   INFO [admission] zen4: not configured
+   INFO [caches] zen4: not configured
+   INFO [logs] zen4: not configured
+   INFO [build] zen4: Example-1.0-GCCcore-15.2.0: start
+   INFO [build] zen4: Example-1.0-GCCcore-15.2.0: ok
+   exit 0
+   #+end_example
+
+** Check that it worked
+
+The line's entry in the result file has the note =ran through eb-staged-rebuild=:
+
+#+begin_src bash
+grep -A3 '"easyconfig": "Example' result.json
+#+end_src
+
+#+begin_example
+      "easyconfig": "Example-1.0-GCCcore-15.2.0.eb",
+      "exit_code": 0,
+      "log": "$WORK/site/logs/20261117_090000/zen4/Example-1.0-GCCcore-15.2.0.stdout.log",
+      "note": "ran through eb-staged-rebuild",
+#+end_example
+
+The run set =--log-stamp=, so its log directory is =20261117_090000=; without it, the directory is named for the time the run started.
+The log of the line holds what eb-staged-rebuild printed, here the stand-in's arguments:
+
+#+begin_src bash
+cat $WORK/site/logs/20261117_090000/zen4/Example-1.0-GCCcore-15.2.0.stdout.log
+#+end_src
+
+#+begin_example
+eb-staged-rebuild run --software $WORK/site/zen4/software --modules $WORK/site/zen4/modules --backend auto --run-id 1234-Example-1.0-GCCcore-15.2.0 --state-root $WORK/site/zen4/.eb-staged-rebuild --lock-timeout 600 -- Example-1.0-GCCcore-15.2.0.eb --rebuild
+#+end_example
+
+** If it fails
+
+| Message                                                                                                                                                                                                                                                                                  | Cause                                                                                                    | What to do                                                                                                                                                                                                                                   |
+|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =ERROR [check] example: targets.zen4: records staged rebuilds through /opt/site/ledger.json as targets.zen2 does, under the one target that file names; set ledger_config in each target=                                                                                                | =ledger_config= in =[rebuild]= gives two targets one ledger configuration.                               | Set =ledger_config= in the table of each target.                                                                                                                                                                                             |
+| =ERROR [check] example: targets.zen4: takes staged rebuilds of the live tree /opt/site/software as targets.zen2 does, and rebuild.state_root has {target}, which gives that tree two state roots and two locks; drop {target} from state_root or give each target its own software_root= | Two targets install into one software tree, and ={target}= would give it two state roots.                | As the message says.                                                                                                                                                                                                                         |
+| =WARN [build] zen2: Example-1.0-GCCcore-15.2.0: no module file $WORK/site/zen2/modules/all/Example/1.0-GCCcore-15.2.0[.lua]; the rebuild runs as plain eb=                                                                                                                               | The module of the line is not installed under the =modules_root= of the target, so =eb= builds the line. | Check the =site_prefix= or =modules_root= of the target, or let the first build install the package.                                                                                                                                         |
+| =ERROR [build] zen4: Example-1.0-GCCcore-15.2.0: refused (exit 2): another eb-staged-rebuild holds the lock at $WORK/site/zen4/.eb-staged-rebuild/.lock, and rebuild.lock_timeout (600 s) ran out=, and the run exits 78                                                                 | Another staged rebuild on the same state root held its lock for longer than =lock_timeout=.              | Rerun once it has ended, or raise =lock_timeout=.                                                                                                                                                                                            |
+| =ERROR [build] zen4: Example-1.0-GCCcore-15.2.0: pending (exit 75)=, and the run exits 75                                                                                                                                                                                                | A record that the ledger of eb-staged-rebuild requires is pending, and the live tree is as it was.       | =eb-staged-rebuild status= and =resume=, in its [[https://stackhands.github.io/eb-staged-rebuild/howto/recover.html][recovery guide]], read and continue the run =1234-Example-1.0-GCCcore-15.2.0=; a rerun of eb-pipeline starts a new one. |
+
+** Related
+
+- [[file:../reference/site-file.org][The site file]], for =[rebuild]= and the keys of =[[targets]]=
+- [[file:../reference/exit-status.org][Exit status]], for how the exit statuses of eb-staged-rebuild map to those of a run
+- [[file:../explanation/shared-paths.org][What the targets of a site file share]], for a state root per target
+- The [[https://stackhands.github.io/eb-staged-rebuild/][eb-staged-rebuild documentation]], for what a staged rebuild does to the live tree

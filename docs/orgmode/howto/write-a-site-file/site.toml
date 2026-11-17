@@ -1,0 +1,45 @@
+# Example University: the zen4 nodes of the cpu partition, with EasyBuild
+# from a module and software under /opt/site.
+schema_version = 1
+kind = "site"
+
+[site]
+name = "example"
+build_account = "alice"
+default_group = "alice"
+stack_generation = "2026.1"
+
+[scheduler]
+kind = "slurm"
+launch = "srun"
+job_name_template = "{project}-{build}-{phase}"
+
+[phase_defaults]
+plan = "-p cpu -N 1 --ntasks-per-node=1 -c 1 -t 15:00"
+short = "-p cpu -N 1 --ntasks-per-node=1 -c 1 -t 15:00"
+build = "-p cpu -N 1 --ntasks-per-node=1 -c 16 -t 1-00:00:00"
+cpu = "-p cpu -N 1 --ntasks-per-node=1 -c 16 -t 1-00:00:00"
+cache = "-p cpu -N 1 --ntasks-per-node=1 -c 1 -t 15:00"
+
+[[targets]]
+name = "zen4"
+build_lists = ["zen4.list"]
+default = true
+
+[filesystems]
+scratch = "/scratch/alice"
+tmp = "/scratch/alice/tmp"
+build_path = "/scratch/alice/build"
+source_paths = ["/opt/site/sources"]
+install_root = "/opt/site"
+log_root = "/opt/site/logs"
+
+[modules]
+init = ["EasyBuild"]
+
+[logs]
+keep_failed = true
+
+[logs.rotate]
+compress_after_days = 30
+delete_after_days = 365

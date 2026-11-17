@@ -1,0 +1,108 @@
+#+TITLE: Install eb-pipeline
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Install eb-pipeline
+
+Install the =eb-pipeline= command for the account that runs the builds, from a release or from source.
+
+These pages describe the code on the main branch.
+Release 0.3.0 is older: it has no =targets= command, no ={target}= in =[filesystems]= paths, no =rebuild.lock_timeout= and no rotation locks, and it prints the same version, =eb-pipeline 0.3.0=.
+Until the next release, install from source to have them.
+
+** Before you start
+
+- For a release, a Linux host on x86_64 or aarch64.
+  Its binary is linked statically against musl, so it needs no other library.
+- For a build from source, Rust 1.90 or newer with Cargo, and a checkout of the repository:
+
+  #+begin_src bash
+  git clone https://github.com/stackhands/eb-pipeline.git
+  cd eb-pipeline
+  #+end_src
+
+- =~/.local/bin= on the =PATH= of the build account, or another directory there in its place below.
+
+** Install a release
+
+1. Download the archive of release 0.3.0 and its checksum, and check the archive:
+
+   #+begin_src bash
+   curl -fsSLO https://github.com/stackhands/eb-pipeline/releases/download/v0.3.0/eb-pipeline-x86_64-unknown-linux-musl.tar.xz
+   curl -fsSLO https://github.com/stackhands/eb-pipeline/releases/download/v0.3.0/eb-pipeline-x86_64-unknown-linux-musl.tar.xz.sha256
+   sha256sum -c eb-pipeline-x86_64-unknown-linux-musl.tar.xz.sha256
+   #+end_src
+
+   #+begin_example
+   eb-pipeline-x86_64-unknown-linux-musl.tar.xz: OK
+   #+end_example
+
+   On aarch64, write =aarch64= for =x86_64= in the three names.
+2. Unpack the archive:
+
+   #+begin_src bash
+   tar -xJf eb-pipeline-x86_64-unknown-linux-musl.tar.xz
+   ls eb-pipeline-x86_64-unknown-linux-musl
+   #+end_src
+
+   #+begin_example
+   CHANGELOG.md
+   LICENSE
+   README.md
+   eb-pipeline
+   #+end_example
+
+3. Install the binary:
+
+   #+begin_src bash
+   install -D -m 755 eb-pipeline-x86_64-unknown-linux-musl/eb-pipeline ~/.local/bin/eb-pipeline
+   #+end_src
+
+** Install from source
+
+In the checkout, build and install the binary into =~/.local/bin=, with the versions of the dependencies that =Cargo.lock= names:
+
+#+begin_src bash
+cargo install --locked --path . --root ~/.local
+#+end_src
+
+To install another commit, check it out first; to replace an eb-pipeline that is installed there, add =--force=.
+
+** Check that it worked
+
+#+begin_src bash
+command -v eb-pipeline
+eb-pipeline --version
+#+end_src
+
+#+begin_example
+$HOME/.local/bin/eb-pipeline
+eb-pipeline 0.3.0
+#+end_example
+
+A build from source also has the =targets= command:
+
+#+begin_src bash
+eb-pipeline targets --help | head -n 1
+#+end_src
+
+#+begin_example
+Print the target names in file order, for a CI matrix or a shell loop
+#+end_example
+
+** If it fails
+
+| Message                                                                                                            | Cause                                                                                          | What to do                                                       |
+|--------------------------------------------------------------------------------------------------------------------+------------------------------------------------------------------------------------------------+------------------------------------------------------------------|
+| =eb-pipeline-x86_64-unknown-linux-musl.tar.xz: FAILED= and =sha256sum: WARNING: 1 computed checksum did NOT match= | The archive is not the one the checksum names, as after a broken download.                     | Download both files again, and check again.                      |
+| =error: binary `eb-pipeline` already exists in destination=, from =cargo install=                                  | An eb-pipeline is installed there, such as a release.                                          | Add =--force= to replace it.                                     |
+| =feature `edition2024` is required=, from =cargo install=                                                          | Cargo is older than 1.85, which cannot read the manifests of some dependencies.                | Install with Rust 1.90 or newer.                                 |
+| =error: unrecognized subcommand 'targets'=                                                                         | The eb-pipeline on =PATH= is release 0.3.0, or another build older than the =targets= command. | Install from source.                                             |
+| The shell does not find =eb-pipeline=                                                                              | =~/.local/bin= is not on =PATH=.                                                               | Add it to =PATH= in the shell startup file of the build account. |
+
+The commands and their output on this page come from =docs/examples/install.sh=.
+
+** Related
+
+- [[file:../tutorials/first-build-list.org][Run your first build list]]
+- [[file:../reference/cli.org][The eb-pipeline command]]

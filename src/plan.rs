@@ -13,39 +13,59 @@ use std::path::{Path, PathBuf};
 /// One subprocess the driver starts.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Cmd {
+    /// What it is: `probe:<tool>`, `shard`, `fetch:<stem>`, `admit:<unit>`,
+    /// `build:<stem>`, `keep-failed:<stem>`, `cache` or `rotate`.
     pub name: String,
     /// Full argument vector: launch prefix, module wrapper, tool.
     pub argv: Vec<String>,
     /// Environment added to the phase environment.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
+    /// What to know about it, such as what its exit codes mean.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
 
+/// One phase of a plan.
 #[derive(Debug, Clone, Serialize)]
 pub struct PlanPhase {
+    /// The phase, one of [`PHASES`].
     pub name: String,
-    /// `planned` or `not configured`.
+    /// `planned` or `not configured`; `refused` for an admission that
+    /// `admission.required` asks for and the site file cannot provide.
     pub status: String,
+    /// Why the phase is not planned.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The [`Role`] its commands take their launch arguments from.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+    /// The phase environment, which every command gets.
     pub env: BTreeMap<String, String>,
+    /// The commands, in the order `run` starts them.
     pub commands: Vec<Cmd>,
 }
 
+/// The plan file `plan` writes: every phase of a run, with its commands.
 #[derive(Debug, Clone, Serialize)]
 pub struct Plan {
+    /// Version of this format, 1.
     pub schema_version: u32,
+    /// `plan`.
     pub kind: String,
+    /// `site.name`.
     pub site: String,
+    /// The target's name.
     pub target: String,
+    /// The build type, `default` without one.
     pub build_type: String,
+    /// The run id.
     pub run_id: String,
+    /// The build list, as given.
     pub list: String,
+    /// Where the run writes its logs.
     pub log_dir: String,
+    /// The build list's lines, without blank lines and comments.
     pub lines: usize,
     /// Lines kept by the target's selector; absent without `[targets.select]`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -53,6 +73,7 @@ pub struct Plan {
     /// File the selected lines are written to, which `stack shard` reads.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected_list: Option<String>,
+    /// Every phase, in [`PHASES`] order, planned or not.
     pub phases: Vec<PlanPhase>,
     /// Lines left out by the target's selector.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -62,10 +83,13 @@ pub struct Plan {
 /// A line that the target's selector left out.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Deselected {
+    /// The line's easyconfig.
     pub easyconfig: String,
+    /// `all`: the selector reads the whole list, before `stack shard`.
     pub unit: String,
 }
 
+/// Every phase, in the order a run goes through them.
 pub const PHASES: [&str; 8] = [
     "preflight",
     "licences",
@@ -80,16 +104,22 @@ pub const PHASES: [&str; 8] = [
 /// A build unit: the whole list, or one shard list.
 #[derive(Debug, Clone)]
 pub struct Unit {
+    /// `all`, `cpu-prerequisites`, `prelude`, or the shard's name.
     pub name: String,
+    /// [`Role::Cpu`] for the CPU prerequisites, else [`Role::Build`].
     pub role: Role,
+    /// Its build list lines, in order.
     pub lines: Vec<ListLine>,
     /// Inode footprint from the shard plan.
     pub footprint: Option<u64>,
 }
 
+/// Builds the commands of one target's run of a build list.
 #[derive(Clone)]
 pub struct Planner<'a> {
+    /// Where the phases run.
     pub scope: Scope<'a>,
+    /// The build list, as given.
     pub list_path: String,
     /// Scheduler job id read at run time; `None` plans the `${NAME}` placeholder.
     pub job_id: Option<String>,
@@ -159,6 +189,8 @@ fn stem(easyconfig: &str) -> String {
 pub struct StemSeq(BTreeMap<String, usize>);
 
 impl StemSeq {
+    /// The log stem of the next line with `easyconfig`: its file name without
+    /// `.eb`, then `.2`, `.3` and so on for later lines with the same name.
     pub fn next(&mut self, easyconfig: &str) -> String {
         let s = stem(easyconfig);
         let n = self.0.entry(s.clone()).or_insert(0);
@@ -178,6 +210,7 @@ pub fn unique_stems(lines: &[ListLine]) -> Vec<String> {
 }
 
 impl<'a> Planner<'a> {
+    /// A planner without run-time values, which plans placeholders for them.
     pub fn new(scope: Scope<'a>, list_path: String) -> Self {
         Planner {
             scope,
@@ -277,6 +310,8 @@ impl<'a> Planner<'a> {
         Ok(v)
     }
 
+    /// `<shard_dir>/<run-id>`, where `stack shard` writes its plan;
+    /// `filesystems.shard_dir` defaults to `<scratch>/shards`.
     pub fn shard_dir(&self) -> String {
         let base = self
             .site()
@@ -323,6 +358,8 @@ impl<'a> Planner<'a> {
             .collect()
     }
 
+    /// The `stack shard` command of the shard phase, for a site with
+    /// `[shards]` active.
     pub fn shard_cmd(&self) -> Result<Cmd, Fail> {
         let s = self.site().shards_on().expect("shards active");
         let mut a = vec![
@@ -396,6 +433,8 @@ impl<'a> Planner<'a> {
         }
     }
 
+    /// The `eb --fetch` command of `line`, logged as `name`, in a unit of
+    /// `unit_role`; the fetch of a CPU-role unit goes through its route.
     pub fn prefetch_cmd(&self, line: &ListLine, name: &str, unit_role: Role) -> Result<Cmd, Fail> {
         let extra = self
             .site()
@@ -429,6 +468,8 @@ impl<'a> Planner<'a> {
         })
     }
 
+    /// The `stack admit` command of `unit`, with its inode `footprint`, for a
+    /// site with `[admission]` active.
     pub fn admission_cmd(&self, unit: &str, footprint: u64) -> Result<Cmd, Fail> {
         let adm = self.site().admission_on().expect("admission active");
         let job = self
@@ -539,14 +580,20 @@ impl<'a> Planner<'a> {
         ))
     }
 
+    /// `<log_dir>/<stem>.stdout.log`, the output of the line's build.
     pub fn log_stdout(&self, stem: &str) -> String {
         format!("{}/{}.stdout.log", self.scope.log_dir(), stem)
     }
 
+    /// `<log_dir>/easybuild-logs/<stem>`, the line's `--tmp-logdir` with
+    /// `logs.keep_failed`.
     pub fn tmp_logdir(&self, stem: &str) -> String {
         format!("{}/easybuild-logs/{}", self.scope.log_dir(), stem)
     }
 
+    /// The command that builds `line`, logged as `stem`, with the launch
+    /// arguments of `role`: `eb`, or `eb-staged-rebuild run` for a staged
+    /// rebuild.
     pub fn build_cmd(&self, role: Role, line: &ListLine, stem: &str) -> Result<Cmd, Fail> {
         let mut inner: Vec<String>;
         let note;
@@ -604,6 +651,8 @@ impl<'a> Planner<'a> {
         })
     }
 
+    /// The `eb-keep-logs failed` command for the line logged as `stem`, which
+    /// failed with exit `status`.
     pub fn keep_failed_cmd(&self, stem: &str, status: &str) -> Result<Cmd, Fail> {
         let a = vec![
             Tool::EbKeepLogs.bin(self.site()),
@@ -682,6 +731,8 @@ impl<'a> Planner<'a> {
         PathBuf::from(&self.site().filesystems.log_root).join(".eb-keep-logs-rotate.lock")
     }
 
+    /// The cache command of the target's `[[caches.targets]]` entry; `None`
+    /// without an active `[caches]`, its `command` or such an entry.
     pub fn cache_cmd(&self) -> Result<Option<Cmd>, Fail> {
         let Some(c) = self.site().caches_on() else {
             return Ok(None);

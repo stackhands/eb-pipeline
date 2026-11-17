@@ -1,0 +1,1 @@
+A how-to guide rotates the log tree, at the end of each run and from cron under the same lock with `flock`, with the messages of a run that leaves the rotation to another and of a rotation that fails.
