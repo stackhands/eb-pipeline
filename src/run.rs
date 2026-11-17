@@ -1217,8 +1217,69 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
     let mut fetch_failed: Vec<String> = Vec::new();
     if site.sources_on().is_some() {
         let mut any_failed = false;
+        let bundle_lines: Vec<ListLine> = units
+            .iter()
+            .flat_map(|unit| unit.lines.iter().cloned())
+            .collect();
+        let planner_cmds = match p.offline_planner_cmds(&bundle_lines) {
+            Ok(commands) => commands,
+            Err(f) => {
+                st.res.message = Some(f.msg);
+                return finish(st, Some(f.code));
+            }
+        };
+        if let Some(bundle) = &p.offline_bundle {
+            if let Err(f) = crate::offline::prepare(bundle) {
+                st.res.message = Some(f.msg);
+                return finish(st, Some(f.code));
+            }
+            if let Err(e) = std::fs::create_dir(bundle.join("planner")) {
+                let msg = format!(
+                    "cannot create offline planner directory {}: {e}",
+                    bundle.join("planner").display()
+                );
+                st.res.message = Some(msg);
+                return finish(st, Some(exit::FAILED));
+            }
+        }
+        for (i, cmd) in planner_cmds.iter().enumerate() {
+            let ex = match st.exec(
+                "sources",
+                cmd,
+                &env,
+                &log_dir.join(format!("offline-planner-{:02}.log", i + 1)),
+            ) {
+                Ok(ex) => ex,
+                Err(f) => {
+                    st.res.message = Some(f.msg);
+                    return finish(st, Some(f.code));
+                }
+            };
+            if let Some(c) = stop_if_signalled(&mut st, "sources") {
+                return finish(st, Some(c));
+            }
+            if ex.code != 0 {
+                let msg = format!("{} exited {} (see {})", cmd.name, ex.code, ex.log.display());
+                log("ERROR", "sources", &target, &msg);
+                st.phase("sources", "failed", Some(ex.code), Some(msg.clone()));
+                st.res.message = Some(msg);
+                return finish(st, Some(exit::FAILED));
+            }
+            if let Some(bundle) = &p.offline_bundle {
+                let copy = bundle.join("planner").join(format!(
+                    "call-{:02}-{}.log",
+                    i + 1,
+                    cmd.name.replace(':', "-")
+                ));
+                if let Err(e) = std::fs::copy(&ex.log, &copy) {
+                    let msg = format!("cannot copy planner log to {}: {e}", copy.display());
+                    st.res.message = Some(msg);
+                    return finish(st, Some(exit::FAILED));
+                }
+            }
+        }
         for (u, ss) in units.iter().zip(&unit_stems) {
-            if skip.contains(&u.name) {
+            if skip.contains(&u.name) && p.offline_bundle.is_none() {
                 continue;
             }
             for (l, s) in u.lines.iter().zip(ss) {
@@ -1270,12 +1331,39 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                 }
             }
         }
+        if !any_failed {
+            if let Some(bundle) = &p.offline_bundle {
+                let assets = &site.sources_on().expect("sources active").assets;
+                match crate::offline::write(bundle, &p.scope, assets) {
+                    Ok(manifest) => log(
+                        "INFO",
+                        "sources",
+                        &target,
+                        &format!(
+                            "wrote offline bundle {} with {} file(s)",
+                            bundle.display(),
+                            manifest.files.len()
+                        ),
+                    ),
+                    Err(f) => {
+                        log("ERROR", "sources", &target, &f.msg);
+                        st.phase("sources", "failed", Some(exit::FAILED), Some(f.msg.clone()));
+                        st.res.message = Some(f.msg);
+                        return finish(st, Some(exit::FAILED));
+                    }
+                }
+            }
+        }
         st.phase(
             "sources",
             if any_failed { "failed" } else { "ok" },
             None,
             None,
         );
+        if any_failed && p.offline_bundle.is_some() {
+            st.res.message = Some("source prefetch failed; no offline bundle was published".into());
+            return finish(st, Some(exit::FAILED));
+        }
     }
 
     // admission and builds, unit by unit

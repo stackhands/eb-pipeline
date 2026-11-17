@@ -6,6 +6,7 @@ pub mod exit;
 pub mod lint;
 pub mod metrics;
 pub mod notify;
+pub mod offline;
 pub mod plan;
 pub mod resolve;
 pub mod resume;

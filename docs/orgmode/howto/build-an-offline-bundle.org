@@ -1,0 +1,107 @@
+#+TITLE: Build with one offline asset bundle
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Build with one offline asset bundle
+
+Use this when build nodes or test jobs must use a reviewed set of source,
+test and runtime files.
+The bundle is opt-in; a run without the two options below is unchanged.
+
+** Configure the source phase
+
+Give EasyBuild a source path and give the source phase the robot tree that
+=eb-stack= plans over:
+
+#+begin_src toml
+[filesystems]
+source_paths = ["/shared/easybuild/sources"]
+
+[sources]
+easyconfigs = ["/shared/easybuild/easyconfigs"]
+offline_wrapper = ["/opt/site/bin/no-network", "--"]
+#+end_src
+
+=offline_wrapper= is a site-provided command that starts the arguments after
+it with network access refused.
+Test that wrapper independently on every execution route before relying on
+=--require-offline=.
+
+Add each test or runtime file that is not part of an EasyBuild recipe:
+
+#+begin_src toml
+[[sources.assets]]
+path = "/shared/staged-assets/model-data.tar.xz"
+url = "https://example.org/releases/model-data.tar.xz"
+sha256 = "8b0b6f7f5364e4c7a6d39b6f3ab4fe8c39ddf29ae5bb5951059bfbf7f6b4b4e5"
+consumer = "model-smoke-test"
+local_name = "model-data.tar.xz"
+#+end_src
+
+The local file must already exist.
+The run checks its configured SHA-256 before it writes the manifest.
+
+For a foreign package input, ask the planner to record its package plan:
+
+#+begin_src toml
+[[sources.foreign]]
+source = "/shared/recipes/example/pyproject.toml"
+format = "pypi"
+toolchain = "foss/2026.1"
+#+end_src
+
+** Plan the isolated run
+
+#+begin_src bash
+eb-pipeline plan \
+  --site site.toml \
+  --list production.list \
+  --target cpu \
+  --build-type production \
+  --offline-bundle /shared/bundles/production \
+  --require-offline \
+  --out plan.json
+#+end_src
+
+Inspect the =sources= phase.
+It first contains =eb-stack stack order=, =eb-stack stack files= and one
+=eb-stack package inspect= per foreign input, then the usual EasyBuild fetch
+commands.
+The admission, build, check, cache, log and notification commands contain
+=offline_wrapper=.
+
+** Build and verify the bundle
+
+Run the same inputs:
+
+#+begin_src bash
+eb-pipeline run \
+  --site site.toml \
+  --list production.list \
+  --target cpu \
+  --build-type production \
+  --offline-bundle /shared/bundles/production \
+  --require-offline \
+  --result result.json
+#+end_src
+
+The source phase fails before a build when a planner call fails, an asset has
+the wrong checksum, the bundle cannot be written, or the bundle directory
+already exists.
+On success, retain these paths together:
+
+#+begin_example
+production/
+  manifest.json
+  objects/sha256/ab/abcdef...
+  planner/build-order.txt
+  planner/easystack.yml
+  planner/foreign-01/package.plan.json
+  planner/foreign-01/package.sbom.cdx.json
+#+end_example
+
+For every =manifest.json= entry, check that =object= exists below the bundle
+and that its SHA-256 is =sha256=.
+Prefetched EasyBuild files use an =easybuild-source:= locator; configured
+assets retain their upstream URL and named consumer; planner files use an
+=eb-stack-planner:= locator.

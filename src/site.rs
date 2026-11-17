@@ -617,6 +617,55 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
         }
     }
     validate_resume(site, &mut e);
+    if let Some(s) = &site.sources {
+        for (i, asset) in s.assets.iter().enumerate() {
+            if asset.path.trim().is_empty() {
+                e.push(format!("sources.assets[{i}].path: must not be empty"));
+            }
+            if asset.url.trim().is_empty() {
+                e.push(format!("sources.assets[{i}].url: must not be empty"));
+            }
+            if asset.consumer.trim().is_empty() {
+                e.push(format!("sources.assets[{i}].consumer: must not be empty"));
+            }
+            if asset.sha256.len() != 64
+                || !asset
+                    .sha256
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
+                e.push(format!(
+                    "sources.assets[{i}].sha256: expected 64 lowercase hexadecimal digits"
+                ));
+            }
+            if let Some(name) = &asset.local_name {
+                let p = Path::new(name);
+                if name.is_empty()
+                    || name.contains('\\')
+                    || p.components().count() != 1
+                    || !matches!(p.components().next(), Some(std::path::Component::Normal(_)))
+                {
+                    e.push(format!(
+                        "sources.assets[{i}].local_name: expected one file name"
+                    ));
+                }
+            }
+        }
+        for (i, foreign) in s.foreign.iter().enumerate() {
+            for (key, value) in [
+                ("source", &foreign.source),
+                ("format", &foreign.format),
+                ("toolchain", &foreign.toolchain),
+            ] {
+                if value.trim().is_empty() {
+                    e.push(format!("sources.foreign[{i}].{key}: must not be empty"));
+                }
+            }
+        }
+        if s.offline_wrapper.iter().any(|part| part.is_empty()) {
+            e.push("sources.offline_wrapper: entries must not be empty".into());
+        }
+    }
     for m in site
         .modules
         .init

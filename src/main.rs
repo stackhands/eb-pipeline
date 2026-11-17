@@ -238,6 +238,12 @@ struct Common {
     /// current UTC time, taken once per run; `<log-stamp>` for `plan`.
     #[arg(long, env = "EB_PIPELINE_LOG_STAMP")]
     log_stamp: Option<String>,
+    /// Build a checksum-indexed bundle of prefetched and configured assets.
+    #[arg(long)]
+    offline_bundle: Option<PathBuf>,
+    /// Run phases after source prefetch through sources.offline_wrapper.
+    #[arg(long, requires = "offline_bundle")]
+    require_offline: bool,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -510,6 +516,42 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         ));
     }
     let target = s.target(&c.target)?;
+    let sources = s.sources_on();
+    if c.offline_bundle.is_some() {
+        if is_run && c.offline_bundle.as_ref().is_some_and(|path| path.exists()) {
+            return Err(Fail::usage(
+                "--offline-bundle must name an absent path for run",
+            ));
+        }
+        let Some(conf) = sources else {
+            return Err(Fail::usage(
+                "--offline-bundle needs an enabled [sources] table with prefetch = true",
+            ));
+        };
+        let easyconfigs = if conf.easyconfigs.is_empty() {
+            s.shards
+                .as_ref()
+                .map(|shards| shards.easyconfigs.as_slice())
+                .unwrap_or_default()
+        } else {
+            conf.easyconfigs.as_slice()
+        };
+        if easyconfigs.is_empty() {
+            return Err(Fail::usage(
+                "--offline-bundle needs sources.easyconfigs or shards.easyconfigs",
+            ));
+        }
+        if s.filesystems.source_paths.is_empty() {
+            return Err(Fail::usage(
+                "--offline-bundle needs filesystems.source_paths",
+            ));
+        }
+        if c.require_offline && conf.offline_wrapper.is_empty() {
+            return Err(Fail::usage(
+                "--require-offline needs sources.offline_wrapper",
+            ));
+        }
+    }
     let list_text = std::fs::read_to_string(&c.list)
         .map_err(|e| Fail::usage(format!("cannot read list {}: {e}", c.list.display())))?;
     let lines = if easystack::is_easystack(&c.list) {
@@ -546,7 +588,14 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         run_id,
         log_stamp,
     };
-    let planner = Planner::new(scope, c.list.display().to_string());
+    let mut planner = Planner::new(scope, c.list.display().to_string());
+    planner.offline_bundle = c.offline_bundle.clone();
+    if c.require_offline {
+        planner.offline_wrapper = sources
+            .expect("offline bundle checked sources")
+            .offline_wrapper
+            .clone();
+    }
     if !is_run {
         let units = match shard_plan {
             Some(d) => Some(read_units(d)?),
@@ -558,6 +607,9 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
     }
     if !dry {
         tools::check_versions(&s, false)?;
+        if c.offline_bundle.is_some() {
+            tools::check_one(&s, tools::Tool::EbStack, true).map_err(Fail::usage)?;
+        }
     }
     install_handlers();
     let before = (!dry && s.watch_on().is_some()).then(|| watch::listings(&planner, &lines));
@@ -613,7 +665,7 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         if let Some(before) = &before {
             watch::record_run(&planner, &lines, &res, before);
         }
-        write_summary(&s, &res, "run", result, None);
+        write_summary(&s, &res, "run", result, None, &planner.offline_wrapper);
         if let Some(p) = result {
             write_json(&to_sorted(&res), Some(p))?;
         }
@@ -629,6 +681,7 @@ fn write_summary(
     command: &str,
     result: Option<&Path>,
     watch: Option<serde_json::Value>,
+    offline_wrapper: &[String],
 ) {
     let dir = summary::run_dir(res);
     let entry = summary::entry(res, command, result, watch);
@@ -645,7 +698,13 @@ fn write_summary(
                     dir.display()
                 ),
             );
-            notify::send(s, &res.target, res.exit_code, &dir.join(summary::JSON));
+            notify::send(
+                s,
+                &res.target,
+                res.exit_code,
+                &dir.join(summary::JSON),
+                offline_wrapper,
+            );
         }
         Err(e) => log(
             "WARN",
@@ -1032,7 +1091,7 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
         }
         drop_work();
     }
-    write_summary(&s, &res, "watch", w.result, Some(to_sorted(&doc)));
+    write_summary(&s, &res, "watch", w.result, Some(to_sorted(&doc)), &[]);
     if let Some(p) = w.result {
         write_json(&to_sorted(&res), Some(p))?;
     }
