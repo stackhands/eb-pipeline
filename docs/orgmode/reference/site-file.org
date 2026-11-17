@@ -118,7 +118,7 @@ So every job that a run or =watch= starts needs the directory, whatever its phas
 
 | Key                 | Type  | Default                   | Meaning                                                                      |
 |---------------------+-------+---------------------------+------------------------------------------------------------------------------|
-| =eb_stack=          | table | =bin= =eb-stack=          | eb-stack, which runs =stack shard=, =stack admit= and =stack sbom=. With =[resume]= enabled, =run= also calls =stack order --hashes-out=. |
+| =eb_stack=          | table | =bin= =eb-stack=          | eb-stack, which plans shards, admission and offline bundles. With =[resume]= enabled, =run= also calls =stack order --hashes-out=. |
 | =eb_keep_logs=      | table | =bin= =eb-keep-logs=      | eb-keep-logs, which runs =failed= and =rotate=.                              |
 | =eb_staged_rebuild= | table | =bin= =eb-staged-rebuild= | eb-staged-rebuild, which runs =run= for a line that rebuilds a live install. |
 
@@ -343,16 +343,48 @@ A count of 0 keeps the directory =filesystems.job_dir= names.
 
 ** =[sources]=
 
-| Key          | Type            | Default | Meaning                                                                                                 |
-|--------------+-----------------+---------+---------------------------------------------------------------------------------------------------------|
-| =enabled=    | boolean         | =true=  | =false= turns the phase off.                                                                            |
-| =prefetch=   | boolean         | =true=  | Run =eb EASYCONFIG --fetch --robot= for every line before the first build; =false= turns the phase off. |
-| =extra_args= | array of string | =[]=    | Arguments of each prefetch command, after the line's own options.                                       |
+| Key               | Type            | Default | Meaning                                                                                                                        |
+|-------------------+-----------------+---------+--------------------------------------------------------------------------------------------------------------------------------|
+| =enabled=         | boolean         | =true=  | =false= turns the phase off.                                                                                                   |
+| =prefetch=        | boolean         | =true=  | Run =eb EASYCONFIG --fetch --robot= for every line before the first build; =false= turns the phase off.                        |
+| =extra_args=      | array of string | =[]=    | Arguments of each prefetch command, after the line's own options.                                                              |
+| =easyconfigs=     | array of string | =[]=    | Robot trees for =stack order= and =stack files= with =--offline-bundle=; falls back to =shards.easyconfigs=.                  |
+| =assets=          | array of table  | =[]=    | Test and runtime files copied into an offline bundle; one =[[sources.assets]]= per file.                                       |
+| =foreign=         | array of table  | =[]=    | Foreign package inputs passed to =eb-stack package inspect=; one =[[sources.foreign]]= per input.                             |
+| =offline_wrapper= | array of string | =[]=    | Command and arguments placed before later phase commands by =run --require-offline=; it must refuse network access.           |
 
 A prefetch command gets the options of its line, except those that start with =--rebuild=.
 A line whose prefetch fails is =failed= and is not built.
 =--fetch= takes no account of installed modules, so =--robot= fetches the sources of every dependency, those EESSI provides included.
 With =--disable-robot= in =extra_args=, a line fetches its own sources only: the prefetch command has no =--robot=, the line's =--robot= is dropped, and the paths of the line's =--robot=PATH= go first in =--robot-paths=, so that its easyconfig is still found.
+
+=--offline-bundle DIR= needs this phase, at least one =filesystems.source_paths=
+entry and =easyconfigs= here or under =[shards]=.
+It runs the three planner commands named above as subprocesses and does not
+interpret their dependency or recipe logic.
+After every fetch succeeds, it copies regular files under the source paths
+and every configured asset into =DIR/objects/sha256=, indexes the planner
+outputs there too, and writes =DIR/manifest.json=.
+The directory must not exist; a rerun therefore cannot overwrite or mix an
+earlier valid bundle.
+
+*** =[[sources.assets]]=
+
+| Key          | Type   | Default           | Meaning                                                     |
+|--------------+--------+-------------------+-------------------------------------------------------------|
+| =path=       | string | required          | Local regular file to copy.                                 |
+| =url=        | string | required          | Upstream URL recorded in the manifest.                      |
+| =sha256=     | string | required          | Expected 64-digit lowercase SHA-256 of =path=.              |
+| =consumer=   | string | required          | Test, package or command that consumes the file.            |
+| =local_name= | string | file name of path | One portable file name recorded in the manifest.            |
+
+*** =[[sources.foreign]]=
+
+| Key         | Type   | Default  | Meaning                                            |
+|-------------+--------+----------+----------------------------------------------------|
+| =source=    | string | required | Value of =package inspect --source=.               |
+| =format=    | string | required | Value of =package inspect --format=.               |
+| =toolchain= | string | required | Value of =package inspect --toolchain=.            |
 
 ** =[modules]=
 

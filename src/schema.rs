@@ -124,7 +124,7 @@ doc_struct! {
     /// Sibling tool table.
     Tools {
         eb_stack: Option<ToolSpec> => ("table", "bin eb-stack", false,
-            "eb-stack, called for `stack shard`, `stack admit` and `stack sbom`. With `[resume]` enabled, `run` also calls `stack order --hashes-out` and may call `stack shard` for restart boundaries."),
+            "eb-stack, called for `stack shard`, `stack admit`, `stack sbom` and offline-bundle planning. With `[resume]` enabled, `run` also calls `stack order --hashes-out` and may call `stack shard` for restart boundaries."),
         eb_keep_logs: Option<ToolSpec> => ("table", "bin eb-keep-logs", false,
             "eb-keep-logs, called for `failed` and `rotate`."),
         eb_staged_rebuild: Option<ToolSpec> => ("table", "bin eb-staged-rebuild", false,
@@ -394,6 +394,34 @@ doc_struct! {
 }
 
 doc_struct! {
+    /// One local test or runtime asset added to an offline bundle.
+    OfflineAsset {
+        path: String => ("string", "", true,
+            "Local file to copy after its SHA-256 is checked."),
+        url: String => ("string", "", true,
+            "Upstream URL recorded in the bundle manifest."),
+        sha256: String => ("string", "", true,
+            "Expected lowercase SHA-256 of `path`."),
+        consumer: String => ("string", "", true,
+            "Test, package or command that consumes the asset."),
+        local_name: Option<String> => ("string", "file name of path", false,
+            "Portable name recorded in the manifest."),
+    }
+}
+
+doc_struct! {
+    /// One foreign package input inspected while an offline bundle is made.
+    ForeignInput {
+        source: String => ("string", "", true,
+            "Foreign recipe or package metadata passed to `eb-stack package inspect --source`."),
+        format: String => ("string", "", true,
+            "Format passed to `eb-stack package inspect --format`."),
+        toolchain: String => ("string", "", true,
+            "Toolchain passed to `eb-stack package inspect --toolchain`."),
+    }
+}
+
+doc_struct! {
     /// Source prefetch.
     Sources {
         #[serde(default = "yes")]
@@ -404,6 +432,18 @@ doc_struct! {
         #[serde(default)]
         extra_args: Vec<String> => ("array of string", "[]", false,
             "Extra arguments for the prefetch command, after the line's own. `--disable-robot` drops `--robot`, so a line fetches its own sources only; a line's `--robot=PATH` moves to the front of `--robot-paths`."),
+        #[serde(default)]
+        easyconfigs: Vec<String> => ("array of string", "[]", false,
+            "Robot trees passed to `eb-stack stack order` and `stack files` when `--offline-bundle` is set."),
+        #[serde(default)]
+        assets: Vec<OfflineAsset> => ("array of table", "[]", false,
+            "Local test and runtime assets copied into an offline bundle after their configured SHA-256 values are checked."),
+        #[serde(default)]
+        foreign: Vec<ForeignInput> => ("array of table", "[]", false,
+            "Foreign package inputs inspected by `eb-stack package inspect` when an offline bundle is made."),
+        #[serde(default)]
+        offline_wrapper: Vec<String> => ("array of string", "[]", false,
+            "Command and arguments placed before admission, build, check, cache, log and notification commands when `run --require-offline` is set. The wrapper must refuse network access and end with any separator it needs before the command."),
     }
 }
 
@@ -709,6 +749,8 @@ pub const SECTIONS: &[(&str, &[FieldDoc])] = &[
     ("shards", Shards::FIELDS),
     ("resume", Resume::FIELDS),
     ("sources", Sources::FIELDS),
+    ("sources.assets[]", OfflineAsset::FIELDS),
+    ("sources.foreign[]", ForeignInput::FIELDS),
     ("modules", Modules::FIELDS),
     ("modules.eessi", Eessi::FIELDS),
     ("caches", Caches::FIELDS),
@@ -820,6 +862,8 @@ mod tests {
             Shards,
             Resume,
             Sources,
+            OfflineAsset,
+            ForeignInput,
             Modules,
             Eessi,
             Caches,

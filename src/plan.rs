@@ -131,6 +131,10 @@ pub struct Planner<'a> {
     /// time; `None` plans the `${NAME}` placeholders and keeps every
     /// installed-modules directory.
     pub runtime_env: Option<BTreeMap<String, String>>,
+    /// Bundle directory requested by `--offline-bundle`.
+    pub offline_bundle: Option<PathBuf>,
+    /// Network-isolating command requested by `--require-offline`.
+    pub offline_wrapper: Vec<String>,
 }
 
 /// Module path of an easyconfig relative to `<modules_root>/all`, without extension.
@@ -220,6 +224,8 @@ impl<'a> Planner<'a> {
             job_id: None,
             route_digest: None,
             runtime_env: None,
+            offline_bundle: None,
+            offline_wrapper: Vec::new(),
         }
     }
 
@@ -329,8 +335,19 @@ impl<'a> Planner<'a> {
         if modules {
             v.extend(self.scope.module_wrap());
         }
-        v.extend(inner);
+        v.extend(self.offline_inner(phase, inner));
         Ok(v)
+    }
+
+    fn offline_inner(&self, phase: &str, inner: Vec<String>) -> Vec<String> {
+        if self.offline_wrapper.is_empty()
+            || !matches!(phase, "admission" | "build" | "checks" | "caches" | "logs")
+        {
+            return inner;
+        }
+        let mut out = self.offline_wrapper.clone();
+        out.extend(inner);
+        out
     }
 
     /// `<shard_dir>/<run-id>`, where `stack shard` writes its plan;
@@ -589,6 +606,94 @@ impl<'a> Planner<'a> {
             env,
             note: None,
         })
+    }
+
+    fn source_easyconfigs(&self) -> Vec<String> {
+        let sources = self.site().sources_on().expect("sources active");
+        if !sources.easyconfigs.is_empty() {
+            sources.easyconfigs.clone()
+        } else {
+            self.site()
+                .shards
+                .as_ref()
+                .map(|s| s.easyconfigs.clone())
+                .unwrap_or_default()
+        }
+    }
+
+    /// The required eb-stack planner calls for an offline bundle.
+    pub fn offline_planner_cmds(&self, lines: &[ListLine]) -> Result<Vec<Cmd>, Fail> {
+        let Some(bundle) = &self.offline_bundle else {
+            return Ok(Vec::new());
+        };
+        let planner = bundle.join("planner");
+        let easystack = planner.join("easystack.yml");
+        let trees = self.source_easyconfigs();
+        let mut commands = Vec::new();
+        if !lines.is_empty() {
+            let mut order = vec![
+                Tool::EbStack.bin(self.site()),
+                "stack".into(),
+                "order".into(),
+            ];
+            for tree in &trees {
+                order.extend(["--easyconfigs".into(), tree.clone()]);
+            }
+            let roots: std::collections::BTreeSet<String> = lines
+                .iter()
+                .map(|line| {
+                    let (name, version) = crate::util::package_of(&line.easyconfig);
+                    version.map_or_else(|| name.clone(), |version| format!("{name}=={version}"))
+                })
+                .collect();
+            for root in roots {
+                order.extend(["--root".into(), root]);
+            }
+            order.extend([
+                "--out".into(),
+                planner.join("build-order.txt").display().to_string(),
+                "--easystack-out".into(),
+                easystack.display().to_string(),
+            ]);
+            commands.push(self.plan_role_cmd("offline-order", order)?);
+
+            let mut files = vec![
+                Tool::EbStack.bin(self.site()),
+                "stack".into(),
+                "files".into(),
+                "--easystack".into(),
+                easystack.display().to_string(),
+            ];
+            for tree in &trees {
+                files.extend(["--easyconfigs".into(), tree.clone()]);
+            }
+            for path in self.scope.source_paths() {
+                files.extend(["--sourcepath".into(), path]);
+            }
+            commands.push(self.plan_role_cmd("offline-files", files)?);
+        }
+
+        let sources = self.site().sources_on().expect("sources active");
+        for (i, foreign) in sources.foreign.iter().enumerate() {
+            let inspect = vec![
+                Tool::EbStack.bin(self.site()),
+                "package".into(),
+                "inspect".into(),
+                "--source".into(),
+                foreign.source.clone(),
+                "--format".into(),
+                foreign.format.clone(),
+                "--toolchain".into(),
+                foreign.toolchain.clone(),
+                "--out-dir".into(),
+                planner
+                    .join(format!("foreign-{:02}", i + 1))
+                    .display()
+                    .to_string(),
+            ];
+            commands.push(self.plan_role_cmd("offline-package-inspect", inspect)?);
+        }
+        Ok(commands)
     }
 
     /// The `stack admit` command of `unit`, with its inode `footprint`, for a
@@ -907,7 +1012,7 @@ impl<'a> Planner<'a> {
         );
         let mut argv = self.scope.launch_with(Role::Short, "checks", None)?;
         argv.extend(self.scope.module_wrap());
-        argv.extend(crate::util::split_args(command)?);
+        argv.extend(self.offline_inner("checks", crate::util::split_args(command)?));
         Ok(Some(Cmd {
             name: "check".into(),
             argv,
@@ -944,7 +1049,7 @@ impl<'a> Planner<'a> {
             .scope
             .launch_with(Role::Cache, "caches", entry.alloc.as_deref())?;
         v.extend(self.scope.module_wrap());
-        v.extend(crate::util::split_args(command)?);
+        v.extend(self.offline_inner("caches", crate::util::split_args(command)?));
         Ok(Some(Cmd {
             name: "cache".into(),
             argv: v,
@@ -1033,15 +1138,22 @@ pub fn build_plan(
     };
 
     // preflight: tool probes
-    let probes: Vec<Cmd> = crate::tools::needed(site)
+    let mut needed = crate::tools::needed(site);
+    if p.offline_bundle.is_some() && !needed.contains(&Tool::EbStack) {
+        needed.push(Tool::EbStack);
+    }
+    let probes: Vec<Cmd> = needed
         .into_iter()
         .filter_map(|t| {
-            let min = t.min_version(site)?;
+            let min = t.min_version(site);
+            if min.is_none() && !(p.offline_bundle.is_some() && t == Tool::EbStack) {
+                return None;
+            }
             Some(Cmd {
                 name: format!("probe:{}", t.key()),
                 argv: vec![t.bin(site), "--version".into()],
                 env: BTreeMap::new(),
-                note: Some(format!("min_version {min}")),
+                note: min.map(|min| format!("min_version {min}")),
             })
         })
         .collect();
@@ -1121,7 +1233,11 @@ pub fn build_plan(
         .map(|u| u.lines.iter().map(|l| seq.next(&l.easyconfig)).collect())
         .collect();
     phases.push(if site.sources_on().is_some() {
-        let mut cmds = Vec::new();
+        let offline_lines: Vec<ListLine> = units
+            .iter()
+            .flat_map(|unit| unit.lines.iter().cloned())
+            .collect();
+        let mut cmds = p.offline_planner_cmds(&offline_lines)?;
         for (u, ss) in units.iter().zip(&stems) {
             for (l, s) in u.lines.iter().zip(ss) {
                 cmds.push(p.prefetch_cmd(l, s, u.role)?);

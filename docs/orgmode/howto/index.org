@@ -28,4 +28,5 @@ The title names the task.
    run-tests-for-what-you-built
    rebuild-when-eessi-changes
    integration-smoke
+   build-an-offline-bundle
 #+end_export
