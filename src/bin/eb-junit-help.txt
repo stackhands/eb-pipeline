@@ -1,0 +1,17 @@
+eb-junit: write a JUnit XML report from eb-pipeline result files.
+
+  eb-junit --result FILE... [--out FILE]
+
+Each --result is a file written by `eb-pipeline run --result`. The report has
+one test suite per file, in the order given, and one test case per recorded
+line. The case repeats that line's status: success has no child element,
+skipped is skipped, and any other status is a failure whose type is that
+status. Deselected lines are not cases. eb-junit does not decide why a line
+failed, and it starts no build.
+
+A run whose exit code is not 0, and whose lines include no failure, adds one
+case named run so the report shows that the run stopped.
+
+Stdout is the report when --out is absent or `-`. Exit 0 means the report was
+written, including when a run failed. Exit 2 is a missing or invalid file, or
+a report that could not be written.

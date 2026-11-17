@@ -14,6 +14,7 @@ The title names the task.
    install
    write-a-site-file
    build-from-ci
+   publish-a-junit-report
    node-local-builds
    site-installs
    rotate-logs
