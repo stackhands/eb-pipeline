@@ -6,7 +6,7 @@ use crate::plan::{
     PHASES,
 };
 use crate::resolve::Role;
-use crate::tools::{map_staged, StagedOutcome};
+use crate::tools::{help_lists, map_rotate, map_staged, RotateOutcome, StagedOutcome, Tool};
 use crate::util::ListLine;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -1110,7 +1110,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
     }
 
     // rotation, by a run that holds the rotation lock alone
-    if let Ok(Some(cmd)) = p.rotate_cmd() {
+    if let Ok(Some(cmd)) = p.rotate_cmd(true) {
         let lock = p.rotate_lock().unwrap_or_default();
         match rotate_lock.map(rotate_alone) {
             Some(Ok(None)) => {
@@ -1130,14 +1130,42 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options) -> RunResult {
                     );
                     log("WARN", "logs", &target, &msg);
                 }
-                match exec(&cmd, &env, &log_dir.join("rotate.log")) {
-                    Ok(ex) if ex.code == 0 => st.phase("logs", "ok", Some(0), None),
-                    Ok(ex) => {
-                        let msg = format!("eb-keep-logs rotate exited {}", ex.code);
-                        log("ERROR", "logs", &target, &msg);
-                        st.phase("logs", "failed", Some(ex.code), Some(msg));
-                        st.failed = true;
+                let bin = Tool::EbKeepLogs.bin(site);
+                let mut probe_env = env.clone();
+                probe_env.extend(cmd.env.clone());
+                let note = match help_lists(&bin, &probe_env, "--lock-timeout") {
+                    Ok(true) => None,
+                    Ok(false) => Some(format!(
+                        "`{bin} --help` does not list it, as in eb-keep-logs 0.2.1, which takes no lock of its own"
+                    )),
+                    Err(e) => Some(e),
+                }
+                .map(|why| format!("no --lock-timeout for eb-keep-logs rotate: {why}"));
+                let cmd = match &note {
+                    None => cmd,
+                    Some(n) => {
+                        log("INFO", "logs", &target, n);
+                        p.rotate_cmd(false).ok().flatten().unwrap_or(cmd)
                     }
+                };
+                match exec(&cmd, &env, &log_dir.join("rotate.log")) {
+                    Ok(ex) => match map_rotate(ex.code) {
+                        RotateOutcome::Ok => st.phase("logs", "ok", Some(0), note),
+                        RotateOutcome::Locked => {
+                            let msg = format!(
+                                "eb-keep-logs rotate exited 75: another rotate holds {}, and this one changed nothing; the rotation is left to it",
+                                p.keep_logs_lock().display()
+                            );
+                            log("INFO", "logs", &target, &format!("rotation skipped: {msg}"));
+                            st.phase("logs", "skipped", Some(ex.code), Some(msg));
+                        }
+                        RotateOutcome::Failed => {
+                            let msg = format!("eb-keep-logs rotate exited {}", ex.code);
+                            log("ERROR", "logs", &target, &msg);
+                            st.phase("logs", "failed", Some(ex.code), Some(msg));
+                            st.failed = true;
+                        }
+                    },
                     Err(f) => {
                         st.res.message = Some(f.msg);
                         return finish(st, Some(f.code));

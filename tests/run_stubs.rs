@@ -95,9 +95,34 @@ shift
 exec "$@"
 "#;
 
-const KEEP_LOGS: &str = r#"#!/bin/sh
-D="${STUB_DIR:?}"
-case "$1" in --version) echo "eb-keep-logs 0.2.0"; exit 0;; esac
+/// `--version` and `--help` of a stub eb-keep-logs, which records the TZ of
+/// each `--help` in keeplogs.help. STUB_KEEP_LOGS_HELP `lock`, the default,
+/// lists `--lock-timeout`; `none` does not, and refuses the option with
+/// exit 2, as eb-keep-logs 0.2.1 does; `fail` exits 1.
+const KEEP_LOGS_PROBES: &str = r#"case "$1" in
+  --version) echo "eb-keep-logs 0.2.0"; exit 0;;
+  -h|--help)
+    echo "${TZ:-unset}" >> "$STUB_DIR/keeplogs.help"
+    case "${STUB_KEEP_LOGS_HELP:-lock}" in
+      lock) echo "  eb-keep-logs rotate ROOT --compress-after DAYS [--delete-after DAYS] [--lock-timeout SECONDS]";;
+      none) echo "  eb-keep-logs rotate ROOT --compress-after DAYS [--delete-after DAYS]";;
+      *) exit 1;;
+    esac
+    exit 0;;
+esac
+if [ "${STUB_KEEP_LOGS_HELP:-lock}" = none ]; then
+  for a in "$@"; do
+    case "$a" in --lock-timeout*) echo "eb-keep-logs: unknown option $a" >&2; exit 2;; esac
+  done
+fi
+"#;
+
+/// A stub eb-keep-logs that answers `--version` and `--help`, then runs `body`.
+fn keep_logs(body: &str) -> String {
+    format!("#!/bin/sh\n{KEEP_LOGS_PROBES}{body}")
+}
+
+const KEEP_LOGS: &str = r#"D="${STUB_DIR:?}"
 echo "$*" >> "$D/keeplogs.calls"
 exit 0
 "#;
@@ -152,11 +177,12 @@ fn setup(extra_site: &str) -> Env {
     let root = dir.path();
     let stubs = root.join("stubs");
     std::fs::create_dir(&stubs).unwrap();
+    let keep_logs = keep_logs(KEEP_LOGS);
     for (n, t) in [
         ("eb-stack", EB_STACK),
         ("eb", EB),
         ("route", ROUTE),
-        ("eb-keep-logs", KEEP_LOGS),
+        ("eb-keep-logs", &keep_logs),
         ("eb-staged-rebuild", STAGED),
     ] {
         write_exec(&stubs.join(n), t);
@@ -1374,14 +1400,12 @@ fn rotate_counts_run_ages_in_utc() {
     let env = setup("[logs.rotate]\ncompress_after_days = 30\n");
     write_exec(
         &env.stubs.join("eb-keep-logs"),
-        r#"#!/bin/sh
-case "$1" in --version) echo "eb-keep-logs 0.2.0"; exit 0;; esac
-echo "$1 ${TZ:-unset}" >> "$STUB_DIR/keeplogs.tz"
-"#,
+        &keep_logs("echo \"$1 ${TZ:-unset}\" >> \"$STUB_DIR/keeplogs.tz\"\n"),
     );
     let o = go(&env, LIST, &[("TZ", "America/Los_Angeles")]);
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert_eq!(calls(&env, "keeplogs.tz"), ["rotate UTC"]);
+    assert_eq!(calls(&env, "keeplogs.help"), ["UTC"]);
 }
 
 const ROTATE: &str = "[logs.rotate]\ncompress_after_days = 3\n";
@@ -1418,15 +1442,21 @@ fn a_run_skips_its_rotation_while_another_run_holds_the_log_root() {
         "{}",
         o.stderr
     );
+    assert!(calls(&env, "keeplogs.help").is_empty());
 
     drop(live);
     let o = go(&env, LIST, &[]);
     assert_eq!(o.code, 0, "{}", o.stderr);
-    assert_eq!(result_phase(&o.result.unwrap(), "logs")["status"], "ok");
+    let logs = result_phase(o.result.as_ref().unwrap(), "logs");
+    assert_eq!(logs["status"], "ok");
+    assert!(logs.get("note").is_none(), "{logs}");
     assert_eq!(
         rotations(&env),
-        [format!("rotate {r}/logs --compress-after 3")]
+        [format!(
+            "rotate {r}/logs --compress-after 3 --lock-timeout 0"
+        )]
     );
+    assert_eq!(calls(&env, "keeplogs.help"), ["UTC"]);
 }
 
 #[test]
@@ -1516,15 +1546,15 @@ exit 0
     );
     write_exec(
         &env.stubs.join("eb-keep-logs"),
-        r#"#!/bin/sh
-D="${STUB_DIR:?}"
-case "$1" in --version) echo "eb-keep-logs 0.2.0"; exit 0;; esac
+        &keep_logs(
+            r#"D="${STUB_DIR:?}"
 [ -e "$D/rotating" ] && echo "$EB_PIPELINE_TARGET" >> "$D/keeplogs.overlap"
 : > "$D/rotating"
 echo "$*" >> "$D/keeplogs.calls"
 sleep 0.5
 rm -f "$D/rotating"
 "#,
+        ),
     );
     let root = env.dir.path();
     std::fs::write(root.join("list.txt"), LIST).unwrap();
@@ -1577,6 +1607,157 @@ rm -f "$D/rotating"
     assert_eq!(status, ["ok", "skipped"]);
     assert_eq!(rotations(&env).len(), 1, "{:?}", rotations(&env));
     assert!(calls(&env, "keeplogs.overlap").is_empty());
+}
+
+/// An eb-keep-logs `rotate` that exits with `STUB_ROTATE_EXIT`, saying what
+/// eb-keep-logs says when another rotate holds its lock.
+const ROTATE_EXITS: &str = r#"echo "$*" >> "$STUB_DIR/keeplogs.calls"
+[ "$1" = rotate ] || exit 0
+echo "eb-keep-logs: another rotate holds the lock $2/.eb-keep-logs-rotate.lock; gave up after 0 s (--lock-timeout)" >&2
+exit "${STUB_ROTATE_EXIT:?}"
+"#;
+
+/// An eb-keep-logs `rotate` that takes `ROOT/.eb-keep-logs-rotate.lock` as
+/// eb-keep-logs does: it waits `--lock-timeout` seconds for it, 600 without
+/// the option, and then exits 75.
+const ROTATE_LOCKS: &str = r#"echo "$*" >> "$STUB_DIR/keeplogs.calls"
+[ "$1" = rotate ] || exit 0
+root="$2"; wait=600; prev=""
+for a in "$@"; do [ "$prev" = --lock-timeout ] && wait="$a"; prev="$a"; done
+exec 9>>"$root/.eb-keep-logs-rotate.lock"
+flock -w "$wait" -E 75 9 || {
+  echo "eb-keep-logs: another rotate holds the lock $root/.eb-keep-logs-rotate.lock; gave up after $wait s (--lock-timeout)" >&2
+  exit 75
+}
+"#;
+
+/// eb-keep-logs exits 75 when another rotate of the tree holds its lock past
+/// `--lock-timeout`, and has then changed nothing.
+#[test]
+fn a_rotate_that_waits_out_the_lock_of_another_is_skipped() {
+    let env = setup(ROTATE);
+    write_exec(&env.stubs.join("eb-keep-logs"), &keep_logs(ROTATE_EXITS));
+    let r = env.dir.path().display().to_string();
+    let o = go(&env, LIST, &[("STUB_ROTATE_EXIT", "75")]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let why = format!(
+        "eb-keep-logs rotate exited 75: another rotate holds {r}/logs/.eb-keep-logs-rotate.lock, and this one changed nothing; the rotation is left to it"
+    );
+    let res = o.result.unwrap();
+    let logs = result_phase(&res, "logs");
+    assert_eq!(logs["status"], "skipped");
+    assert_eq!(logs["exit_code"], 75);
+    assert_eq!(logs["note"], why);
+    assert_eq!(res["exit_code"], 0);
+    assert!(
+        o.stderr
+            .contains(&format!("INFO [logs] cpu: rotation skipped: {why}\n")),
+        "{}",
+        o.stderr
+    );
+    assert!(!o.stderr.contains("ERROR"), "{}", o.stderr);
+}
+
+#[test]
+fn a_rotate_that_exits_otherwise_fails_the_run() {
+    for code in [1, 2] {
+        let env = setup(ROTATE);
+        write_exec(&env.stubs.join("eb-keep-logs"), &keep_logs(ROTATE_EXITS));
+        let o = go(&env, LIST, &[("STUB_ROTATE_EXIT", &code.to_string())]);
+        assert_eq!(o.code, 1, "{code}: {}", o.stderr);
+        let msg = format!("eb-keep-logs rotate exited {code}");
+        let logs = result_phase(o.result.as_ref().unwrap(), "logs").clone();
+        assert_eq!(logs["status"], "failed", "{code}");
+        assert_eq!(logs["exit_code"], code, "{code}");
+        assert_eq!(logs["note"], msg, "{code}");
+        assert!(
+            o.stderr.contains(&format!("ERROR [logs] cpu: {msg}\n")),
+            "{code}: {}",
+            o.stderr
+        );
+    }
+}
+
+/// The run holds .eb-pipeline-rotate.lock alone while its rotate runs, and
+/// every run under the log root that starts meanwhile waits for it, so the
+/// rotate gives up at once on another rotate's lock.
+#[test]
+fn a_run_leaves_its_rotation_at_once_to_a_rotate_that_holds_the_tree() {
+    let env = setup(ROTATE);
+    write_exec(&env.stubs.join("eb-keep-logs"), &keep_logs(ROTATE_LOCKS));
+    std::fs::create_dir(env.dir.path().join("logs")).unwrap();
+    let r = env.dir.path().display().to_string();
+    let rotating = hold_lock(
+        &env.dir.path().join("logs/.eb-keep-logs-rotate.lock"),
+        false,
+    );
+    let mut child = driver(&env, LIST, &[], &[]);
+    let t0 = Instant::now();
+    while child.try_wait().unwrap().is_none() {
+        if t0.elapsed() > Duration::from_secs(30) {
+            child.kill().unwrap();
+            panic!("the run still waits for {r}/logs/.eb-keep-logs-rotate.lock");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let o = finish(&env, child);
+    drop(rotating);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(
+        rotations(&env),
+        [format!(
+            "rotate {r}/logs --compress-after 3 --lock-timeout 0"
+        )]
+    );
+    let logs = result_phase(o.result.as_ref().unwrap(), "logs");
+    assert_eq!(logs["status"], "skipped");
+    assert_eq!(logs["exit_code"], 75);
+}
+
+/// eb-keep-logs 0.2.1 refuses `--lock-timeout` with exit 2, and the builds
+/// that take the option print the same version: `--help` tells them apart.
+#[test]
+fn an_eb_keep_logs_whose_help_lacks_lock_timeout_rotates_without_it() {
+    let env = setup(ROTATE);
+    let r = env.dir.path().display().to_string();
+    let s = env.stubs.display().to_string();
+    let o = go(&env, LIST, &[("STUB_KEEP_LOGS_HELP", "none")]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(
+        rotations(&env),
+        [format!("rotate {r}/logs --compress-after 3")]
+    );
+    let why = format!(
+        "no --lock-timeout for eb-keep-logs rotate: `{s}/eb-keep-logs --help` does not list it, as in eb-keep-logs 0.2.1, which takes no lock of its own"
+    );
+    let logs = result_phase(o.result.as_ref().unwrap(), "logs");
+    assert_eq!(logs["status"], "ok");
+    assert_eq!(logs["note"], why);
+    assert!(
+        o.stderr.contains(&format!("INFO [logs] cpu: {why}\n")),
+        "{}",
+        o.stderr
+    );
+    assert_eq!(calls(&env, "keeplogs.help"), ["UTC"]);
+}
+
+#[test]
+fn a_help_that_fails_leaves_lock_timeout_out() {
+    let env = setup(ROTATE);
+    let r = env.dir.path().display().to_string();
+    let s = env.stubs.display().to_string();
+    let o = go(&env, LIST, &[("STUB_KEEP_LOGS_HELP", "fail")]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(
+        rotations(&env),
+        [format!("rotate {r}/logs --compress-after 3")]
+    );
+    let logs = result_phase(o.result.as_ref().unwrap(), "logs");
+    assert_eq!(logs["status"], "ok");
+    assert_eq!(
+        logs["note"],
+        format!("no --lock-timeout for eb-keep-logs rotate: `{s}/eb-keep-logs --help` exited 1")
+    );
 }
 
 /// Put `frag` straight after the `cpu` target's name.

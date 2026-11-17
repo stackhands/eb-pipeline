@@ -473,7 +473,7 @@ doc_struct! {
         keep_failed: bool => ("boolean", "true", false,
             "Run `eb-keep-logs failed` after a failed line, with EASYBUILD_OUTPUT_STYLE=basic so that `eb --last-log` prints the log path on one line."),
         rotate: Option<Rotate> => ("table", "none", false,
-            "Run `eb-keep-logs rotate <log_root>` at the end of the run, with TZ=UTC: run directories are named in UTC. Only a run that ends with no other run under log_root live rotates: each run holds `<log_root>/.eb-pipeline-rotate.lock` shared, and rotates when it can take it alone."),
+            "Run `eb-keep-logs rotate <log_root>` at the end of the run, with TZ=UTC: run directories are named in UTC. Only a run that ends with no other run under log_root live rotates: each run holds `<log_root>/.eb-pipeline-rotate.lock` shared, and rotates when it can take it alone. Where `eb-keep-logs --help` lists `--lock-timeout`, the rotate passes `--lock-timeout 0`, and while another rotate holds `<log_root>/.eb-keep-logs-rotate.lock` it changes nothing and exits 75, recorded as skipped."),
     }
 }
 

@@ -453,7 +453,9 @@ fn rotate_needs_compress_after_days_and_a_later_delete() {
             "--compress-after",
             "30",
             "--delete-after",
-            "365"
+            "365",
+            "--lock-timeout",
+            "0"
         ]
     );
     let only_compress = site("compress_after_days = 30\n");
@@ -687,6 +689,19 @@ fn plan_rotates_with_utc_ages() {
     let rotate = &phase(&v, "logs")["commands"][0];
     assert_eq!(rotate["name"], "rotate");
     assert_eq!(rotate["env"]["TZ"], "UTC");
+}
+
+#[test]
+fn plan_rotates_without_waiting_for_another_rotate() {
+    let site = format!("{MINIMAL}[logs]\n[logs.rotate]\ncompress_after_days = 30\n");
+    let v = plan_of(&site, "Foo-1.0-foss-2025a.eb\n", "other");
+    let rotate = &phase(&v, "logs")["commands"][0];
+    let a = argv_of(rotate);
+    assert_eq!(a[a.len() - 2..], ["--lock-timeout", "0"]);
+    assert_eq!(
+        rotate["note"],
+        "without --lock-timeout 0 when `eb-keep-logs --help` does not list it, as in eb-keep-logs 0.2.1"
+    );
 }
 
 const ROUTE: &str = r#"[targets.route]

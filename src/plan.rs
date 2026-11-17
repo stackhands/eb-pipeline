@@ -624,7 +624,10 @@ impl<'a> Planner<'a> {
         })
     }
 
-    pub fn rotate_cmd(&self) -> Result<Option<Cmd>, Fail> {
+    /// `eb-keep-logs rotate` of the log root; with `lock_timeout`, it gives
+    /// up at once on the lock another rotate holds. `run` leaves the option
+    /// out for an eb-keep-logs whose `--help` does not list it.
+    pub fn rotate_cmd(&self, lock_timeout: bool) -> Result<Option<Cmd>, Fail> {
         let Some(l) = self.site().logs_on() else {
             return Ok(None);
         };
@@ -642,23 +645,41 @@ impl<'a> Planner<'a> {
             a.push("--delete-after".into());
             a.push(d.to_string());
         }
+        if lock_timeout {
+            // The run holds .eb-pipeline-rotate.lock alone while rotate runs,
+            // and every run under the log root that starts meanwhile waits
+            // for it; the rotate that holds eb-keep-logs' lock does this
+            // rotation's work.
+            a.push("--lock-timeout".into());
+            a.push("0".into());
+        }
         Ok(Some(Cmd {
             name: "rotate".into(),
             argv: self.wrapped(Role::Short, "logs", a, false)?,
             // eb-keep-logs counts a run's age from the local midnight of the
             // date in its name, and run directories are named in UTC.
             env: BTreeMap::from([("TZ".to_string(), "UTC".to_string())]),
-            note: None,
+            note: lock_timeout.then(|| {
+                "without --lock-timeout 0 when `eb-keep-logs --help` does not list it, as in eb-keep-logs 0.2.1".into()
+            }),
         }))
     }
 
     /// `<log_root>/.eb-pipeline-rotate.lock`, with `[logs.rotate]` set. A
     /// run holds it shared while it writes logs and rotates only when it can
-    /// take it alone: eb-keep-logs takes no lock, and passes over at most
-    /// the run that it writes into itself.
+    /// take it alone. eb-keep-logs takes a lock of its own, `keep_logs_lock`,
+    /// which keeps two rotates apart but not a rotate and a run that is
+    /// still writing, and never takes this one: whatever takes both takes
+    /// this one first. eb-keep-logs 0.2.1 takes no lock.
     pub fn rotate_lock(&self) -> Option<PathBuf> {
         self.site().logs_on()?.rotate.as_ref()?;
         Some(PathBuf::from(&self.site().filesystems.log_root).join(".eb-pipeline-rotate.lock"))
+    }
+
+    /// `<log_root>/.eb-keep-logs-rotate.lock`, which `eb-keep-logs rotate`
+    /// holds alone for the whole rotation where it takes a lock of its own.
+    pub fn keep_logs_lock(&self) -> PathBuf {
+        PathBuf::from(&self.site().filesystems.log_root).join(".eb-keep-logs-rotate.lock")
     }
 
     pub fn cache_cmd(&self) -> Result<Option<Cmd>, Fail> {
@@ -837,7 +858,7 @@ pub fn build_plan(
         None => skip("caches", "not configured"),
     });
 
-    phases.push(match p.rotate_cmd()? {
+    phases.push(match p.rotate_cmd(true)? {
         Some(c) => planned("logs", Some(Role::Short), vec![c]),
         None => skip("logs", "not configured"),
     });
