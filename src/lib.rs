@@ -8,6 +8,7 @@ pub mod metrics;
 pub mod notify;
 pub mod plan;
 pub mod resolve;
+pub mod resume;
 pub mod run;
 pub mod sbom;
 pub mod schema;

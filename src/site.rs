@@ -180,6 +180,38 @@ const ROUTE_ALL: &[&str] = &[
 ];
 const ROUTE_BASIC: &[&str] = &["phase_dir", "log_dir", "work_dir", "target", "phase"];
 
+/// `[resume]` trees, and the repository that names a requeued workspace.
+fn validate_resume(site: &Site, e: &mut Vec<String>) {
+    if site.resume_on().is_none() {
+        return;
+    }
+    let trees = crate::resume::easyconfig_trees(site);
+    if trees.is_empty() {
+        e.push(
+            "[resume] enabled needs easyconfigs, on resume.easyconfigs or shards.easyconfigs"
+                .into(),
+        );
+    }
+    for p in &trees {
+        if !p.starts_with('/') {
+            e.push(format!("resume easyconfigs: `{p}` is not an absolute path"));
+        }
+    }
+    if site.filesystems.job_dir.is_none() {
+        return;
+    }
+    match &site.filesystems.configs_repo {
+        Some(p) if p.starts_with('/') => {}
+        Some(p) => e.push(format!(
+            "filesystems.configs_repo: `{p}` is not an absolute path, which [resume] needs to name the requeued workspace"
+        )),
+        None => e.push(
+            "filesystems.configs_repo: required when [resume] is enabled and filesystems.job_dir is set"
+                .into(),
+        ),
+    }
+}
+
 /// `filesystems.job_dir` and the paths that name it.
 fn validate_job_dir(site: &Site, e: &mut Vec<String>) {
     let fs = &site.filesystems;
@@ -584,6 +616,7 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
             e.push("shards.easyconfigs: at least one tree is required when count >= 2".into());
         }
     }
+    validate_resume(site, &mut e);
     for m in site
         .modules
         .init
@@ -835,6 +868,10 @@ impl Site {
     /// Shard section when it plans shards.
     pub fn shards_on(&self) -> Option<&Shards> {
         self.shards.as_ref().filter(|s| s.enabled && s.count >= 2)
+    }
+    /// Resume section when a run records an input identity.
+    pub fn resume_on(&self) -> Option<&Resume> {
+        self.resume.as_ref().filter(|r| r.enabled)
     }
     /// Sources section when it prefetches.
     pub fn sources_on(&self) -> Option<&Sources> {

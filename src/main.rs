@@ -173,6 +173,10 @@ enum Cmd {
         /// Node size for `--oom-preflight`, as `CORES:MEMORY_MIB[:TARGET]`.
         #[arg(long, requires = "oom_preflight")]
         node: Option<String>,
+        /// Continue from this result when its input digest still matches.
+        /// Needs `[resume] enabled`.
+        #[arg(long, value_name = "FILE")]
+        resume_result: Option<PathBuf>,
     },
     /// Rebuild the recorded installs an EESSI change reaches, in dependency order.
     #[command(after_long_help = WATCH_EXIT)]
@@ -466,6 +470,7 @@ struct Mode<'a> {
     dry: bool,
     is_run: bool,
     oom_node: Option<&'a str>,
+    resume_result: Option<&'a Path>,
 }
 
 fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
@@ -476,6 +481,7 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         dry,
         is_run,
         oom_node,
+        resume_result,
     } = m;
     if let Some(stamp) = c.log_stamp.as_deref().filter(|s| !util::is_log_stamp(s)) {
         return Err(Fail::usage(format!(
@@ -559,6 +565,19 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         Some(d) => Some(read_units(d)?),
         None => None,
     };
+    let (prior, resume_refused) = match resume_result {
+        Some(path) if !dry => {
+            if s.resume_on().is_none() {
+                return Err(Fail::usage("--resume-result needs [resume] enabled = true"));
+            }
+            match eb_pipeline::resume::load(path) {
+                Ok(p) => (Some(p), None),
+                Err(f) if f.code == exit::REFUSED => (None, Some(f.msg)),
+                Err(f) => return Err(f),
+            }
+        }
+        _ => (None, None),
+    };
     let mut res = run(
         &planner,
         &lines,
@@ -566,6 +585,8 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
             dry_run: dry,
             shard_units: saved_units.as_deref(),
             oom_node,
+            resume: prior.as_ref(),
+            resume_refused: resume_refused.as_deref(),
         },
     );
     if let Some(m) = &res.message {
@@ -976,6 +997,8 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             dry_run: false,
             shard_units: None,
             oom_node: None,
+            resume: None,
+            resume_refused: None,
         },
     );
     if let Some(m) = &res.message {
@@ -1060,6 +1083,7 @@ fn main() {
                 dry: false,
                 is_run: false,
                 oom_node: None,
+                resume_result: None,
             },
         ),
         Cmd::Run {
@@ -1069,6 +1093,7 @@ fn main() {
             dry_run,
             oom_preflight: _,
             node,
+            resume_result,
         } => cmd_plan_or_run(
             common,
             Mode {
@@ -1078,6 +1103,7 @@ fn main() {
                 dry: *dry_run,
                 is_run: true,
                 oom_node: node.as_deref(),
+                resume_result: resume_result.as_deref(),
             },
         ),
         Cmd::Watch {

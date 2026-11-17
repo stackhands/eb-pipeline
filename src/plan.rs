@@ -443,6 +443,95 @@ impl<'a> Planner<'a> {
         })
     }
 
+    /// `stack order --hashes-out` for the lines a resume compares.
+    ///
+    /// The digest is the hash file `eb-stack` writes. This command does not
+    /// hash easyconfigs itself.
+    pub fn order_cmd(&self, lines: &[ListLine]) -> Result<Cmd, Fail> {
+        let trees = crate::resume::easyconfig_trees(self.site());
+        if trees.is_empty() {
+            return Err(Fail::usage(
+                "[resume] needs easyconfigs, on resume.easyconfigs or shards.easyconfigs",
+            ));
+        }
+        let roots = crate::resume::roots(lines);
+        if roots.is_empty() {
+            return Err(Fail::usage(
+                "[resume] found no package name to pass to stack order --root",
+            ));
+        }
+        let dir = self.scope.log_dir();
+        let mut a = vec![
+            Tool::EbStack.bin(self.site()),
+            "stack".into(),
+            "order".into(),
+            "--out".into(),
+            crate::resume::order_path(&dir).display().to_string(),
+            "--hashes-out".into(),
+            crate::resume::hashes_path(&dir).display().to_string(),
+        ];
+        for tree in trees {
+            a.push("--easyconfigs".into());
+            a.push(tree);
+        }
+        for root in roots {
+            a.push("--root".into());
+            a.push(root);
+        }
+        Ok(Cmd {
+            name: "order".into(),
+            argv: self.wrapped(Role::Plan, "shard", a, true)?,
+            env: BTreeMap::new(),
+            note: Some(
+                "input identity from stack order --hashes-out; a mismatch refuses --resume-result"
+                    .into(),
+            ),
+        })
+    }
+
+    /// `stack shard` for restart boundaries when `[shards]` is not planning.
+    pub fn boundary_shard_cmd(&self) -> Result<Cmd, Fail> {
+        let r = self.site().resume_on().expect("resume active");
+        let trees = crate::resume::easyconfig_trees(self.site());
+        let mut a = vec![
+            Tool::EbStack.bin(self.site()),
+            "stack".into(),
+            "shard".into(),
+            "--build-list".into(),
+            self.shard_list(),
+            "--shards".into(),
+            r.shards.to_string(),
+            "--out-dir".into(),
+            self.shard_dir(),
+        ];
+        for tree in trees {
+            a.push("--easyconfigs".into());
+            a.push(tree);
+        }
+        Ok(Cmd {
+            name: "shard".into(),
+            argv: self.wrapped(Role::Plan, "shard", a, true)?,
+            env: BTreeMap::new(),
+            note: Some(
+                "restart boundaries; a successful unit whose outputs remain is skipped on --resume-result"
+                    .into(),
+            ),
+        })
+    }
+
+    /// Module files of `line` that exist now, under the target's modules root.
+    pub fn declared_outputs(&self, line: &ListLine) -> Vec<String> {
+        let Some(rel) = module_rel(&line.easyconfig) else {
+            return Vec::new();
+        };
+        let root = self.scope.modules_root();
+        let base = format!("{}/all/{rel}", root.trim_end_matches('/'));
+        [format!("{base}.lua"), base]
+            .into_iter()
+            .filter(|p| Path::new(p).is_file())
+            .collect()
+    }
+
     /// A command eb-pipeline runs for `phase` as it runs `stack shard`: with
     /// the plan role's launch, inside the module wrapper.
     pub fn plan_role_cmd(&self, phase: &str, inner: Vec<String>) -> Result<Cmd, Fail> {
@@ -978,15 +1067,10 @@ pub fn build_plan(
         skip("licences", "not configured")
     });
 
-    phases.push(if site.shards_on().is_some() {
-        planned("shard", Some(Role::Plan), vec![p.shard_cmd()?])
-    } else {
-        skip("shard", "not configured")
-    });
-
     // shard units come from the selected list, so only the whole list is filtered
     let (kept, deselected) = p.select_lines(lines)?;
-    if site.shards_on().is_some() {
+    let boundary = site.resume_on().is_some_and(|r| r.shards >= 2) && site.shards_on().is_none();
+    if site.shards_on().is_some() || boundary {
         for l in &kept {
             // stack shard splits the line on white space and does not drop
             // quotes. A word with a space or a quote is a different word to
@@ -995,13 +1079,32 @@ pub fn build_plan(
             let words =
                 std::iter::once(l.easyconfig.as_str()).chain(l.args.iter().map(String::as_str));
             if !split.eq(words) {
+                let ending = if site.shards_on().is_some() {
+                    "or run without [shards]"
+                } else {
+                    "or set [resume] shards below 2"
+                };
                 return Err(Fail::usage(format!(
-                    "build list line `{}`: stack shard reads words split on white space, and those words are not this line's arguments; write each argument without a space or a quote, or run without [shards]",
+                    "build list line `{}`: stack shard reads words split on white space, and those words are not this line's arguments; write each argument without a space or a quote, {ending}",
                     l.raw
                 )));
             }
         }
     }
+    let mut shard_cmds = Vec::new();
+    if !kept.is_empty() && site.resume_on().is_some() {
+        shard_cmds.push(p.order_cmd(&kept)?);
+    }
+    if site.shards_on().is_some() {
+        shard_cmds.push(p.shard_cmd()?);
+    } else if boundary && !kept.is_empty() {
+        shard_cmds.push(p.boundary_shard_cmd()?);
+    }
+    phases.push(if shard_cmds.is_empty() {
+        skip("shard", "not configured")
+    } else {
+        planned("shard", Some(Role::Plan), shard_cmds)
+    });
     let units: Vec<Unit> = match shard_units {
         Some(u) if !u.is_empty() => u.to_vec(),
         _ if p.scope.target.select.is_some() && kept.is_empty() => vec![],

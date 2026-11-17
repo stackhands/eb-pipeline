@@ -251,6 +251,7 @@ cat result.json
 | =duration_seconds= | number  | How long the run took, from its start to the writing of the result file, in seconds to the millisecond.                |
 | =ended_at=         | string  | When the run ended, in Coordinated Universal Time (UTC): the date, the time to the nanosecond and the offset =+00:00=. |
 | =exit_code=        | integer | The exit status of the run.                                                                                            |
+| =input_digest=     | string  | The SHA-256 of the file =eb-stack stack order --hashes-out= wrote, when =[resume]= is enabled. Absent otherwise.        |
 | =interrupted_by=   | string  | =SIGINT= or =SIGTERM=, when a signal stopped the run.                                                                  |
 | =kind=             | string  | =result=.                                                                                                              |
 | =lines=            | array   | Every line the run reached, in that order.                                                                             |
@@ -275,6 +276,7 @@ cat result.json
 | =exit_code=        | integer | The exit status the line counts as; absent for a line that did not run.                                                                                           |
 | =log=              | string  | The log of the line's command.                                                                                                                                    |
 | =note=             | string  | Why the line came to its status, when that needs saying. A line that went through eb-staged-rebuild has one, whatever its status.                                 |
+| =outputs=          | array   | Module files a successful line left, when =[resume]= recorded them. A resumed line copies the prior list. Absent when empty.                                        |
 | =phase=            | string  | =build=, or =sources= when the prefetch of its sources failed.                                                                                                    |
 | =status=           | string  | =success=, =failed=, =refused=, =pending= or =skipped=.                                                                                                           |
 | =translated_from=  | integer | The command's own exit status, when =exit_code= translates it, as 78 does eb-staged-rebuild's 2.                                                                  |
@@ -286,7 +288,7 @@ cat result.json
 | =failed=  | Its command, or the prefetch of its sources, exited with a status that means failure.                                 |
 | =refused= | =eb-staged-rebuild run= refused it, with exit 2.                                                                      |
 | =pending= | =eb-staged-rebuild run= exited 75: a ledger event it requires is pending.                                             |
-| =skipped= | It did not run: admission refused its unit or an earlier one, or a signal stopped the run first. The note says which. |
+| =skipped= | It did not run: admission refused its unit or an earlier one, a signal stopped the run first, or =[resume]= skipped a unit whose prior lines succeeded and whose module files are still present. The note says which. |
 
 *** Each entry of =phases=
 
