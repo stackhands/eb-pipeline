@@ -1,0 +1,58 @@
+#+TITLE: Publish cache updates with CVMFS
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Publish cache updates with CVMFS
+
+Use =eb-cvmfs= when the command in =[caches]= writes directly into a CVMFS repository and the whole synchronization must be one transaction.
+=eb-pipeline run= does not add this bracket on its own; a site opts in by putting it in =caches.command=.
+
+** 1. Check the synchronization command
+
+Run the site's synchronization command without CVMFS first and confirm that it updates the intended repository tree.
+The command must do only the synchronization that belongs inside the transaction.
+=eb-cvmfs= does not build or publish tarballs.
+
+** 2. Preview the bracket
+
+Give =eb-cvmfs= the repository name, then =--= and the synchronization command:
+
+#+begin_src bash
+eb-cvmfs --dry-run repo.example -- /opt/site/bin/sync-module-cache
+#+end_src
+
+The preview prints the transaction-state check, transaction, synchronization and publish commands, plus the abort command used when synchronization fails.
+It runs none of them.
+
+** 3. Put the bracket in =[caches]=
+
+Set the site's cache command to the same command without =--dry-run=:
+
+#+begin_src toml
+[caches]
+command = "eb-cvmfs repo.example -- /opt/site/bin/sync-module-cache"
+
+[[caches.targets]]
+target = "cpu"
+config = "/opt/site/cache/cpu.toml"
+#+end_src
+
+=eb-pipeline= supplies the cache environment variables described in [[file:../reference/site-file.org][The site file]] to the synchronization command through =eb-cvmfs=.
+After a clean build, the cache phase checks that the repository is not already in a transaction, opens one, and runs the configured synchronization.
+A successful synchronization is published.
+A failed synchronization is aborted with =cvmfs_server abort -f=, and its exit status becomes the cache command's exit status.
+
+** 4. Test the configured command
+
+Run a dry plan to see that the cache phase names =eb-cvmfs=:
+
+#+begin_src bash
+eb-pipeline plan --site site.toml --list build.list --target cpu --build-type production
+#+end_src
+
+Then run the =eb-cvmfs --dry-run= command from step 2 under the same module and account environment that publishes the repository.
+
+** Related
+
+- [[file:../reference/cvmfs.org][The eb-cvmfs command]]
+- [[file:../reference/site-file.org][The site file]], for =[caches]=
