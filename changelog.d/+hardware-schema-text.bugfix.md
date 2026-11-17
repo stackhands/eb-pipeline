@@ -1,0 +1,1 @@
+`eb-pipeline schema` says which commands get the hardware class of `[targets.cpu_hardware]`: the source prefetch and build commands of each line, which build for one class of node, as they always have. It said that every command did, and did not say that `[targets.hardware]` is exported only when `cpu_hardware` is set.

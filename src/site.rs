@@ -501,6 +501,7 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
         for t in site.targets.iter().filter(|t| t.staged.unwrap_or(r.staged)) {
             let scope = Scope {
                 site,
+                site_file: None,
                 target: t,
                 build_type: None,
                 run_id: String::new(),
@@ -730,5 +731,30 @@ mod override_tests {
             serde_json::to_string(&a).unwrap(),
             serde_json::to_string(&b).unwrap()
         );
+    }
+}
+
+#[cfg(test)]
+mod route_doc_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    /// The placeholders that the schema text of a route key names.
+    fn named(key: &str) -> BTreeSet<&'static str> {
+        let doc = Route::FIELDS.iter().find(|f| f.key == key).unwrap().doc;
+        let mut out = BTreeSet::new();
+        let mut rest = doc;
+        while let Some(i) = rest.find('{') {
+            let j = rest[i..].find('}').unwrap();
+            out.insert(&rest[i + 1..i + j]);
+            rest = &rest[i + j + 1..];
+        }
+        out
+    }
+
+    #[test]
+    fn route_texts_name_the_placeholders_check_accepts() {
+        assert_eq!(named("args"), ROUTE_ALL.iter().copied().collect());
+        assert_eq!(named("shares_ro"), ROUTE_BASIC.iter().copied().collect());
     }
 }

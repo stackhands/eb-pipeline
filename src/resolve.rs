@@ -58,6 +58,9 @@ pub fn role_args(site: &Site, target: &Target, role: Role) -> Option<String> {
 pub struct Scope<'a> {
     /// The site file.
     pub site: &'a Site,
+    /// The path of the site file, absolute, exported as `EB_PIPELINE_SITE`
+    /// so that a command can run eb-pipeline on the same file.
+    pub site_file: Option<String>,
     /// The target the phase runs for.
     pub target: &'a Target,
     /// The build type, which picks the target's `build_types` override.
@@ -410,7 +413,10 @@ impl<'a> Scope<'a> {
         if let Some(c) = &fs.configs_repo {
             put("EASYBUILD_CONFIGS_REPOPATH", c.clone());
         }
-        put("EB_PIPELINE_SITE", s.site.name.clone());
+        if let Some(f) = &self.site_file {
+            put("EB_PIPELINE_SITE", f.clone());
+        }
+        put("EB_PIPELINE_SITE_NAME", s.site.name.clone());
         put("EB_PIPELINE_TARGET", self.target.name.clone());
         put("EB_PIPELINE_BUILD_TYPE", self.build_name().to_string());
         put("EB_PIPELINE_RUN_ID", self.run_id.clone());
@@ -492,12 +498,16 @@ impl<'a> Scope<'a> {
 /// environment, never through interpolation. The site's init is sourced
 /// without `-e` or `-u`, as a login shell sources it: EESSI's Lmod init
 /// reads variables it never sets. `module` and the command run under `-e`.
+/// The names are split with pathname expansion off, so that `module load`
+/// gets each one as written, and back on for `module load` itself.
 pub const MODULE_SCRIPT: &str =
     "if [ -n \"${EB_PIPELINE_SHELL_INIT:-}\" ]; then . \"$EB_PIPELINE_SHELL_INIT\"; fi
 set -e
 if [ -n \"${EB_PIPELINE_UNUSE_PATH:-}\" ]; then MODULEPATH=; export MODULEPATH; fi
 module purge
-for m in ${EB_PIPELINE_MODULES:-}; do module load \"$m\"; done
+set -f
+for m in ${EB_PIPELINE_MODULES:-}; do set +f; module load \"$m\"; done
+set +f
 exec \"$@\"";
 
 /// Group that applies to a package, if any. A version that does not parse
@@ -535,7 +545,13 @@ fn strip_nulls(v: Value) -> Value {
 }
 
 /// Resolved view of one or all targets after defaults and overrides.
-pub fn explain(site: &Site, target: Option<&str>, build_type: Option<&str>) -> Result<Value, Fail> {
+/// `site_file` is the `EB_PIPELINE_SITE` of the environment it shows.
+pub fn explain(
+    site: &Site,
+    site_file: Option<&str>,
+    target: Option<&str>,
+    build_type: Option<&str>,
+) -> Result<Value, Fail> {
     let selected: Vec<&Target> = match target {
         Some(t) => vec![site.target(t)?],
         None => site.targets.iter().collect(),
@@ -544,6 +560,7 @@ pub fn explain(site: &Site, target: Option<&str>, build_type: Option<&str>) -> R
     for t in selected {
         let scope = Scope {
             site,
+            site_file: site_file.map(str::to_string),
             target: t,
             build_type,
             run_id: "<run-id>".into(),

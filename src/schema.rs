@@ -201,7 +201,7 @@ doc_struct! {
             "Root of the route's runtime; exported as EB_PIPELINE_ROUTE_RUNTIME_ROOT and available as {runtime_root}."),
         #[serde(default)]
         shares_ro: Vec<String> => ("array of string", "[]", false,
-            "Paths shared read-only into the route; placeholders {phase_dir}, {log_dir}, {work_dir} allowed. Exported joined with `:` as EB_PIPELINE_ROUTE_SHARES_RO."),
+            "Paths shared read-only into the route; placeholders {phase_dir}, {log_dir}, {work_dir}, {target}, {phase} allowed, as in `args`. Exported joined with `:` as EB_PIPELINE_ROUTE_SHARES_RO."),
         #[serde(default)]
         shares_rw: Vec<String> => ("array of string", "[]", false,
             "Paths shared read-write into the route; same placeholders as `shares_ro`. Exported as EB_PIPELINE_ROUTE_SHARES_RW."),
@@ -281,9 +281,10 @@ doc_struct! {
         route: Option<Route> => ("table", "none", false, "CPU phase wrapper."),
         select: Option<Select> => ("table", "none", false,
             "Per-line target selection; without it every line is planned for every target."),
-        hardware: Option<Hardware> => ("table", "none", false, "Hardware identity."),
+        hardware: Option<Hardware> => ("table", "none", false,
+            "Hardware identity of the target's build nodes; exported only when `cpu_hardware` is set."),
         cpu_hardware: Option<Hardware> => ("table", "none", false,
-            "Hardware identity of CPU-role phases. When set, every command exports its class as EB_PIPELINE_HW_VENDOR_ID, EB_PIPELINE_HW_CPU_FAMILY and EB_PIPELINE_HW_MODEL: `cpu_hardware` for CPU-role commands, `hardware` for the rest."),
+            "Hardware identity of the nodes that build CPU-role units. When set, the source prefetch and build commands of each line export a class as EB_PIPELINE_HW_VENDOR_ID, EB_PIPELINE_HW_CPU_FAMILY and EB_PIPELINE_HW_MODEL: `cpu_hardware` for a line of a CPU-role unit, `hardware` for the rest. No other command exports them."),
         fetch_profile: Option<toml::Table> => ("table", "none", false,
             "Free-form table passed to source prefetch commands as EB_PIPELINE_FETCH_PROFILE, serialised as JSON with sorted keys."),
         #[serde(default)]
@@ -429,7 +430,8 @@ doc_struct! {
         #[serde(default)]
         unuse_path: bool => ("boolean", "false", false, "Clears MODULEPATH after `shell_init` and before loading `init`, so the first `init` module needs an absolute path."),
         #[serde(default = "d_shell")]
-        shell: String => ("string", "bash", false, "Shell that runs the module wrapper."),
+        shell: String => ("string", "bash", false,
+            "POSIX shell that runs the module wrapper, such as `bash` or `sh`."),
         shell_init: Option<String> => ("string", "none", false,
             "File sourced before `module` is called, for shells that do not define it. It is sourced without `set -e` or `set -u`; a `module` call that fails still stops the step."),
         eessi: Option<Eessi> => ("table", "none", false, "EESSI site layer."),

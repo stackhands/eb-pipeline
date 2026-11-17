@@ -1,0 +1,1 @@
+`eb-pipeline schema` lists all five placeholders that `targets.route.shares_ro` and `shares_rw` take: `{phase_dir}`, `{log_dir}`, `{work_dir}`, `{target}` and `{phase}`. It left out `{target}` and `{phase}`, which `check` accepts and a run replaces in the shares as it does in the route's `args`.

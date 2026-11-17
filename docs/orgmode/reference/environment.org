@@ -72,7 +72,8 @@ The keys of =[scheduler.env]= come first, and a variable of the table below with
 | =EASYBUILD_CUDA_COMPUTE_CAPABILITIES=                                                               | the target's =cuda_compute_capabilities=                                             | it is set                                            |
 | =EASYBUILD_READ_ONLY_INSTALLDIR=                                                                    | =filesystems.read_only_installdir_value=, =1= by default                             | =filesystems.read_only_installdir= is =true=         |
 | =EASYBUILD_CONFIGS_REPOPATH=                                                                        | =filesystems.configs_repo=                                                           | it is set                                            |
-| =EB_PIPELINE_SITE=                                                                                  | =site.name=                                                                          | always                                               |
+| =EB_PIPELINE_SITE=                                                                                  | the site file, as an absolute path                                                   | always                                               |
+| =EB_PIPELINE_SITE_NAME=                                                                             | =site.name=                                                                          | always                                               |
 | =EB_PIPELINE_TARGET=                                                                                | the target's name                                                                    | always                                               |
 | =EB_PIPELINE_BUILD_TYPE=                                                                            | the build type                                                                       | always                                               |
 | =EB_PIPELINE_RUN_ID=                                                                                | the run id                                                                           | always                                               |
@@ -88,6 +89,9 @@ The keys of =[scheduler.env]= come first, and a variable of the table below with
 | the one named by =modules.eessi.cpu_override_var=, =EESSI_SOFTWARE_SUBDIR_OVERRIDE= by default      | the target's =cpu_target=                                                            | =[modules.eessi]= is on and =cpu_target= is set      |
 | the one named by =modules.eessi.accel_override_var=, =EESSI_ACCELERATOR_TARGET_OVERRIDE= by default | the target's =accel_target=                                                          | =[modules.eessi]= is on and =accel_target= is set    |
 | =EESSI_SITE_SOFTWARE_PREFIX=                                                                        | the target's =site_prefix=, else =filesystems.install_root=                          | =[modules.eessi]= is on                              |
+
+=EB_PIPELINE_SITE=, =EB_PIPELINE_TARGET=, =EB_PIPELINE_BUILD_TYPE=, =EB_PIPELINE_RUN_ID= and =EB_PIPELINE_LOG_STAMP= are also the variables of the options above, so a command that runs =eb-pipeline= without those options gets the site file, target, build type, run id and log stamp of the run.
+=eb-pipeline= does not read =EB_PIPELINE_SITE_NAME=; =EB_PIPELINE__SITE__NAME=, with two underscores, is the variable that sets =name= in the site file.
 
 =[modules.eessi]= is on when the site file has the table and its =enabled= is not =false=.
 =[licences]= is on when its =enabled= and =enforce= are not =false=.
@@ -106,7 +110,7 @@ Some commands get more variables, set over those above.
 | =EB_PIPELINE_HW_VENDOR_ID=, =EB_PIPELINE_HW_CPU_FAMILY=, =EB_PIPELINE_HW_MODEL=             | the =vendor_id=, =cpu_family= and =model= of the target's =cpu_hardware= for a CPU-role unit, of its =hardware= otherwise | the prefetch and build commands, when the target has a =cpu_hardware= table     |
 | the keys of =targets.route.env=                                                             | their values, with the placeholders of the route replaced                                                                 | the commands that the route wraps                                               |
 | =EB_PIPELINE_ROUTE_RUNTIME_ROOT=                                                            | =targets.route.runtime_root=                                                                                              | the same, when it is set                                                        |
-| =EB_PIPELINE_ROUTE_SHARES_RO=, =EB_PIPELINE_ROUTE_SHARES_RW=                                | the entries of =targets.route.shares_ro= and =shares_rw=, joined with =:=                                                 | the same, when they are not empty                                               |
+| =EB_PIPELINE_ROUTE_SHARES_RO=, =EB_PIPELINE_ROUTE_SHARES_RW=                                | the entries of =targets.route.shares_ro= and =shares_rw=, with their placeholders replaced, joined with =:=               | the same, when they are not empty                                               |
 | =EB_PIPELINE_ROUTE_RECEIPT_DIGEST=                                                          | the value of the variable that =targets.route.receipt_digest_env= names                                                   | the same, when it is set                                                        |
 | =EASYBUILD_OUTPUT_STYLE=                                                                    | =basic=, whatever =[scheduler.env]= sets, so that =eb --last-log= prints the log path on one line                         | =eb-keep-logs failed=, after a line fails                                       |
 | =TZ=                                                                                        | =UTC=, so that =eb-keep-logs rotate= counts the age of a run from the midnight of its log stamp                           | =eb-keep-logs rotate=                                                           |
@@ -121,7 +125,9 @@ When =modules.init= is not empty, =modules.unuse_path= is =true= or =modules.she
 1. =EB_PIPELINE_SHELL_INIT=: the file it sources first, when set.
 2. =EB_PIPELINE_UNUSE_PATH=: when set, it empties =MODULEPATH=.
 3. =EB_PIPELINE_MODULES=: it runs =module purge=, then =module load= for each name in it, in order, then the command.
+   It splits the variable at white space and gives each name to =module load= as written: a name with a pattern in it, such as =GCC/*=, is not matched against file names.
 
+The wrapper is a script for a POSIX shell, such as =bash= or =sh=.
 The admit and rotate commands start without it.
 
 ** See also
