@@ -311,6 +311,143 @@ pub fn read(run_dir: &Path) -> Result<Summary, String> {
     Ok(s)
 }
 
+/// A run directory and its summary, or why it has none to show.
+pub struct RunEntry {
+    /// The run directory's name, its log stamp.
+    pub run: String,
+    /// The run directory, `<log_root>/<log-stamp>`.
+    pub dir: PathBuf,
+    /// Its summary, or why it has none to show.
+    pub summary: Result<Summary, String>,
+}
+
+/// The newest `last` run directories under `log_root`, newest first. With
+/// `target`, only the runs that have a directory for it, with only its entry.
+pub fn runs(log_root: &Path, target: Option<&str>, last: usize) -> Result<Vec<RunEntry>, String> {
+    let entries = match std::fs::read_dir(log_root) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(e) => return Err(format!("{}: {e}", log_root.display())),
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| crate::util::is_log_stamp(n))
+        .collect();
+    names.sort_unstable_by(|a, b| b.cmp(a));
+    let mut out = Vec::new();
+    for run in names {
+        if out.len() >= last {
+            break;
+        }
+        let dir = log_root.join(&run);
+        if target.is_some_and(|t| !dir.join(t).is_dir()) {
+            continue;
+        }
+        let summary = if dir.join(JSON).exists() {
+            read(&dir).map(|mut s| {
+                if let Some(t) = target {
+                    s.targets.retain(|x| x.name == t);
+                }
+                s
+            })
+        } else {
+            Err(format!(
+                "no {JSON}: the run is still going, or ended before writing one"
+            ))
+        };
+        out.push(RunEntry { run, dir, summary });
+    }
+    Ok(out)
+}
+
+/// `status` as text: a line per run, then a line per target, in columns
+/// that line up across the runs.
+pub fn status_text(runs: &[RunEntry]) -> String {
+    let targets = || {
+        runs.iter()
+            .filter_map(|r| r.summary.as_ref().ok())
+            .flat_map(|s| &s.targets)
+    };
+    let name_w = targets().map(|t| t.name.len()).max().unwrap_or(0);
+    let command_w = targets().map(|t| t.command.len()).max().unwrap_or(0);
+    let status_w = targets().map(|t| t.status.len()).max().unwrap_or(0);
+    let mut o = String::new();
+    for r in runs {
+        let s = match &r.summary {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = writeln!(o, "{}  {e}", r.run);
+                continue;
+            }
+        };
+        let _ = writeln!(
+            o,
+            "{}  {} (exit {})  {}",
+            r.run,
+            s.status,
+            s.exit_code,
+            r.dir.join(HTML).display()
+        );
+        for t in &s.targets {
+            let mut what: Vec<String> = t.counts.iter().map(|(k, v)| format!("{v} {k}")).collect();
+            if what.is_empty() {
+                what.push("no packages".into());
+            }
+            let phases: Vec<String> = t
+                .phases
+                .iter()
+                .filter(|p| p.status != "ok" && p.status != "not configured")
+                .map(|p| match p.exit_code {
+                    Some(c) => format!("{} {} (exit {c})", p.name, p.status),
+                    None => format!("{} {}", p.name, p.status),
+                })
+                .collect();
+            let phases = if phases.is_empty() {
+                String::new()
+            } else {
+                format!("; {}", phases.join(", "))
+            };
+            let _ = writeln!(
+                o,
+                "  {:<name_w$}  {:<command_w$}  {:<status_w$}  exit {:<3}  {:>11}  {}{phases}",
+                t.name,
+                t.command,
+                t.status,
+                t.exit_code,
+                duration_text(t.duration_seconds),
+                what.join(", "),
+            );
+        }
+    }
+    o
+}
+
+/// `status` as one JSON document.
+pub fn status_json(log_root: &Path, runs: &[RunEntry]) -> serde_json::Value {
+    let runs: Vec<serde_json::Value> = runs
+        .iter()
+        .map(|r| {
+            let mut v = serde_json::json!({
+                "run": r.run,
+                "dir": r.dir.display().to_string(),
+            });
+            match &r.summary {
+                Ok(s) => v["summary"] = serde_json::to_value(s).unwrap_or_default(),
+                Err(e) => v["error"] = e.clone().into(),
+            }
+            v
+        })
+        .collect();
+    serde_json::json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "status",
+        "log_root": log_root.display().to_string(),
+        "runs": runs,
+    })
+}
+
 /// `12.3 s`, `4 min 05 s`, `2 h 03 min`.
 pub fn duration_text(secs: f64) -> String {
     if secs < 60.0 {

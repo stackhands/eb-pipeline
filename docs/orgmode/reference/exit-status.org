@@ -26,7 +26,7 @@ An error that ends a command is written to stderr as =ERROR [main] -: MESSAGE=.
 
 *** 0
 
-- =check=, =schema=, =init=, =explain=, =targets= and =plan= did what they were asked.
+- =check=, =schema=, =init=, =explain=, =targets=, =status= and =plan= did what they were asked; =status= also when the log root holds no run.
 - =run --dry-run= printed its commands.
 - =run=: no line failed, was refused or is pending, and no phase failed.
   A deselected line, a phase that is not configured, an =unsharded= shard phase and a =logs= phase that another rotation made =skipped= all leave the status at 0.
@@ -41,6 +41,7 @@ An error that ends a command is written to stderr as =ERROR [main] -: MESSAGE=.
 - =run=: =eb-keep-logs rotate= exited with a status other than 0 and 75.
 - =run=: a log file, a log directory, the list of selected lines or the result file could not be written.
 - =plan=: the shard plan given to =--shard-plan= could not be read, or the plan could not be written to =--out=.
+- =status=: the log root could not be read.
 
 A failed =eb-keep-logs failed= after a failed line leaves the status as it is, with a =WARN= line.
 So does a run summary that cannot be written, as [[file:run-summary.org][The run summary]] says.

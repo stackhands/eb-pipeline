@@ -42,6 +42,14 @@ grep -o "href=\"[^\"]*\"" site/logs/20261117_090000/summary.html | sort -u'
 expect_line '<title>eb-pipeline run 20261117_090000: failed</title>'
 expect_line 'href="zen2/Broken-1.0-GCCcore-15.2.0.stdout.log"'
 
+run 'eb-pipeline status --site site.toml'
+expect_status 0
+expect_line '20261117_090000  failed (exit 1)  $WORK/site/logs/20261117_090000/summary.html'
+
+run 'eb-pipeline status --site site.toml --target zen4 --format json'
+expect_status 0
+expect_line '  "kind": "status",'
+
 run 'mkdir -p site/logs/20261117_100000/summary.json
 eb-pipeline run --site site.toml --list example.list --target zen4 --build-type production --log-stamp 20261117_100000; echo "exit $?"'
 expect_line 'exit 0'

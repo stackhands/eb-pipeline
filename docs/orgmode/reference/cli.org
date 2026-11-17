@@ -16,6 +16,7 @@ eb-pipeline schema
 eb-pipeline init [OPTIONS]
 eb-pipeline explain [OPTIONS] --site <SITE>
 eb-pipeline targets [OPTIONS] --site <SITE>
+eb-pipeline status [OPTIONS] --site <SITE>
 eb-pipeline plan [OPTIONS] --site <SITE> --list <LIST> --target <TARGET> --build-type <BUILD_TYPE>
 eb-pipeline run [OPTIONS] --site <SITE> --list <LIST> --target <TARGET> --build-type <BUILD_TYPE>
 #+end_example
@@ -33,6 +34,7 @@ Commands:
   init     Write a starter site file from a built-in template
   explain  Print the resolved configuration of one or all targets
   targets  Print the target names in file order, for a CI matrix or a shell loop
+  status   Print the last runs under the log root, newest first, from their summaries
   plan     Compute phases, launch lines, environments and tool calls without executing
   run      Execute the plan's phases as subprocesses
   help     Print this message or the help of the given subcommand(s)
@@ -58,10 +60,10 @@ command line wins. EB_PIPELINE__SECTION__KEY=value sets one site file value, for
 example EB_PIPELINE__FILESYSTEMS__SCRATCH=/scratch/eb; the result is validated
 like the file.
 
-Output streams: stdout carries plan, explain, schema, init, targets and run --dry-run
-output only. Events go to stderr as `LEVEL [phase] target: message`. The result JSON
-goes to --result, and each run's summary to summary.json and summary.html in its run
-directory, <log_root>/<log-stamp>/.
+Output streams: stdout carries plan, explain, schema, init, status, targets and run
+--dry-run output only. Events go to stderr as `LEVEL [phase] target: message`. The
+result JSON goes to --result, and each run's summary to summary.json and
+summary.html in its run directory, <log_root>/<log-stamp>/.
 
 Exit codes:
    0  all requested work completed
@@ -104,6 +106,7 @@ No command takes an argument other than its options.
 | =init=    | Print a built-in template site file, or write it to a new file.                                                                                     |
 | =explain= | Print what each target resolves to: paths, launch lines and the environment of its commands.                                                        |
 | =targets= | Print the names of the targets in the order of the site file.                                                                                       |
+| =status=  | Print the last runs under the log root, newest first, from the summary of each run directory.                                                       |
 | =plan=    | Print the plan of a run as JavaScript Object Notation (JSON): its phases and every command with its launch line and environment. It starts nothing. |
 | =run=     | Run the phases of the plan, one command at a time, write the result file, and add the run to the summary of its run directory.                      |
 | =help=    | Print the help of the program, or of the command it names.                                                                                          |
@@ -165,6 +168,18 @@ It shows =<run-id>= and =<log-stamp>= where a run puts its own.
 | =--site FILE=     | =EB_PIPELINE_SITE= | The site file; required.                                                                            |
 | =--format FORMAT= |                    | =text=, the default, prints one name per line; =json= prints a JSON array of the names on one line. |
 
+*** status
+
+| Option            | Variable             | Meaning                                                                                             |
+|-------------------+----------------------+-----------------------------------------------------------------------------------------------------|
+| =--site FILE=     | =EB_PIPELINE_SITE=   | The site file; required.                                                                            |
+| =--target NAME=   | =EB_PIPELINE_TARGET= | Only the runs that have a log directory for the target, with only its entry; every run when absent. |
+| =--last N=        |                      | How many runs to print, from 1 to 65535; 10 when absent. Any other value is refused, with exit 2.   |
+| =--format FORMAT= |                      | =text=, the default, prints a line per run and a line per target; =json= prints one JSON document.  |
+
+=status= reads the directories under =filesystems.log_root= whose names are log stamps, newest first, and leaves out every other entry.
+[[file:run-summary.org][The run summary]] shows what it prints.
+
 *** plan
 
 | Option              | Variable                 | Meaning                                                                                                                                                                          |
@@ -203,7 +218,7 @@ Each option in the tables above that names a variable reads it when the option i
 | Status | Meaning                                                                                                                                                                                                                                                      |
 |--------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 |      0 | All requested work completed.                                                                                                                                                                                                                                |
-|      1 | =run=: a line or a phase failed. =plan=: the shard plan could not be read. Any command: an output file could not be written.                                                                                                                                 |
+|      1 | =run=: a line or a phase failed. =plan=: the shard plan could not be read. =status=: the log root could not be read. Any command: an output file could not be written.                                                                                       |
 |      2 | A usage error, an invalid site file, an unknown target, a list that cannot be read, is empty or has a quote that is not closed, an easystack that gives no lines as written, a tool below its =min_version=, or an =init --out= file that cannot be created. |
 |     75 | =run=: a resource was busy or a step is pending; run it again.                                                                                                                                                                                               |
 |     78 | =run=: a precondition, admission or =eb-staged-rebuild= refused.                                                                                                                                                                                             |
@@ -222,7 +237,7 @@ The commands other than =run= exit 0, 1 or 2.
 | the plan, =plan --out=            | What =plan= prints; [[file:plan-and-result.org][The plan and result files]] lists its keys.                                                                                                                                                                                                                                                         |
 | the result file, =run --result=   | What the run did, line by line and phase by phase; [[file:plan-and-result.org][The plan and result files]] lists its keys.                                                                                                                                                                                                                          |
 | =LOG_ROOT/LOG_STAMP/TARGET/=      | The log directory of a run, under =filesystems.log_root=; [[file:log-tree.org][The log tree and its locks]] lists its files.                                                                                                                                                                                                                 |
-| =LOG_ROOT/LOG_STAMP/summary.json= | The summary of the runs with that log stamp, which each =run= updates, with =summary.html= beside it; [[file:run-summary.org][The run summary]] lists its keys.                                                                                                                                                                                 |
+| =LOG_ROOT/LOG_STAMP/summary.json= | The summary of the runs with that log stamp, which each =run= updates and =status= reads, with =summary.html= beside it; [[file:run-summary.org][The run summary]] lists its keys.                                                                                                                                                              |
 
 A list line is split into words as a shell splits them, with single and double quotes.
 

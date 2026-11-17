@@ -22,10 +22,10 @@ command line wins. EB_PIPELINE__SECTION__KEY=value sets one site file value, for
 example EB_PIPELINE__FILESYSTEMS__SCRATCH=/scratch/eb; the result is validated
 like the file.
 
-Output streams: stdout carries plan, explain, schema, init, targets and run --dry-run
-output only. Events go to stderr as `LEVEL [phase] target: message`. The result JSON
-goes to --result, and each run's summary to summary.json and summary.html in its run
-directory, <log_root>/<log-stamp>/.
+Output streams: stdout carries plan, explain, schema, init, status, targets and run
+--dry-run output only. Events go to stderr as `LEVEL [phase] target: message`. The
+result JSON goes to --result, and each run's summary to summary.json and
+summary.html in its run directory, <log_root>/<log-stamp>/.
 
 ";
 
@@ -91,8 +91,23 @@ enum Cmd {
         #[arg(long, env = "EB_PIPELINE_SITE")]
         site: PathBuf,
         /// `text`: one name per line; `json`: a JSON array on one line.
-        #[arg(long, value_enum, default_value_t = TargetsFormat::Text)]
-        format: TargetsFormat,
+        #[arg(long, value_enum, default_value_t = TextOrJson::Text)]
+        format: TextOrJson,
+    },
+    /// Print the last runs under the log root, newest first, from their summaries.
+    Status {
+        /// Site file.
+        #[arg(long, env = "EB_PIPELINE_SITE")]
+        site: PathBuf,
+        /// Only the runs of this target, with only its entry.
+        #[arg(long, env = "EB_PIPELINE_TARGET")]
+        target: Option<String>,
+        /// How many runs.
+        #[arg(long, default_value_t = 10, value_parser = clap::value_parser!(u16).range(1..))]
+        last: u16,
+        /// `text`: a line per run and per target; `json`: one JSON document.
+        #[arg(long, value_enum, default_value_t = TextOrJson::Text)]
+        format: TextOrJson,
     },
     /// Compute phases, launch lines, environments and tool calls without executing.
     Plan {
@@ -153,7 +168,7 @@ enum Format {
 }
 
 #[derive(Clone, Copy, ValueEnum)]
-enum TargetsFormat {
+enum TextOrJson {
     Text,
     Json,
 }
@@ -259,19 +274,46 @@ fn cmd_explain(
     Ok(exit::OK)
 }
 
-fn cmd_targets(site_path: &Path, format: TargetsFormat) -> Result<i32, Fail> {
+fn cmd_targets(site_path: &Path, format: TextOrJson) -> Result<i32, Fail> {
     let s = load_valid(site_path, None)?;
     let names: Vec<&str> = s.targets.iter().map(|t| t.name.as_str()).collect();
     match format {
-        TargetsFormat::Text => {
+        TextOrJson::Text => {
             for n in &names {
                 println!("{n}");
             }
         }
         // Compact, unlike write_json: GITHUB_OUTPUT and the like take one `name=value` line.
-        TargetsFormat::Json => {
+        TextOrJson::Json => {
             println!("{}", serde_json::to_string(&names).expect("serializable"))
         }
+    }
+    Ok(exit::OK)
+}
+
+fn cmd_status(
+    site_path: &Path,
+    target: Option<&str>,
+    last: u16,
+    format: TextOrJson,
+) -> Result<i32, Fail> {
+    let s = load_valid(site_path, None)?;
+    if let Some(t) = target {
+        s.target(t)?;
+    }
+    let root = Path::new(&s.filesystems.log_root);
+    let runs = summary::runs(root, target, last.into()).map_err(|e| Fail::new(exit::FAILED, e))?;
+    if runs.is_empty() {
+        log(
+            "INFO",
+            "status",
+            target.unwrap_or("-"),
+            &format!("no runs under {}", root.display()),
+        );
+    }
+    match format {
+        TextOrJson::Text => print!("{}", summary::status_text(&runs)),
+        TextOrJson::Json => write_json(&summary::status_json(root, &runs), None)?,
     }
     Ok(exit::OK)
 }
@@ -478,6 +520,12 @@ fn main() {
             format,
         } => cmd_explain(site, target.as_deref(), build_type.as_deref(), *format),
         Cmd::Targets { site, format } => cmd_targets(site, *format),
+        Cmd::Status {
+            site,
+            target,
+            last,
+            format,
+        } => cmd_status(site, target.as_deref(), *last, *format),
         Cmd::Plan {
             common,
             out,

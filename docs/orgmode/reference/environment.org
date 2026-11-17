@@ -11,17 +11,17 @@ The variables =eb-pipeline= reads in place of an option or a site file value, th
 An option that is not on the command line takes its value from its variable.
 An option on the command line wins.
 
-| Variable                 | Option         | Commands                                     |
-|--------------------------+----------------+----------------------------------------------|
-| =EB_PIPELINE_SITE=       | =--site=       | =check=, =explain=, =targets=, =plan=, =run= |
-| =EB_PIPELINE_LIST=       | =--list=       | =plan=, =run=                                |
-| =EB_PIPELINE_TARGET=     | =--target=     | =explain=, =plan=, =run=                     |
-| =EB_PIPELINE_BUILD_TYPE= | =--build-type= | =explain=, =plan=, =run=                     |
-| =EB_PIPELINE_RUN_ID=     | =--run-id=     | =plan=, =run=                                |
-| =EB_PIPELINE_LOG_STAMP=  | =--log-stamp=  | =plan=, =run=                                |
-| =EB_PIPELINE_LISTS_DIR=  | =--lists-dir=  | =check=                                      |
+| Variable                 | Option         | Commands                                               |
+|--------------------------+----------------+--------------------------------------------------------|
+| =EB_PIPELINE_SITE=       | =--site=       | =check=, =explain=, =targets=, =status=, =plan=, =run= |
+| =EB_PIPELINE_LIST=       | =--list=       | =plan=, =run=                                          |
+| =EB_PIPELINE_TARGET=     | =--target=     | =explain=, =status=, =plan=, =run=                     |
+| =EB_PIPELINE_BUILD_TYPE= | =--build-type= | =explain=, =plan=, =run=                               |
+| =EB_PIPELINE_RUN_ID=     | =--run-id=     | =plan=, =run=                                          |
+| =EB_PIPELINE_LOG_STAMP=  | =--log-stamp=  | =plan=, =run=                                          |
+| =EB_PIPELINE_LISTS_DIR=  | =--lists-dir=  | =check=                                                |
 
-=--out=, =--result=, =--shard-plan=, =--format=, =--dry-run= and =--probe-tools= have no variable.
+=--out=, =--result=, =--shard-plan=, =--format=, =--last=, =--dry-run= and =--probe-tools= have no variable.
 
 ** Site file values
 

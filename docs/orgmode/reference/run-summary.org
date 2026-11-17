@@ -92,8 +92,8 @@ cat site/logs/20261117_090000/summary.json
         "failed": 1,
         "success": 1
       },
-      "duration_seconds": 0.041,
-      "ended_at": "2026-11-17T06:41:07.268482292+00:00",
+      "duration_seconds": 0.042,
+      "ended_at": "2026-11-17T06:48:31.833249380+00:00",
       "exit_code": 1,
       "list": "build.list",
       "log_dir": "$WORK/site/logs/20261117_090000/zen2",
@@ -110,7 +110,7 @@ cat site/logs/20261117_090000/summary.json
           "unit": "all"
         },
         {
-          "duration_seconds": 0.02,
+          "duration_seconds": 0.021,
           "easyconfig": "Broken-1.0-GCCcore-15.2.0.eb",
           "exit_code": 1,
           "log": "$WORK/site/logs/20261117_090000/zen2/Broken-1.0-GCCcore-15.2.0.stdout.log",
@@ -134,7 +134,7 @@ cat site/logs/20261117_090000/summary.json
 ...
       ],
       "run_id": "20261117_090000",
-      "started_at": "2026-11-17T06:41:07.227208990+00:00",
+      "started_at": "2026-11-17T06:48:31.791640166+00:00",
       "status": "failed"
     },
     {
@@ -144,19 +144,19 @@ cat site/logs/20261117_090000/summary.json
         "success": 1
       },
       "duration_seconds": 0.021,
-      "ended_at": "2026-11-17T06:41:07.291873067+00:00",
+      "ended_at": "2026-11-17T06:48:31.856785185+00:00",
       "exit_code": 0,
       "list": "example.list",
       "log_dir": "$WORK/site/logs/20261117_090000/zen4",
       "name": "zen4",
 ...
       "run_id": "20261117_090000",
-      "started_at": "2026-11-17T06:41:07.271100994+00:00",
+      "started_at": "2026-11-17T06:48:31.836041801+00:00",
       "status": "success"
     }
   ],
   "tool": "eb-pipeline 0.3.0",
-  "updated_at": "2026-11-17T06:41:07.292018764+00:00"
+  "updated_at": "2026-11-17T06:48:31.856935881+00:00"
 }
 #+end_example
 
@@ -254,6 +254,81 @@ href="zen4/Example-1.0-GCCcore-15.2.0.stdout.log"
 #+end_example
 
 =eb-keep-logs rotate= gzips the =*.log= and =*.txt= files of old runs and leaves the two files as they are, so the links of an old page name each log as the run wrote it, before it gained =.gz=.
+
+** Reading the last runs
+
+=eb-pipeline status= prints the newest runs under the log root from their summaries; [[file:cli.org][The eb-pipeline command]] lists its options.
+
+#+begin_src bash
+eb-pipeline status --site site.toml
+#+end_src
+
+#+begin_example
+20261117_090000  failed (exit 1)  $WORK/site/logs/20261117_090000/summary.html
+  zen2  run  failed   exit 1          0.0 s  1 failed, 1 success; build failed
+  zen4  run  success  exit 0          0.0 s  1 success
+#+end_example
+
+Each run is a line with its status, its exit status and its page, then a line for each target with its command, status, exit status and duration, the number of packages with each status, and the phases that came to neither =ok= nor =not configured=, such as =logs skipped (exit 75)= for a rotation left to another.
+A run directory without =summary.json=, of a run that is still going or that ended before it wrote one, is the line =LOG_STAMP  no summary.json: the run is still going, or ended before writing one=, and one whose summary cannot be read names the error.
+With =--target=, =status= shows only the runs that have a log directory for that target, and only its entry in each; the line of a run keeps the status of the whole run.
+When the log root holds no run, =status= prints nothing on stdout, writes =INFO [status] -: no runs under LOG_ROOT= to stderr, and exits 0.
+
+=--format json= prints one document:
+
+#+begin_src bash
+eb-pipeline status --site site.toml --target zen4 --format json
+#+end_src
+
+#+begin_example
+{
+  "kind": "status",
+  "log_root": "$WORK/site/logs",
+  "runs": [
+    {
+      "dir": "$WORK/site/logs/20261117_090000",
+      "run": "20261117_090000",
+      "summary": {
+        "exit_code": 1,
+        "kind": "summary",
+        "run": "20261117_090000",
+        "schema_version": 1,
+        "site": "example",
+        "status": "failed",
+        "targets": [
+          {
+            "build_type": "production",
+            "command": "run",
+...
+            "name": "zen4",
+...
+            "status": "success"
+          }
+        ],
+        "tool": "eb-pipeline 0.3.0",
+        "updated_at": "2026-11-17T06:48:31.856935881+00:00"
+      }
+    }
+  ],
+  "schema_version": 1
+}
+#+end_example
+
+| Key              | Type    | Meaning                 |
+|------------------+---------+-------------------------|
+| =kind=           | string  | =status=.               |
+| =log_root=       | string  | =filesystems.log_root=. |
+| =runs=           | array   | The runs, newest first. |
+| =schema_version= | integer | =1=.                    |
+
+*** Each entry of =runs=
+
+| Key       | Type   | Meaning                                                                                |
+|-----------+--------+----------------------------------------------------------------------------------------|
+| =dir=     | string | The run directory.                                                                     |
+| =error=   | string | Why the run has no summary to show, in place of =summary=.                             |
+| =run=     | string | The name of the run directory, its =LOG_STAMP=.                                        |
+| =summary= | object | The run's =summary.json=, with only the entry of the target when =--target= names one. |
 
 ** See also
 
