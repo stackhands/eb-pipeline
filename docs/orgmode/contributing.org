@@ -97,3 +97,4 @@ A file of more than a few lines that a page shows lives beside the page, as =doc
 API documentation is written in the code, and the first sentence of each comment is the summary shown in lists.
 In Rust it is a =///= comment above each =pub= item and a =//!= comment at the top of each module.
 A site file key is documented once, in the =doc_struct!= table of =src/schema.rs=: that text is both what =eb-pipeline schema= prints and the doc comment of the key's field.
+[[file:reference/site-file.org][The site file]] lists the same keys, and =tests/docs.rs= fails when one of its tables and the schema differ in a key, its order, its type or its default.

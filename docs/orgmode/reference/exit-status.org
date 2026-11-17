@@ -116,4 +116,4 @@ A run in which one line failed and another was refused exits 1.
 
 ** See also
 
-- [[file:cli.org][The eb-pipeline command]]
+- [[file:cli.org][The eb-pipeline command]] and [[file:site-file.org][The site file]]

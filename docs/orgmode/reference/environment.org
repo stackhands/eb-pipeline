@@ -90,6 +90,7 @@ The keys of =[scheduler.env]= come first, and a variable of the table below with
 | =EESSI_SITE_SOFTWARE_PREFIX=                                                                        | the target's =site_prefix=, else =filesystems.install_root=                          | =[modules.eessi]= is on                              |
 
 =[modules.eessi]= is on when the site file has the table and its =enabled= is not =false=.
+=[licences]= is on when its =enabled= and =enforce= are not =false=.
 =EESSI= stands for the European Environment for Scientific Software Installations.
 
 *** Set for some commands
@@ -125,4 +126,4 @@ The admit and rotate commands start without it.
 
 ** See also
 
-- [[file:cli.org][The eb-pipeline command]]
+- [[file:cli.org][The eb-pipeline command]] and [[file:site-file.org][The site file]]

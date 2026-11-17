@@ -1,0 +1,1 @@
+The reference has a page on the site file, with a table per section that gives every key its type, default and meaning, and sections on the placeholders, `{target}` in paths, the `[logs]` rotation and the lines that go through `[rebuild]`. `tests/docs.rs` fails when a table and `eb_pipeline::schema::SECTIONS` differ in a key, its order, its type or its default.
