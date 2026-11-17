@@ -18,8 +18,8 @@ eb-pipeline explain [OPTIONS] --site <SITE>
 eb-pipeline targets [OPTIONS] --site <SITE>
 eb-pipeline status [OPTIONS] --site <SITE>
 eb-pipeline metrics [OPTIONS] --result <RESULT>
-eb-pipeline plan [OPTIONS] --site <SITE> --list <LIST> --target <TARGET> --build-type <BUILD_TYPE>
-eb-pipeline run [OPTIONS] --site <SITE> --list <LIST> --target <TARGET> --build-type <BUILD_TYPE>
+eb-pipeline plan [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>
+eb-pipeline run [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>
 eb-pipeline watch [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>
 #+end_example
 
@@ -60,9 +60,10 @@ Examples:
   eb-pipeline metrics --result result.json
 
 Configuration: every flag above falls back to an EB_PIPELINE_<FLAG> variable
-(EB_PIPELINE_SITE, EB_PIPELINE_LIST, EB_PIPELINE_TARGET, EB_PIPELINE_BUILD_TYPE,
-EB_PIPELINE_RUN_ID, EB_PIPELINE_LOG_STAMP, EB_PIPELINE_LISTS_DIR,
-EB_PIPELINE_RESULT); a flag on the command line wins.
+(EB_PIPELINE_SITE, EB_PIPELINE_LIST, EB_PIPELINE_PACKAGE_PLAN,
+EB_PIPELINE_TARGET, EB_PIPELINE_BUILD_TYPE, EB_PIPELINE_RUN_ID,
+EB_PIPELINE_LOG_STAMP, EB_PIPELINE_LISTS_DIR, EB_PIPELINE_RESULT); a flag on
+the command line wins.
 EB_PIPELINE__SECTION__KEY=value sets one site file value, for example
 EB_PIPELINE__FILESYSTEMS__SCRATCH=/scratch/eb; the result is validated like the
 file.
@@ -208,7 +209,9 @@ Exit 2 means the file is missing, is not JSON, or its =kind= is not =result=.
 | Option              | Variable                 | Meaning                                                                                                                                                                          |
 |---------------------+--------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | =--site FILE=       | =EB_PIPELINE_SITE=       | The site file; required.                                                                                                                                                         |
-| =--list FILE=       | =EB_PIPELINE_LIST=       | The build list, or an easystack: a file whose name ends in =.yml= or =.yaml=; required.                                                                                          |
+| =--list FILE=       | =EB_PIPELINE_LIST=       | The build list, or an easystack whose name ends in =.yml= or =.yaml=; required unless =--package-plan= is present.                                                            |
+| =--package-plan DIR= | =EB_PIPELINE_PACKAGE_PLAN= | An =eb-stack package plan= bundle. Its emitted recipes replace the build list. Mutually exclusive with =--list=.                                                          |
+| =--verify-package-plan= |                          | Add ecosystem-native verification after the package-plan build. Requires =--package-plan=.                                                                                  |
 | =--target NAME=     | =EB_PIPELINE_TARGET=     | The target to build on; required.                                                                                                                                                |
 | =--build-type NAME= | =EB_PIPELINE_BUILD_TYPE= | The build type; required. A name without a =[targets.build_types.NAME]= table takes the values of the target.                                                                    |
 | =--run-id ID=       | =EB_PIPELINE_RUN_ID=     | The run label passed to the tools; =<run-id>= when absent.                                                                                                                       |

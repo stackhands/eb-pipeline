@@ -15,13 +15,16 @@ An option on the command line wins.
 |--------------------------+----------------+-----------------------------------------------------------------|
 | =EB_PIPELINE_SITE=       | =--site=       | =check=, =explain=, =targets=, =status=, =plan=, =run=, =watch= |
 | =EB_PIPELINE_LIST=       | =--list=       | =plan=, =run=                                                   |
+| =EB_PIPELINE_PACKAGE_PLAN= | =--package-plan= | =plan=, =run=                                                |
 | =EB_PIPELINE_TARGET=     | =--target=     | =explain=, =status=, =plan=, =run=, =watch=                     |
 | =EB_PIPELINE_BUILD_TYPE= | =--build-type= | =explain=, =plan=, =run=, =watch=                               |
 | =EB_PIPELINE_RUN_ID=     | =--run-id=     | =plan=, =run=, =watch=                                          |
 | =EB_PIPELINE_LOG_STAMP=  | =--log-stamp=  | =plan=, =run=, =watch=                                          |
 | =EB_PIPELINE_LISTS_DIR=  | =--lists-dir=  | =check=                                                         |
 
-=--out=, =--result=, =--shard-plan=, =--format=, =--last=, =--dry-run=, =--probe-tools=, =--adopt= and =--plan-out= have no variable.
+=--out=, =--result=, =--shard-plan=, =--verify-package-plan=, =--format=,
+=--last=, =--dry-run=, =--probe-tools=, =--adopt= and =--plan-out= have no
+variable.
 
 ** Site file values
 
