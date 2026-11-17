@@ -1,0 +1,162 @@
+#+TITLE: Write a site file for your cluster
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Write a site file for your cluster
+
+Write the site file that tells eb-pipeline how your cluster builds software: how jobs are launched, which targets it builds for, and where builds, installs and logs go.
+This guide writes one for Example University, whose cluster has a Slurm partition =cpu= of AMD Zen 4 nodes and EasyBuild in a module, and builds as the account =alice=.
+For a site on top of the European Environment for Scientific Software Installations (EESSI), with several node types, start from the =eessi-site= template of [[file:../reference/templates.org][The site file templates]] instead.
+
+** Before you start
+
+- eb-pipeline, as in [[file:install.org][Install eb-pipeline]].
+- The values of your cluster: the partition and limits that build jobs get, the build account and its group, the directories for installs, builds and logs, and the name of the EasyBuild module.
+- A build list for each target, with one easyconfig on each line, in a directory of its own.
+
+** Steps
+
+1. Write the small-cluster template to a new site file:
+
+   #+begin_src bash
+   eb-pipeline init --template small-cluster --out site.toml
+   #+end_src
+
+   #+begin_example
+   INFO [init] -: wrote template small-cluster to site.toml
+   #+end_example
+
+2. Replace its values with your cluster's:
+
+   | Section            | What to set                                                                                                                                                                                                                               |
+   |--------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+   | =[site]=           | The name of the site, which job names and logs carry; the account that owns the installs and their group, which the commands get as =EB_PIPELINE_BUILD_ACCOUNT= and =EB_PIPELINE_DEFAULT_GROUP=; a label for the generation of the stack. |
+   | =[scheduler]=      | =slurm=, to launch every command with =srun=, or =local=, to run it directly.                                                                                                                                                             |
+   | =[phase_defaults]= | The launch arguments of each role: =plan=, =short=, =build=, =cpu= and =cache=. Ask for one task in each: =srun= starts the command once per task.                                                                                        |
+   | =[[targets]]=      | One table per node type you build for, with its name and build lists; =default = true= marks the default target of the site.                                                                                                              |
+   | =[filesystems]=    | Where builds run, where EasyBuild looks for sources, where software and modules are installed, and where the logs go.                                                                                                                     |
+   | =[modules]=        | The modules that a build loads, here only =EasyBuild=.                                                                                                                                                                                    |
+   | =[logs]=           | Keep the EasyBuild log of a failed line, and rotate the log tree.                                                                                                                                                                         |
+
+   [[file:../reference/site-file.org][The site file]] lists every key of every section.
+   For Example University, the file becomes:
+
+#+INCLUDE: "write-a-site-file/site.toml" src toml
+
+3. [@3] Check the file, then check it with the directory of your build lists, and with the tools it names:
+
+   #+begin_src bash
+   eb-pipeline check --site site.toml
+   eb-pipeline check --site site.toml --lists-dir lists
+   eb-pipeline check --site site.toml --probe-tools
+   #+end_src
+
+   #+begin_example
+   INFO [check] example: site file is valid
+   INFO [check] example: site file is valid
+   INFO [check] example: site file is valid
+   #+end_example
+
+   =--lists-dir= checks that each target's =build_lists= are files in that directory.
+   =--probe-tools= starts =--version= of each sibling tool that an enabled phase calls, here eb-keep-logs for =[logs]=, and compares it with the =min_version= of its =[site.tools]= table.
+4. Read what the site file comes to for the target: its install roots, the environment of its commands and the launch line of each role:
+
+   #+begin_src bash
+   eb-pipeline explain --site site.toml --target zen4 --build-type production
+   #+end_src
+
+   #+begin_example
+   build_type = "production"
+   ...
+   [[targets]]
+   build_lists = ["zen4.list"]
+   default = true
+   modules_root = "/opt/site/modules"
+   name = "zen4"
+   site_prefix = "/opt/site"
+   software_root = "/opt/site/software"
+
+   [targets.env]
+   EASYBUILD_BUILDPATH = "/scratch/alice/build"
+   EASYBUILD_INSTALLPATH = "/opt/site"
+   EASYBUILD_SOURCEPATH = "/opt/site/sources"
+   EASYBUILD_TMPDIR = "/scratch/alice/tmp"
+   EB_PIPELINE_BUILD_ACCOUNT = "alice"
+   EB_PIPELINE_BUILD_TYPE = "production"
+   EB_PIPELINE_DEFAULT_GROUP = "alice"
+   EB_PIPELINE_LOG_DIR = "/opt/site/logs/<log-stamp>/zen4"
+   EB_PIPELINE_LOG_STAMP = "<log-stamp>"
+   EB_PIPELINE_MODULES = "EasyBuild"
+   EB_PIPELINE_RUN_ID = "<run-id>"
+   EB_PIPELINE_SITE = "example"
+   EB_PIPELINE_TARGET = "zen4"
+
+   [targets.phases.build]
+   args = "-p cpu -N 1 --ntasks-per-node=1 -c 16 -t 1-00:00:00"
+   launch = [
+       "srun",
+       "--job-name=example-production-build",
+   ...
+   #+end_example
+
+5. To change a value for one run without editing the file, set it in a variable named =EB_PIPELINE__SECTION__KEY=, here a node-local build directory:
+
+   #+begin_src bash
+   EB_PIPELINE__FILESYSTEMS__BUILD_PATH=/local/alice/build eb-pipeline explain --site site.toml --target zen4 | grep BUILDPATH
+   #+end_src
+
+   #+begin_example
+   INFO [site] -: filesystems.build_path set from EB_PIPELINE__FILESYSTEMS__BUILD_PATH
+   EASYBUILD_BUILDPATH = "/local/alice/build"
+   #+end_example
+
+   [[file:../reference/environment.org][Environment variables]] gives the rules for these names.
+
+** Check that it worked
+
+Ask for a dry run of a build list, which prints every command a run would start, and starts none:
+
+#+begin_src bash
+eb-pipeline run --site site.toml --list lists/zen4.list --target zen4 --build-type production --dry-run
+#+end_src
+
+#+begin_example
+# [licences] not configured
+# [shard] not configured
+# [sources] not configured
+# [admission] not configured
+[build] srun --job-name=example-production-build -p cpu -N 1 --ntasks-per-node=1 -c 16 -t 1-00:00:00 bash -c 'if [ -n "${EB_PIPELINE_SHELL_INIT:-}" ]; then . "$EB_PIPELINE_SHELL_INIT"; fi
+set -e
+if [ -n "${EB_PIPELINE_UNUSE_PATH:-}" ]; then MODULEPATH=; export MODULEPATH; fi
+module purge
+for m in ${EB_PIPELINE_MODULES:-}; do module load "$m"; done
+exec "$@"' eb-pipeline eb Example-1.0-GCCcore-15.2.0.eb --tmp-logdir=/opt/site/logs/20261117_032712/zen4/easybuild-logs/Example-1.0-GCCcore-15.2.0
+...
+# [caches] not configured
+[logs] TZ=UTC srun --job-name=example-production-logs -p cpu -N 1 --ntasks-per-node=1 -c 1 -t 15:00 eb-keep-logs rotate /opt/site/logs --compress-after 30 --delete-after 365 --lock-timeout 0
+INFO [run] zen4: dry run: nothing executed
+#+end_example
+
+Each line is a command that =run= would start, after the phase it belongs to: =srun= with the launch arguments of the role, the module wrapper that loads =EasyBuild=, then =eb= with the easyconfig.
+
+** If it fails
+
+Each of these makes =check= exit 2; the problems of a site file that parses end with =ERROR [main] -: N problem(s) in the site file=.
+
+| Message                                                                                                                                    | Cause                                                                     | What to do                                                         |
+|--------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------+--------------------------------------------------------------------|
+| =ERROR [main] -: invalid site file: TOML parse error at line 35, column 1=, then =unknown field `log_rot`, expected one of `scratch`, ...= | The section has no such key, here a misspelt =log_root=.                  | Correct the key; the message lists the keys of the section.        |
+| =ERROR [check] example: scheduler.kind: expected slurm or local, found `pbs`=                                                              | eb-pipeline launches commands with Slurm's =srun=, or runs them directly. | Set =slurm= or =local=.                                            |
+| =ERROR [check] example: logs.rotate.delete_after_days: must be greater than compress_after_days (400), found 365=                          | A log directory would be deleted before it is compressed.                 | Make =delete_after_days= the greater.                              |
+| =ERROR [check] example: targets.zen4.build_lists: `zen4.list` not found in .=                                                              | A build list of the target is not in the =--lists-dir= directory.         | Add the list, or correct its name in =build_lists=.                |
+| =ERROR [main] -: eb_keep_logs: cannot run `eb-keep-logs --version`: No such file or directory (os error 2)=                                | =--probe-tools= found no =eb-keep-logs= on =PATH=.                        | Install it, or name its path in =[site.tools.eb_keep_logs]= =bin=. |
+
+The commands and their output on this page come from =docs/examples/site-file.sh=.
+
+** Related
+
+- [[file:../reference/site-file.org][The site file]]
+- [[file:../reference/templates.org][The site file templates]]
+- [[file:../reference/environment.org][Environment variables]]
+- [[file:../reference/cli.org][The eb-pipeline command]], for =check=, =explain= and =run --dry-run=
+- [[file:../tutorials/first-build-list.org][Run your first build list]]
