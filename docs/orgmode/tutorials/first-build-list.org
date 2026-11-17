@@ -21,6 +21,11 @@ A stand-in for EasyBuild's =eb= command, six lines of shell, takes the place of 
   #+end_example
 
   If the shell answers =cargo: command not found=, install Rust with [[https://rustup.rs][rustup]] first.
+  If =cargo --version= names a release older than 1.90, as on a host whose default toolchain has not been updated, install 1.90 before the build below:
+
+  #+begin_src bash
+  rustup toolchain install 1.90 --profile minimal
+  #+end_src
 
 ** Install eb-pipeline
 
@@ -30,7 +35,7 @@ Clone the repository, check out the commit this tutorial was checked with, and i
 git clone https://github.com/stackhands/eb-pipeline.git
 cd eb-pipeline
 git checkout 741099ee
-cargo install --locked --path .
+cargo +1.90 install --locked --path .
 #+end_src
 
 Cargo builds =eb-pipeline= and installs it in the =bin= directory of its home, =~/.cargo/bin= unless =CARGO_HOME= names another, which rustup puts on your =PATH=.
