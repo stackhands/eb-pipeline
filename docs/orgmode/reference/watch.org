@@ -6,6 +6,8 @@
 
 With a =[watch]= table in the site file, =run= records what each install it builds was built against in the European Environment for Scientific Software Installations (EESSI): the EESSI version and CPU subdirectory, the CVMFS revision of the repository, and each EESSI module that the install depends on, with an identity that changes when that module changes.
 =eb-pipeline watch= compares the record with the EESSI that the module environment loads now, and rebuilds only the installs that a change reaches.
+When =REPOSITORY/versions= holds a =YYYY.MM= directory newer than that loaded =EESSI_VERSION=, =watch= exits 75 and stops: it has detected the directory, and it does not ask eb-stack what the new generation would rebuild.
+=watch --adopt= still records the generation that is loaded.
 [[file:site-file.org][The site file]] lists the keys of the table, and [[file:cli.org][The eb-pipeline command]] the options of =watch=.
 [[file:../howto/rebuild-when-eessi-changes.org][Rebuild what an EESSI change reaches]] sets it up, step by step.
 The examples on this page come from =docs/examples/watch.sh=, which stands in for the EESSI repository with a directory under =$WORK= that holds three modules, for EasyBuild with a script that installs what it builds, and for eb-stack with a script that answers =rebuild-set= from a table and =stack shard= with the list in its order.

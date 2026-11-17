@@ -665,6 +665,35 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     let (probe, env) = watch::probe(&planner, &work)?;
     let revision = watch::revision_of(&probe)?;
     watch::check_dirs(&probe)?;
+    // A newer versions/YYYY.MM directory, while this module environment
+    // still loads the older generation, is only detected. Choosing what to
+    // rebuild for the new generation is eb-stack's, and watch does not ask.
+    if !w.adopt {
+        if let Some(repo) = &probe.repository {
+            let versions = eessi::versions_dir(repo);
+            match eessi::newer_generation(&versions, &probe.version) {
+                Ok(Some(newer)) => {
+                    drop_work();
+                    return Err(Fail::new(
+                        exit::TEMPFAIL,
+                        format!(
+                            "EESSI {newer} is a directory under {}, and the module environment of target {name} loads {}; watch detects that and does not ask eb-stack for a rebuild set",
+                            versions.display(),
+                            probe.version
+                        ),
+                    ));
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    drop_work();
+                    return Err(Fail::new(
+                        exit::TEMPFAIL,
+                        format!("cannot list {}: {e}", versions.display()),
+                    ));
+                }
+            }
+        }
+    }
     let at = revision
         .map(|r| format!(" at revision {r}"))
         .unwrap_or_default();

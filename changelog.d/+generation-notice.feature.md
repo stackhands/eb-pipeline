@@ -1,0 +1,1 @@
+`eb-pipeline watch` exits 75 when `REPOSITORY/versions` holds a `YYYY.MM` directory newer than the `EESSI_VERSION` the module environment loads. It only detects that directory: it does not ask eb-stack for a rebuild set, and it rebuilds nothing. `watch --adopt` still records the loaded generation.
