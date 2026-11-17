@@ -170,6 +170,18 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(audit)
+_arguments "${_arguments_options[@]}" : \
+'--site=[Site file]:SITE:_files' \
+'--target=[Target name]:TARGET:_default' \
+'(--cve)--findings=[Vulnerability scanner CSV for \`eb-stack rebuild-set --findings\`]:FINDINGS:_files' \
+'*--cve=[CVE id to audit. Repeat for multiple advisories]:CVE:_default' \
+'--out-dir=[Output directory for audit artifacts and copied rebuild lists]:OUT_DIR:_files' \
+'--strict[Exit non-zero when eb-stack reports backport items]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
 (completions)
 _arguments "${_arguments_options[@]}" : \
 '--shell=[Target shell]:SHELL:(bash zsh fish)' \
@@ -241,6 +253,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(audit)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (completions)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -276,11 +292,17 @@ _eb-pipeline_commands() {
 'run:Execute the plan'\''s phases as subprocesses' \
 'verify:Recompute the input record and check its inclusion proof' \
 'watch:Rebuild the recorded installs an EESSI change reaches, in dependency order' \
+'audit:Run eb-stack vulnerability checks and collect rebuild lists' \
 'completions:Generate shell completion scripts from the clap command definition' \
 'man:Generate a section 1 man page from the clap command definition' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'eb-pipeline commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__audit_commands] )) ||
+_eb-pipeline__subcmd__audit_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline audit commands' commands "$@"
 }
 (( $+functions[_eb-pipeline__subcmd__check_commands] )) ||
 _eb-pipeline__subcmd__check_commands() {
@@ -311,11 +333,17 @@ _eb-pipeline__subcmd__help_commands() {
 'run:Execute the plan'\''s phases as subprocesses' \
 'verify:Recompute the input record and check its inclusion proof' \
 'watch:Rebuild the recorded installs an EESSI change reaches, in dependency order' \
+'audit:Run eb-stack vulnerability checks and collect rebuild lists' \
 'completions:Generate shell completion scripts from the clap command definition' \
 'man:Generate a section 1 man page from the clap command definition' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'eb-pipeline help commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__help__subcmd__audit_commands] )) ||
+_eb-pipeline__subcmd__help__subcmd__audit_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline help audit commands' commands "$@"
 }
 (( $+functions[_eb-pipeline__subcmd__help__subcmd__check_commands] )) ||
 _eb-pipeline__subcmd__help__subcmd__check_commands() {
