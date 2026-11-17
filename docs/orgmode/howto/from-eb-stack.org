@@ -116,6 +116,7 @@ INFO [licences] cpu: not configured
 INFO [shard] cpu: not configured
 INFO [sources] cpu: not configured
 INFO [admission] cpu: not configured
+INFO [checks] cpu: not configured
 INFO [caches] cpu: not configured
 INFO [logs] cpu: not configured
 INFO [build] cpu: pigz-2.8-GCCcore-15.2.0: start

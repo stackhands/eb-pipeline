@@ -5,6 +5,11 @@
 # as they are to the site file and the stand-in eb of the tutorial, and an
 # easystack with a typing error.
 # shellcheck disable=SC2016 # commands stay quoted as the pages show them
+page=$(dirname -- "$0")/../orgmode/howto/from-eb-stack.org
+grep -F 'INFO [checks] cpu: not configured' "$page" >/dev/null || {
+    echo "the eb-stack run example has no checks event" >&2
+    exit 1
+}
 # shellcheck source-path=SCRIPTDIR source=lib.sh
 . "$(dirname -- "$0")/lib.sh"
 
