@@ -15,4 +15,5 @@ The title names the task.
    write-a-site-file
    build-from-ci
    rotate-logs
+   staged-rebuilds
 #+end_export

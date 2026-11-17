@@ -1,0 +1,1 @@
+A how-to guide rebuilds installed software through eb-staged-rebuild: the `[rebuild]` table with a state root per target, the line and module that make a line staged, the run id each staged line passes, and the messages of a refused or pending line and of the site files `check` refuses.
