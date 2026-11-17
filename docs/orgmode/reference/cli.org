@@ -11,7 +11,7 @@ Each command has its own options; =docs/examples/cli.sh= prints every help text 
 
 #+begin_example
 eb-pipeline <COMMAND>
-eb-pipeline check [OPTIONS] --site <SITE>
+eb-pipeline check [OPTIONS] --site <SITE> [--list <LIST> --stack-checks <STACK_CHECKS>]
 eb-pipeline schema
 eb-pipeline init [OPTIONS]
 eb-pipeline explain [OPTIONS] --site <SITE>
@@ -132,11 +132,14 @@ An option with a variable in the table takes its value from that variable when t
 
 *** check
 
-| Option            | Variable                | Meaning                                                                                                                                                                                                                            |
-|-------------------+-------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| =--site FILE=     | =EB_PIPELINE_SITE=      | The site file; required.                                                                                                                                                                                                           |
-| =--lists-dir DIR= | =EB_PIPELINE_LISTS_DIR= | A directory that must hold every file that the =build_lists= of a target names. A missing file is an error of the site file.                                                                                                       |
-| =--probe-tools=   |                         | Start =BIN --version= for each sibling tool that an enabled phase calls, and fail when one cannot start, prints no version, or prints one below the =min_version= of its =[site.tools]= table. Without it, =check= starts nothing. |
+| Option                 | Variable                | Meaning                                                                                                                                                                                                                            |
+|------------------------+-------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =--site FILE=          | =EB_PIPELINE_SITE=      | The site file; required.                                                                                                                                                                                                           |
+| =--lists-dir DIR=      | =EB_PIPELINE_LISTS_DIR= | A directory that must hold every file that the =build_lists= of a target names. A missing file is an error of the site file.                                                                                                       |
+| =--probe-tools=        |                         | Start =BIN --version= for each sibling tool that an enabled phase calls, and fail when one cannot start, prints no version, or prints one below the =min_version= of its =[site.tools]= table.                                      |
+| =--list FILE=          | =EB_PIPELINE_LIST=      | The build list or easystack passed to =--stack-checks=. Required with =--stack-checks=; inert without it.                                                                                                                           |
+| =--target NAME=        | =EB_PIPELINE_TARGET=    | Use only this target's =cpu_target= and expanded source paths. Requires =--stack-checks=. Without it, target-dependent values from every target are used.                                                                           |
+| =--stack-checks LIST=  |                         | Comma-separated =files=, =arch=, =cuda-cc=, =generation=, =provided= or =known-failures=. Each names an =eb-stack stack= subprocess. Requires =--list=.                                                                           |
 
 =check= writes =INFO [check] NAME: site file is valid= to stderr when the file is valid, where =NAME= is =site.name=.
 Before that line it writes a =WARN= line for each of these settings:
@@ -144,6 +147,23 @@ Before that line it writes a =WARN= line for each of these settings:
 - =modules.unuse_path= with a first =modules.init= entry that is not an absolute path;
 - =admission.required= without =admission.quota_cmd= and =admission.reservations=, so that =run= refuses with exit 78;
 - =admission.quota_cmd= and =admission.reservations= without =admission.live_jobs_cmd=.
+
+Without =--stack-checks=, =check= starts no checks and otherwise behaves as before.
+With it, =check= runs every selected command directly, without =scheduler.launch=:
+
+| Name             | =eb-stack= command and site values                                                                                                                                               |
+|------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =files=          | =stack files --easystack FILE=; adds =[shards].easyconfigs=, =filesystems.configs_repo= and the selected targets' expanded =filesystems.source_paths=.                          |
+| =arch=           | =stack arch --easystack FILE=; adds =[shards].easyconfigs= and the selected targets' =cpu_target= values as =--arch=.                                                           |
+| =cuda-cc=        | =stack cuda-cc --easystack FILE=; adds =[shards].easyconfigs=. =eb-stack= checks its bundled accelerator targets.                                                              |
+| =generation=     | =stack generation --easystack FILE=.                                                                                                                                             |
+| =provided=       | =stack provided --build-list FILE --strict=; adds =[sbom].lock= as =--baseline-lock= when set. It expects a plain build list, and =eb-stack= refuses when no baseline is configured. |
+| =known-failures= | =stack known-failures --easystack FILE --strict=; adds =[shards].easyconfigs= and the selected targets' =cpu_target= values as =--arch=.                                      |
+
+Repeated path and architecture values are passed once.
+The configured =[site.tools.eb_stack].bin= is used, or =eb-stack= on =PATH=.
+All requested subprocesses run even after one fails.
+If one or more exit nonzero or cannot start, =check= reports each failure and exits 1.
 
 *** schema
 
