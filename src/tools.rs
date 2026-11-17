@@ -6,16 +6,23 @@ use crate::util::{cmp_version, find_version, parse_version};
 use std::collections::BTreeMap;
 use std::process::{Command, Stdio};
 
+/// A sibling tool that eb-pipeline starts as a subprocess.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
+    /// eb-stack, for `stack shard` and `stack admit`.
     EbStack,
+    /// eb-keep-logs, for `failed` and `rotate`.
     EbKeepLogs,
+    /// eb-staged-rebuild, for `run` on a line that rebuilds a live install.
     EbStagedRebuild,
 }
 
 impl Tool {
+    /// Every tool, in the order `[site.tools]` documents them.
     pub const ALL: [Tool; 3] = [Tool::EbStack, Tool::EbKeepLogs, Tool::EbStagedRebuild];
 
+    /// The tool's key under `[site.tools]`: `eb_stack`, `eb_keep_logs` or
+    /// `eb_staged_rebuild`.
     pub fn key(self) -> &'static str {
         match self {
             Tool::EbStack => "eb_stack",
@@ -24,6 +31,7 @@ impl Tool {
         }
     }
 
+    /// The program name looked up on `PATH` when the site file sets no `bin`.
     pub fn default_bin(self) -> &'static str {
         match self {
             Tool::EbStack => "eb-stack",
@@ -32,6 +40,7 @@ impl Tool {
         }
     }
 
+    /// The tool's `[site.tools.<tool>]` table, when the site file has one.
     pub fn spec(self, site: &Site) -> Option<&ToolSpec> {
         let t = site.site.tools.as_ref()?;
         match self {
@@ -41,12 +50,15 @@ impl Tool {
         }
     }
 
+    /// The program to start: the site file's `bin`, else
+    /// [`Tool::default_bin`].
     pub fn bin(self, site: &Site) -> String {
         self.spec(site)
             .and_then(|s| s.bin.clone())
             .unwrap_or_else(|| self.default_bin().to_string())
     }
 
+    /// The site file's `min_version` for the tool, as written.
     pub fn min_version(self, site: &Site) -> Option<String> {
         self.spec(site).and_then(|s| s.min_version.clone())
     }
@@ -143,14 +155,19 @@ fn join(v: &[u64]) -> String {
 /// Outcome of a staged-rebuild exit code.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum StagedOutcome {
+    /// Exit 0: the staged rebuild succeeded.
     Ok,
     /// Exit 2 in eb-staged-rebuild: refusal.
     Refused,
     /// Exit 75: a required ledger event is pending.
     Pending,
+    /// Any other exit code.
     Failed,
 }
 
+/// Read an `eb-staged-rebuild run` exit code: 0 is [`StagedOutcome::Ok`],
+/// 2 [`StagedOutcome::Refused`], 75 [`StagedOutcome::Pending`], and any other
+/// [`StagedOutcome::Failed`].
 pub fn map_staged(code: i32) -> StagedOutcome {
     match code {
         0 => StagedOutcome::Ok,
@@ -163,13 +180,17 @@ pub fn map_staged(code: i32) -> StagedOutcome {
 /// Outcome of an `eb-keep-logs rotate` exit code.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum RotateOutcome {
+    /// Exit 0: the log tree was rotated.
     Ok,
     /// Exit 75: another rotate of the tree held eb-keep-logs' lock past
     /// `--lock-timeout`, and this one changed nothing.
     Locked,
+    /// Any other exit code.
     Failed,
 }
 
+/// Read an `eb-keep-logs rotate` exit code: 0 is [`RotateOutcome::Ok`], 75
+/// [`RotateOutcome::Locked`], and any other [`RotateOutcome::Failed`].
 pub fn map_rotate(code: i32) -> RotateOutcome {
     match code {
         0 => RotateOutcome::Ok,

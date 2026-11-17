@@ -43,17 +43,22 @@ when several apply: 1, then 78, then 75, then 0. Codes are never summed.";
 /// Error carrying the process exit code.
 #[derive(Debug)]
 pub struct Fail {
+    /// The exit code the program ends with, one of the constants above.
     pub code: i32,
+    /// What went wrong; the program prints it as `ERROR [main] -: <msg>`.
     pub msg: String,
 }
 
 impl Fail {
+    /// A failure that ends the program with `code`.
     pub fn new(code: i32, msg: impl Into<String>) -> Self {
         Fail {
             code,
             msg: msg.into(),
         }
     }
+    /// A failure with [`USAGE`], 2: a wrong command line, an invalid site
+    /// file or input, or a tool below its `min_version`.
     pub fn usage(msg: impl Into<String>) -> Self {
         Fail::new(USAGE, msg)
     }

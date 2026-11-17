@@ -6,8 +6,11 @@
 
 /// One template: its name, a one-line summary, and the file text.
 pub struct Template {
+    /// The name `init --template` takes.
     pub name: &'static str,
+    /// The line `init --list` prints after the name.
     pub summary: &'static str,
+    /// The site file, as `init` writes it.
     pub text: &'static str,
 }
 

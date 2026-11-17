@@ -10,10 +10,16 @@ use std::collections::BTreeMap;
 /// One documented key of the site file.
 #[derive(Debug, Clone, Copy)]
 pub struct FieldDoc {
+    /// The key, as the site file spells it.
     pub key: &'static str,
+    /// The type of its value: `string`, `integer`, `table`, `array of string`
+    /// and the like.
     pub ty: &'static str,
+    /// The default, as the reference prints it; empty when it prints none.
     pub default: &'static str,
+    /// Whether the site file must set the key.
     pub required: bool,
+    /// What the key means; also the field's rustdoc.
     pub doc: &'static str,
 }
 
@@ -28,9 +34,11 @@ macro_rules! doc_struct {
         #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
         #[serde(deny_unknown_fields)]
         pub struct $name {
-            $( $(#[$fm])* pub $f: $t, )*
+            $( $(#[$fm])* #[doc = $doc] pub $f: $t, )*
         }
         impl $name {
+            /// The documentation of every key of this table, in declaration
+            /// order.
             pub const FIELDS: &'static [FieldDoc] = &[
                 $( FieldDoc { key: stringify!($f), ty: $ty, default: $def, required: $req, doc: $doc } ),*
             ];

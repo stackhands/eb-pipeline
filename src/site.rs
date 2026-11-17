@@ -596,26 +596,37 @@ impl Site {
     pub fn shards_on(&self) -> Option<&Shards> {
         self.shards.as_ref().filter(|s| s.enabled && s.count >= 2)
     }
+    /// Sources section when it prefetches.
     pub fn sources_on(&self) -> Option<&Sources> {
         self.sources.as_ref().filter(|s| s.enabled && s.prefetch)
     }
+    /// Caches section when active.
     pub fn caches_on(&self) -> Option<&Caches> {
         self.caches.as_ref().filter(|c| c.enabled)
     }
+    /// Logs section when active.
     pub fn logs_on(&self) -> Option<&Logs> {
         self.logs.as_ref().filter(|l| l.enabled)
     }
+    /// Rebuild section when active and `staged` is set in it or on a target.
     pub fn rebuild_on(&self) -> Option<&Rebuild> {
         self.rebuild.as_ref().filter(|r| {
             r.enabled && (r.staged || self.targets.iter().any(|t| t.staged == Some(true)))
         })
     }
+    /// Licences section when active and enforced.
     pub fn licences_on(&self) -> Option<&Licences> {
         self.licences.as_ref().filter(|l| l.enabled && l.enforce)
     }
+    /// `[modules.eessi]` when active.
     pub fn eessi_on(&self) -> Option<&Eessi> {
         self.modules.eessi.as_ref().filter(|e| e.enabled)
     }
+    /// The target called `name`.
+    ///
+    /// # Errors
+    ///
+    /// A usage [`Fail`] that lists the known targets when none has the name.
     pub fn target(&self, name: &str) -> Result<&Target, Fail> {
         self.targets.iter().find(|t| t.name == name).ok_or_else(|| {
             Fail::usage(format!(
@@ -628,6 +639,7 @@ impl Site {
             ))
         })
     }
+    /// The `{project}` of job names: `site.project`, else `site.name`.
     pub fn project(&self) -> &str {
         self.site.project.as_deref().unwrap_or(&self.site.name)
     }

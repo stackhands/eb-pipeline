@@ -71,70 +71,111 @@ fn sleep_interruptible(secs: u64) -> bool {
     interrupted().is_some()
 }
 
+/// Print a log line on stderr: `<level> [<phase>] <target>: <msg>`.
 pub fn log(level: &str, phase: &str, target: &str, msg: &str) {
     eprintln!("{level} [{phase}] {target}: {msg}");
 }
 
+/// What one phase came to.
 #[derive(Debug, Serialize, Clone)]
 pub struct PhaseResult {
+    /// The phase, one of [`PHASES`].
     pub name: String,
+    /// `ok`, `failed`, `refused`, `skipped`, `unsharded`, `interrupted` or
+    /// `not configured`.
     pub status: String,
+    /// The exit code behind the status, when there is one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
+    /// Why the phase came to its status, when that needs saying.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
 
+/// What one build list line came to.
 #[derive(Debug, Serialize, Clone)]
 pub struct LineResult {
+    /// The line's easyconfig.
     pub easyconfig: String,
+    /// The unit it belongs to: `all`, `cpu-prerequisites`, `prelude`, or a
+    /// shard's name.
     pub unit: String,
+    /// `build`, or `sources` when its source fetch failed.
     pub phase: String,
     /// `success`, `failed`, `refused`, `pending`, `skipped`.
     pub status: String,
+    /// The exit code the line counts as.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
+    /// The command's own exit code, when `exit_code` translates it, as 78
+    /// does eb-staged-rebuild's 2.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub translated_from: Option<i32>,
+    /// The log file of the line's command.
     pub log: String,
+    /// Why the line came to its status, when that needs saying.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
 
+/// What one unit's admission came to.
 #[derive(Debug, Serialize, Clone)]
 pub struct AdmissionResult {
+    /// The unit, as in [`LineResult::unit`].
     pub unit: String,
+    /// How many times `stack admit` ran.
     pub attempts: u32,
     /// `admitted`, `refused` or `failed`.
     pub outcome: String,
+    /// The last JSON line `stack admit` printed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_json: Option<String>,
 }
 
+/// The result file `run` writes: what every phase and line came to.
 #[derive(Debug, Serialize, Clone)]
 pub struct RunResult {
+    /// Version of this format, 1.
     pub schema_version: u32,
+    /// `result`.
     pub kind: String,
+    /// `site.name`.
     pub site: String,
+    /// The target's name.
     pub target: String,
+    /// The build type, `default` without one.
     pub build_type: String,
+    /// The run id.
     pub run_id: String,
+    /// The build list, as given.
     pub list: String,
+    /// Where the run writes its logs.
     pub log_dir: String,
+    /// When the run started, in RFC 3339, in UTC.
     pub started_at: String,
+    /// When the run ended, in RFC 3339, in UTC.
     pub ended_at: String,
+    /// The process exit code.
     pub exit_code: i32,
+    /// Whether the lines were built in the units of a shard plan.
     pub sharded: bool,
+    /// How many lines came to each status.
     pub counts: BTreeMap<String, usize>,
+    /// The phases the site file leaves out.
     pub not_configured: Vec<String>,
+    /// The admission of each unit that went through it, in order.
     pub admission: Vec<AdmissionResult>,
+    /// Every phase that was reached, in [`PHASES`] order.
     pub phases: Vec<PhaseResult>,
+    /// Every line, in the order the run reached them.
     pub lines: Vec<LineResult>,
     /// Lines the target's selector left out; not counted as results.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub deselected: Vec<Deselected>,
+    /// The error that stopped the run, when one did.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// `SIGINT` or `SIGTERM`, when a signal stopped the run.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub interrupted_by: Option<String>,
 }
@@ -410,7 +451,9 @@ fn release(r: Reservation, target: &str) {
     }
 }
 
+/// How [`run`] goes through the plan.
 pub struct Options {
+    /// Print each planned command, run none, and return exit 0.
     pub dry_run: bool,
 }
 

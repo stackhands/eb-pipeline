@@ -49,7 +49,7 @@ pixi run -e docs docbld
 #+end_src
 
 The site is in =docs/build/html/=; open =docs/build/html/index.html=.
-The build fails on any Sphinx warning, any cross-reference that does not resolve, any rustdoc warning, any internal link or anchor that does not exist, and, outside the changelog, any name of a real site's machines or paths.
+The build fails on any Sphinx warning, any cross-reference that does not resolve, any rustdoc warning, any public item of the library without a doc comment, any internal link or anchor that does not exist, and, outside the changelog, any name of a real site's machines or paths.
 The first build needs the network, to fetch the other stackhands sites' inventories; later builds reuse them for 30 days.
 
 External links are checked separately, as they need the network:
@@ -82,3 +82,4 @@ Examples use the neutral example site (=example.org=, =/opt/site=, =/home/alice=
 
 API documentation is written in the code, and the first sentence of each comment is the summary shown in lists.
 In Rust it is a =///= comment above each =pub= item and a =//!= comment at the top of each module.
+A site file key is documented once, in the =doc_struct!= table of =src/schema.rs=: that text is both what =eb-pipeline schema= prints and the doc comment of the key's field.
