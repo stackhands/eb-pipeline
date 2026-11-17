@@ -285,6 +285,27 @@ The rebuild of =watch= exits as a run would, and =watch= exits with its status.
 
 A list line is split into words as a shell splits them, with single and double quotes.
 
+** Companion tools
+
+*** eb-retry-list
+
+=eb-retry-list= reads a run result (=--result=) or one target of a run summary (=--summary= with =--target=) together with the original build list or easystack (=--list=), and writes the unfinished lines in their original order with their =eb= options.
+
+#+begin_example
+eb-retry-list (--result FILE | --summary FILE --target NAME) --list FILE [--status STATUS,...] [--out FILE]
+#+end_example
+
+| Option | Meaning |
+|--------+---------|
+| =--result FILE= | Result file written by =eb-pipeline run --result=. Mutually exclusive with =--summary=. |
+| =--summary FILE= | Run summary file (=summary.json=). Requires =--target=. |
+| =--target NAME= | Target entry to read from =--summary=. |
+| =--list FILE= | Build list or easystack (=.yml= or =.yaml=) passed to the run. Required. |
+| =--status STATUS,...= | Comma-separated statuses to keep: =failed=, =refused=, =pending=, =skipped=, =unreached=. Default: all non-=success= lines and unreached lines on a non-zero exit. |
+| =--out FILE= | Write the retry list to =FILE=; =-= or absent prints to stdout. |
+
+Exit 0 means the retry list was written (empty when every line succeeded or was deselected). Exit 2 is a missing or invalid input.
+
 ** See also
 
 - [[file:../tutorials/first-build-list.org][Run your first build list]]

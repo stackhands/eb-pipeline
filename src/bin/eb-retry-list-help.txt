@@ -1,0 +1,13 @@
+eb-retry-list: extract the unfinished lines of a build list from a run result or summary.
+
+  eb-retry-list (--result FILE | --summary FILE --target NAME) --list FILE
+                [--status STATUS,...] [--out FILE]
+
+Reads the result file of `eb-pipeline run --result` or one target of a run
+summary (`summary.json`), matches each line of `--list` (a build list or an
+easystack) against its recorded outcome, and writes the lines that did not
+succeed in their original order with their original `eb` options.
+
+Without `--status`, every unfinished status (`failed`, `refused`, `pending`,
+`skipped`, and lines not yet reached before a non-zero exit) is included.
+Deselected lines and lines recorded as `success` are left out.
