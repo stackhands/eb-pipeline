@@ -16,6 +16,19 @@ case "$1" in --version) echo "eb-stack 0.7.4"; exit 0;; esac
 sub="$2"; shift 2
 echo "$sub $*" >> "$D/eb-stack.calls"
 case "$sub" in
+  oom)
+    plan=""; node=""
+    while [ $# -gt 0 ]; do
+      [ "$1" = --easystack ] && plan="$2"
+      [ "$1" = --node ] && node="$2"
+      shift
+    done
+    cp "$plan" "$D/oom-plan.yml"
+    echo "$node" > "$D/oom.node"
+    [ -n "${STUB_OOM_EXIT:-}" ] && exit "$STUB_OOM_EXIT"
+    [ -n "${STUB_OOM_OUTPUT:-}" ] && { printf '%s\n' "$STUB_OOM_OUTPUT"; exit 0; }
+    echo "oom=${STUB_OOM_COUNT:-0} fits=0 builds=2 nodes=1"
+    exit 0;;
   admit)
     n=$(cat "$D/admit.count" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$D/admit.count"
     ok="${STUB_ADMIT_OK_AT:-1}"
@@ -238,6 +251,17 @@ keep_failed = true
         site: site_path,
         stubs,
     }
+}
+
+fn use_eb_stack_from_path(env: &Env) {
+    let configured = format!(
+        "[site.tools.eb_stack]\nbin = \"{}/eb-stack\"\nmin_version = \"0.7.0\"\n",
+        env.stubs.display()
+    );
+    let text = std::fs::read_to_string(&env.site)
+        .unwrap()
+        .replace(&configured, "");
+    std::fs::write(&env.site, text).unwrap();
 }
 
 struct Out {
@@ -1134,6 +1158,82 @@ fn dry_run_starts_nothing() {
     let out = String::from_utf8_lossy(&o.stdout);
     assert!(out.contains("[build] eb Foo-1.0-foss-2025a.eb"), "{out}");
     assert!(calls(&env, "eb.calls").is_empty());
+}
+
+#[test]
+fn oom_preflight_skips_every_build_when_eb_stack_reports_a_risk() {
+    let env = setup("");
+    use_eb_stack_from_path(&env);
+    let o = finish(
+        &env,
+        driver(
+            &env,
+            LIST,
+            &[("STUB_OOM_COUNT", "2")],
+            &["--oom-preflight", "--node", "16:32768:x86_64/amd/zen4"],
+        ),
+    );
+    assert_eq!(o.code, 78, "{}", o.stderr);
+    assert!(calls(&env, "eb.calls").is_empty());
+    assert_eq!(
+        file_text(&env, "oom.node").trim(),
+        "16:32768:x86_64/amd/zen4"
+    );
+    let plan = file_text(&env, "oom-plan.yml");
+    assert!(plan.contains("Foo-1.0-foss-2025a.eb"), "{plan}");
+    assert!(plan.contains("Bar-2.0-foss-2025a.eb"), "{plan}");
+    let r = o.result.unwrap();
+    assert_eq!(r["counts"]["skipped"], 2);
+    assert_eq!(result_phase(&r, "preflight")["status"], "refused");
+    assert_eq!(result_phase(&r, "build")["status"], "skipped");
+    assert!(
+        o.stderr.contains(
+            "OOM preflight found 2 risk(s) for node 16:32768:x86_64/amd/zen4; build skipped"
+        ),
+        "{}",
+        o.stderr
+    );
+}
+
+#[test]
+fn oom_preflight_continues_only_from_eb_stacks_zero_count() {
+    let env = setup("");
+    use_eb_stack_from_path(&env);
+    let o = finish(
+        &env,
+        driver(&env, LIST, &[], &["--oom-preflight", "--node", "8:65536"]),
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(calls(&env, "eb.calls").len(), 2);
+    assert_eq!(
+        calls(&env, "eb-stack.calls")[0],
+        "oom --easystack ".to_string()
+            + &env
+                .dir
+                .path()
+                .join("logs/20260101_000000/cpu/oom-preflight.yml")
+                .display()
+                .to_string()
+            + " --node 8:65536"
+    );
+}
+
+#[test]
+fn malformed_oom_output_fails_closed_before_a_build() {
+    let env = setup("");
+    use_eb_stack_from_path(&env);
+    let o = finish(
+        &env,
+        driver(
+            &env,
+            LIST,
+            &[("STUB_OOM_OUTPUT", "fits=2 builds=2 nodes=1")],
+            &["--oom-preflight", "--node", "8:65536"],
+        ),
+    );
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    assert!(calls(&env, "eb.calls").is_empty());
+    assert!(o.stderr.contains("printed no `oom=N` line"), "{}", o.stderr);
 }
 
 #[test]

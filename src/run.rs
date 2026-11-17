@@ -495,6 +495,92 @@ pub struct Options<'a> {
     pub dry_run: bool,
     /// Units read from a saved `stack shard` plan, when the caller supplied one.
     pub shard_units: Option<&'a [Unit]>,
+    /// Node passed to `eb-stack stack oom`; absent leaves the run unchanged.
+    pub oom_node: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct OomPlan<'a> {
+    easyconfigs: Vec<&'a str>,
+}
+
+fn parse_oom_count(stdout: &str) -> Result<usize, Fail> {
+    let mut counts = stdout.lines().filter_map(|line| {
+        line.split_whitespace()
+            .next()
+            .and_then(|word| word.strip_prefix("oom="))
+    });
+    let Some(raw) = counts.next() else {
+        return Err(Fail::new(
+            exit::FAILED,
+            "eb-stack stack oom printed no `oom=N` line",
+        ));
+    };
+    if counts.next().is_some() {
+        return Err(Fail::new(
+            exit::FAILED,
+            "eb-stack stack oom printed more than one `oom=N` line",
+        ));
+    }
+    raw.parse().map_err(|_| {
+        Fail::new(
+            exit::FAILED,
+            format!("eb-stack stack oom printed an invalid count `oom={raw}`"),
+        )
+    })
+}
+
+fn oom_preflight(p: &Planner, units: &[Unit], node: &str, log_dir: &Path) -> Result<usize, Fail> {
+    let easyconfigs = units
+        .iter()
+        .flat_map(|unit| unit.lines.iter())
+        .map(|line| line.easyconfig.as_str())
+        .collect();
+    let text = serde_yaml::to_string(&OomPlan { easyconfigs })
+        .map_err(|e| Fail::new(exit::FAILED, format!("cannot make OOM plan: {e}")))?;
+    std::fs::create_dir_all(log_dir).map_err(|e| {
+        Fail::new(
+            exit::FAILED,
+            format!("cannot create {}: {e}", log_dir.display()),
+        )
+    })?;
+    let plan = log_dir.join("oom-preflight.yml");
+    std::fs::write(&plan, text).map_err(|e| {
+        Fail::new(
+            exit::FAILED,
+            format!("cannot write {}: {e}", plan.display()),
+        )
+    })?;
+    let bin = Tool::EbStack.bin(p.scope.site);
+    let out = Command::new(&bin)
+        .args(["stack", "oom", "--easystack"])
+        .arg(&plan)
+        .args(["--node", node])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| Fail::new(exit::FAILED, format!("cannot run `{bin} stack oom`: {e}")))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    std::fs::write(log_dir.join("oom-preflight.log"), &out.stdout).map_err(|e| {
+        Fail::new(
+            exit::FAILED,
+            format!(
+                "cannot write {}: {e}",
+                log_dir.join("oom-preflight.log").display()
+            ),
+        )
+    })?;
+    if !out.status.success() {
+        let code = out
+            .status
+            .code()
+            .map_or_else(|| out.status.to_string(), |code| code.to_string());
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        return Err(Fail::new(
+            exit::FAILED,
+            format!("eb-stack stack oom exited {code}: {}", stderr.trim()),
+        ));
+    }
+    parse_oom_count(&stdout)
 }
 
 struct State {
@@ -662,6 +748,76 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
             }
         }
         p.runtime_env = Some(vars);
+    }
+    if let Some(node) = opts.oom_node {
+        let units = match opts.shard_units {
+            Some(units) => units.to_vec(),
+            None => match p.select_lines(lines) {
+                Ok((kept, _)) => vec![Unit {
+                    name: "all".into(),
+                    role: Role::Build,
+                    lines: kept,
+                    footprint: None,
+                }],
+                Err(f) => {
+                    st.res.message = Some(f.msg);
+                    return finish(st, Some(f.code));
+                }
+            },
+        };
+        if units.iter().any(|unit| !unit.lines.is_empty()) {
+            match oom_preflight(p, &units, node, &log_dir) {
+                Ok(0) => log(
+                    "INFO",
+                    "preflight",
+                    &target,
+                    &format!("eb-stack found no OOM risks for node {node}"),
+                ),
+                Ok(count) => {
+                    let msg = format!(
+                        "OOM preflight found {count} risk(s) for node {node}; build skipped"
+                    );
+                    log("ERROR", "preflight", &target, &msg);
+                    st.phase(
+                        "preflight",
+                        "refused",
+                        Some(exit::REFUSED),
+                        Some(msg.clone()),
+                    );
+                    let mut stems = StemSeq::default();
+                    for unit in &units {
+                        for line in &unit.lines {
+                            let stem = stems.next(&line.easyconfig);
+                            st.res.lines.push(LineResult {
+                                easyconfig: line.easyconfig.clone(),
+                                unit: unit.name.clone(),
+                                phase: "build".into(),
+                                status: "skipped".into(),
+                                exit_code: None,
+                                translated_from: None,
+                                log: p.log_stdout(&stem),
+                                note: Some(msg.clone()),
+                                duration_seconds: None,
+                            });
+                        }
+                    }
+                    st.phase("build", "skipped", None, Some(msg.clone()));
+                    st.res.message = Some(msg);
+                    return finish(st, Some(exit::REFUSED));
+                }
+                Err(f) => {
+                    log("ERROR", "preflight", &target, &f.msg);
+                    st.phase(
+                        "preflight",
+                        "failed",
+                        Some(exit::FAILED),
+                        Some(f.msg.clone()),
+                    );
+                    st.res.message = Some(f.msg);
+                    return finish(st, Some(exit::FAILED));
+                }
+            }
+        }
     }
     let p: &Planner = p;
     st.phase("preflight", "ok", None, None);
