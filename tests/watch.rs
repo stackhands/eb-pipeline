@@ -108,6 +108,28 @@ kept:
 ";
 
 #[test]
+fn a_newer_generation_directory_exits_75_and_asks_nothing() {
+    let t = built("");
+    let repo = t.root().join("eessi");
+    std::fs::create_dir_all(repo.join("versions/2023.06")).unwrap();
+    std::fs::create_dir_all(repo.join("versions/2026.06")).unwrap();
+    std::fs::write(repo.join("versions/notes"), "not a generation\n").unwrap();
+    let mut vars = eessi_vars(&t, "2023.06");
+    vars.push(("EESSI_CVMFS_REPO", repo.display().to_string()));
+    let calls = t.calls("ebstack");
+    let o = watch(&t, LATER, &["--dry-run"], &with(&vars));
+    assert_eq!(code(&o), 75, "{}", stderr(&o));
+    let err = stderr(&o);
+    assert!(err.contains("2026.06"), "{err}");
+    assert!(err.contains("does not ask eb-stack"), "{err}");
+    assert_eq!(
+        t.calls("ebstack"),
+        calls,
+        "detection does not call eb-stack"
+    );
+}
+
+#[test]
 fn without_an_eessi_change_watch_rebuilds_nothing() {
     let t = built("");
     let vars = eessi_vars(&t, "2023.06");

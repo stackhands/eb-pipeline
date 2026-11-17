@@ -65,6 +65,7 @@ So does a run summary that cannot be written, or sent to the webhook of =[notify
 
 - =run=: =eb-staged-rebuild run= exited 75 for a line; the line is =pending=.
 - =watch=: another watch of the target holds =STATE_DIR/TARGET.watch.lock=, the module environment of the target did not load, or the EESSI repository or one of its module trees cannot be read.
+- =watch=: =REPOSITORY/versions= holds a =YYYY.MM= directory newer than the =EESSI_VERSION= the module environment loads. Watch only detects that. It does not ask eb-stack for a rebuild set. =watch --adopt= still records the loaded generation.
 - =watch=: the rebuild exited 75.
 
 *** 78

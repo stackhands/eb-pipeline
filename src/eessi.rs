@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// EESSI as a target's module environment loads it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +65,57 @@ pub fn parse_env0(bytes: &[u8]) -> BTreeMap<String, String> {
             Some((k.to_string(), v.to_string()))
         })
         .collect()
+}
+
+/// `<repository>/versions`, where each generation is a `YYYY.MM` directory.
+pub fn versions_dir(repository: &str) -> PathBuf {
+    Path::new(repository).join("versions")
+}
+
+/// `YYYY.MM` with a month from 01 to 12, as an EESSI generation directory is named.
+pub fn generation_name(name: &str) -> Option<(u32, u32)> {
+    let (year, month) = name.split_once('.')?;
+    if year.len() != 4 || month.len() != 2 || name.split('.').count() != 2 {
+        return None;
+    }
+    let year: u32 = year.parse().ok()?;
+    let month: u32 = month.parse().ok()?;
+    if (1..=12).contains(&month) {
+        Some((year, month))
+    } else {
+        None
+    }
+}
+
+/// The newest `YYYY.MM` directory under `versions` that is newer than `loaded`.
+///
+/// A name that is not `YYYY.MM`, and a path that is not a directory, are
+/// ignored. A missing `versions` directory is no newer generation. `loaded`
+/// that is not `YYYY.MM` is not compared.
+pub fn newer_generation(versions: &Path, loaded: &str) -> std::io::Result<Option<String>> {
+    let Some(loaded_key) = generation_name(loaded) else {
+        return Ok(None);
+    };
+    let entries = match std::fs::read_dir(versions) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let mut best: Option<(u32, u32, String)> = None;
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(key) = generation_name(&name) else {
+            continue;
+        };
+        if !entry.path().is_dir() || key <= loaded_key {
+            continue;
+        }
+        if best.as_ref().is_none_or(|b| key > (b.0, b.1)) {
+            best = Some((key.0, key.1, name));
+        }
+    }
+    Ok(best.map(|(_, _, name)| name))
 }
 
 /// The CVMFS revision of the repository mounted at `repo`: its
@@ -303,6 +354,27 @@ mod tests {
             Some("/a/c")
         );
         assert_eq!(root_of("setenv FOO 1\n"), None);
+    }
+
+    #[test]
+    fn a_newer_yyyy_mm_directory_is_the_newest_one() {
+        let d = tempfile::tempdir().unwrap();
+        let versions = d.path().join("versions");
+        std::fs::create_dir_all(versions.join("2023.06")).unwrap();
+        std::fs::create_dir_all(versions.join("2025.06")).unwrap();
+        std::fs::create_dir_all(versions.join("2026.06")).unwrap();
+        std::fs::write(versions.join("latest"), "not a directory name we read\n").unwrap();
+        std::fs::create_dir(versions.join("2024.13")).unwrap();
+        assert_eq!(
+            newer_generation(&versions, "2023.06").unwrap().as_deref(),
+            Some("2026.06")
+        );
+        assert_eq!(newer_generation(&versions, "2026.06").unwrap(), None);
+        assert_eq!(newer_generation(&versions, "latest").unwrap(), None);
+        assert_eq!(
+            newer_generation(&d.path().join("absent"), "2023.06").unwrap(),
+            None
+        );
     }
 
     #[test]
