@@ -15,9 +15,11 @@ The title names the task.
    write-a-site-file
    build-from-ci
    publish-a-junit-report
+   publish-prometheus-metrics
    node-local-builds
    site-installs
    publish-caches-with-cvmfs
+   publish-cvmfs-metrics
    rotate-logs
    staged-rebuilds
    select-lines

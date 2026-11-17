@@ -54,5 +54,6 @@ Then run the =eb-cvmfs --dry-run= command from step 2 under the same module and 
 
 ** Related
 
+- [[file:publish-cvmfs-metrics.org][Publish CVMFS transaction metrics with the node exporter]]
 - [[file:../reference/cvmfs.org][The eb-cvmfs command]]
 - [[file:../reference/site-file.org][The site file]], for =[caches]=

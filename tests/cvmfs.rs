@@ -1,6 +1,7 @@
 //! `eb-cvmfs` brackets one configured synchronization in a CVMFS transaction.
 
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -15,9 +16,9 @@ case "$1" in
     fi
     exit "${STUB_LIST_EXIT:-0}"
     ;;
-  transaction) exit "${STUB_TRANSACTION_EXIT:-0}" ;;
-  publish) exit "${STUB_PUBLISH_EXIT:-0}" ;;
-  abort) exit "${STUB_ABORT_EXIT:-0}" ;;
+  transaction) [ -n "${STUB_TRANSACTION_DELAY:-}" ] && /bin/sleep "$STUB_TRANSACTION_DELAY"; exit "${STUB_TRANSACTION_EXIT:-0}" ;;
+  publish) [ -n "${STUB_PUBLISH_DELAY:-}" ] && /bin/sleep "$STUB_PUBLISH_DELAY"; exit "${STUB_PUBLISH_EXIT:-0}" ;;
+  abort) [ -n "${STUB_ABORT_DELAY:-}" ] && /bin/sleep "$STUB_ABORT_DELAY"; exit "${STUB_ABORT_EXIT:-0}" ;;
 esac
 exit 99
 "#;
@@ -44,7 +45,7 @@ impl Fixture {
         write_exec(&bin.join("cvmfs_server"), CVMFS_SERVER);
         write_exec(
             &sync,
-            "#!/bin/sh\necho \"sync $*\" >> \"$CALLS\"\nexit \"${SYNC_EXIT:-0}\"\n",
+            "#!/bin/sh\necho \"sync $*\" >> \"$CALLS\"\n[ -n \"${SYNC_DELAY:-}\" ] && /bin/sleep \"$SYNC_DELAY\"\n[ -n \"${REMOVE_SERVER:-}\" ] && /bin/rm -f \"$BIN/cvmfs_server\"\nexit \"${SYNC_EXIT:-0}\"\n",
         );
         Self {
             dir,
@@ -55,11 +56,20 @@ impl Fixture {
     }
 
     fn command(&self) -> Command {
+        self.command_with_metrics(None)
+    }
+
+    fn command_with_metrics(&self, metrics: Option<&Path>) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"));
         command
             .env("PATH", &self.bin)
+            .env("BIN", &self.bin)
             .env("CALLS", &self.calls)
-            .env("REPOSITORY", "repo.example")
+            .env("REPOSITORY", "repo.example");
+        if let Some(metrics) = metrics {
+            command.arg("--metrics-file").arg(metrics);
+        }
+        command
             .args(["repo.example", "--"])
             .arg(&self.sync)
             .arg("--delete");
@@ -79,6 +89,13 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+fn sample(text: &str, family: &str) -> Option<f64> {
+    text.lines()
+        .find(|line| line.starts_with(&format!("{family}{{")))
+        .and_then(|line| line.split_whitespace().last())
+        .and_then(|value| value.parse().ok())
+}
+
 #[test]
 fn successful_sync_opens_and_publishes_one_transaction() {
     let fixture = Fixture::new();
@@ -87,6 +104,191 @@ fn successful_sync_opens_and_publishes_one_transaction() {
     assert_eq!(
         fixture.calls(),
         "list\ntransaction repo.example\nsync --delete\npublish repo.example\n"
+    );
+}
+
+#[test]
+fn successful_publish_writes_final_metrics_atomically_with_the_existing_mode() {
+    let fixture = Fixture::new();
+    let metrics = fixture.dir.path().join("cvmfs.prom");
+    std::fs::write(&metrics, "stale\n").unwrap();
+    std::fs::set_permissions(&metrics, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let mut command = fixture.command_with_metrics(Some(&metrics));
+    command
+        .env("STUB_TRANSACTION_DELAY", "0.1")
+        .env("STUB_PUBLISH_DELAY", "0.1");
+    // SAFETY: `umask` is async-signal-safe and the closure allocates nothing.
+    unsafe {
+        command.pre_exec(|| {
+            libc::umask(0o077);
+            Ok(())
+        });
+    }
+    let output = command.output().unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let text = std::fs::read_to_string(&metrics).unwrap();
+    assert_eq!(sample(&text, "eb_cvmfs_last_result"), Some(1.0));
+    assert_eq!(sample(&text, "eb_cvmfs_exit_code"), Some(0.0));
+    assert_eq!(sample(&text, "eb_cvmfs_aborts"), Some(0.0));
+    assert!(
+        sample(&text, "eb_cvmfs_last_publish_timestamp_seconds").unwrap() > 0.0,
+        "{text}"
+    );
+    assert!(
+        sample(&text, "eb_cvmfs_last_transaction_duration_seconds").unwrap() >= 0.2,
+        "{text}"
+    );
+    assert_eq!(
+        std::fs::metadata(&metrics).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+    assert!(!std::fs::read_dir(fixture.dir.path())
+        .unwrap()
+        .any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".tmp")));
+}
+
+#[test]
+fn failed_sync_preserves_the_last_publish_and_records_its_completed_abort() {
+    let fixture = Fixture::new();
+    let metrics = fixture.dir.path().join("cvmfs.prom");
+    let output = fixture
+        .command_with_metrics(Some(&metrics))
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let first = std::fs::read_to_string(&metrics).unwrap();
+    let published = sample(&first, "eb_cvmfs_last_publish_timestamp_seconds").unwrap();
+
+    let output = fixture
+        .command_with_metrics(Some(&metrics))
+        .env("SYNC_EXIT", "23")
+        .env("STUB_ABORT_DELAY", "0.1")
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 23, "{}", stderr(&output));
+    let text = std::fs::read_to_string(&metrics).unwrap();
+    assert_eq!(sample(&text, "eb_cvmfs_last_result"), Some(0.0));
+    assert_eq!(sample(&text, "eb_cvmfs_exit_code"), Some(23.0));
+    assert_eq!(sample(&text, "eb_cvmfs_aborts"), Some(1.0));
+    assert_eq!(
+        sample(&text, "eb_cvmfs_last_publish_timestamp_seconds"),
+        Some(published)
+    );
+    assert!(
+        sample(&text, "eb_cvmfs_last_transaction_duration_seconds").unwrap() >= 0.1,
+        "{text}"
+    );
+}
+
+#[test]
+fn an_abort_that_cannot_start_is_not_counted_or_called_complete() {
+    let fixture = Fixture::new();
+    let metrics = fixture.dir.path().join("cvmfs.prom");
+    let output = fixture
+        .command_with_metrics(Some(&metrics))
+        .env("SYNC_EXIT", "23")
+        .env("REMOVE_SERVER", "1")
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 23, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("cannot start cvmfs_server abort"),
+        "{}",
+        stderr(&output)
+    );
+    let text = std::fs::read_to_string(metrics).unwrap();
+    assert_eq!(sample(&text, "eb_cvmfs_aborts"), Some(0.0));
+    assert_eq!(
+        sample(&text, "eb_cvmfs_last_transaction_duration_seconds"),
+        None
+    );
+}
+
+#[test]
+fn a_metrics_write_failure_does_not_mask_the_sync_failure() {
+    let fixture = Fixture::new();
+    let metrics = fixture.dir.path().join("cvmfs.prom");
+    std::fs::create_dir(&metrics).unwrap();
+    let output = fixture
+        .command_with_metrics(Some(&metrics))
+        .env("SYNC_EXIT", "23")
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 23, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("cannot write metrics"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(
+        fixture.calls(),
+        "list\ntransaction repo.example\nsync --delete\nabort -f repo.example\n"
+    );
+}
+
+#[test]
+fn a_failed_publish_has_duration_but_no_success_timestamp() {
+    let fixture = Fixture::new();
+    let metrics = fixture.dir.path().join("cvmfs.prom");
+    let output = fixture
+        .command_with_metrics(Some(&metrics))
+        .env("STUB_PUBLISH_EXIT", "8")
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 8, "{}", stderr(&output));
+    let text = std::fs::read_to_string(metrics).unwrap();
+    assert_eq!(sample(&text, "eb_cvmfs_last_result"), Some(0.0));
+    assert_eq!(sample(&text, "eb_cvmfs_exit_code"), Some(8.0));
+    assert_eq!(
+        sample(&text, "eb_cvmfs_last_publish_timestamp_seconds"),
+        None
+    );
+    assert!(
+        sample(&text, "eb_cvmfs_last_transaction_duration_seconds").is_some(),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_shared_metrics_file_serializes_whole_invocations() {
+    let fixture = Fixture::new();
+    let metrics = fixture.dir.path().join("cvmfs.prom");
+    let mut first = fixture.command_with_metrics(Some(&metrics));
+    first.env("SYNC_DELAY", "0.2");
+    let first = first.spawn().unwrap();
+    for _ in 0..100 {
+        if fixture.calls().contains("sync --delete") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(fixture.calls().contains("sync --delete"));
+
+    let second = fixture
+        .command_with_metrics(Some(&metrics))
+        .spawn()
+        .unwrap();
+    let first = first.wait_with_output().unwrap();
+    let second = second.wait_with_output().unwrap();
+    assert_eq!(code(&first), 0, "{}", stderr(&first));
+    assert_eq!(code(&second), 0, "{}", stderr(&second));
+    assert_eq!(
+        fixture.calls(),
+        "\
+list
+transaction repo.example
+sync --delete
+publish repo.example
+list
+transaction repo.example
+sync --delete
+publish repo.example
+"
     );
 }
 
@@ -226,11 +428,39 @@ fn dry_run_prints_every_possible_command_without_running_one() {
 }
 
 #[test]
+fn dry_run_updates_only_invocation_metrics() {
+    let fixture = Fixture::new();
+    let metrics = fixture.dir.path().join("cvmfs.prom");
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
+        .args(["--dry-run", "--metrics-file"])
+        .arg(&metrics)
+        .args(["repo.example", "--"])
+        .arg(&fixture.sync)
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let text = std::fs::read_to_string(metrics).unwrap();
+    assert_eq!(sample(&text, "eb_cvmfs_last_result"), Some(1.0));
+    assert_eq!(sample(&text, "eb_cvmfs_exit_code"), Some(0.0));
+    assert_eq!(sample(&text, "eb_cvmfs_aborts"), Some(0.0));
+    assert_eq!(
+        sample(&text, "eb_cvmfs_last_publish_timestamp_seconds"),
+        None
+    );
+    assert_eq!(
+        sample(&text, "eb_cvmfs_last_transaction_duration_seconds"),
+        None
+    );
+    assert!(fixture.calls().is_empty());
+}
+
+#[test]
 fn invalid_arguments_are_usage_errors() {
     for args in [
         vec![],
         vec!["repo.example"],
         vec!["repo.example", "sync"],
+        vec!["--metrics-file"],
         vec!["--unknown", "repo.example", "--", "sync"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))

@@ -8,7 +8,9 @@ use eb_pipeline::{
     easystack, eessi, metrics, notify, sbom, schema, site, summary, templates, tools, util, watch,
 };
 use serde::Serialize;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 const ROOT_HELP: &str = "\
 Examples:
@@ -33,8 +35,9 @@ Output streams: stdout carries plan, explain, schema, init, status, targets and
 metrics, and run --dry-run or watch --dry-run output only. Events go to stderr
 as `LEVEL [phase] target: message`. The result JSON goes to --result, and each
 run's summary to summary.json and summary.html in its run directory,
-<log_root>/<log-stamp>/. `metrics` exits 0 when it can read the file, including
-when the run itself failed.
+<log_root>/<log-stamp>/. Run --metrics-file atomically replaces a Prometheus
+text file when the run ends. `metrics` exits 0 when it can read the file,
+including when the run itself failed.
 
 ";
 
@@ -163,6 +166,11 @@ enum Cmd {
         /// Write the result JSON here.
         #[arg(long)]
         result: Option<PathBuf>,
+        /// Atomically write Prometheus metrics here when the run ends.
+        ///
+        /// Must differ from `--result` and `--resume-result`.
+        #[arg(long)]
+        metrics_file: Option<PathBuf>,
         /// Directory written by `stack shard`; reuse its units without replanning.
         #[arg(long)]
         shard_plan: Option<PathBuf>,
@@ -490,6 +498,7 @@ fn timestamp_id() -> String {
 struct Mode<'a> {
     out: Option<&'a Path>,
     result: Option<&'a Path>,
+    metrics_file: Option<&'a Path>,
     shard_plan: Option<&'a Path>,
     dry: bool,
     is_run: bool,
@@ -497,16 +506,58 @@ struct Mode<'a> {
     resume_result: Option<&'a Path>,
 }
 
+fn same_output(path_a: &Path, path_b: &Path) -> bool {
+    if resolved_output(path_a) == resolved_output(path_b) {
+        return true;
+    }
+    match (std::fs::metadata(path_a), std::fs::metadata(path_b)) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+        _ => false,
+    }
+}
+
+fn resolved_output(path: &Path) -> PathBuf {
+    if let Ok(path) = std::fs::canonicalize(path) {
+        return path;
+    }
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
+    match (
+        std::fs::canonicalize(parent),
+        path.file_name().map(ToOwned::to_owned),
+    ) {
+        (Ok(parent), Some(name)) => parent.join(name),
+        _ => std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()),
+    }
+}
+
 fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
     let Mode {
         out,
         result,
+        metrics_file,
         shard_plan,
         dry,
         is_run,
         oom_node,
         resume_result,
     } = m;
+    if let Some(metrics_file) = metrics_file {
+        for (json_option, json_path) in [("--result", result), ("--resume-result", resume_result)] {
+            if let Some(json_path) = json_path {
+                if same_output(json_path, metrics_file) {
+                    return Err(Fail::usage(format!(
+                        "{json_option} and --metrics-file must name different files, both resolve to {}",
+                        resolved_output(json_path).display()
+                    )));
+                }
+            }
+        }
+    }
     if let Some(stamp) = c.log_stamp.as_deref().filter(|s| !util::is_log_stamp(s)) {
         return Err(Fail::usage(format!(
             "--log-stamp `{stamp}` is not a UTC time as YYYYMMDD_HHMMSS"
@@ -658,6 +709,8 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         }
         _ => (None, None),
     };
+    let started_at = chrono::Utc::now();
+    let began = Instant::now();
     let mut res = run(
         &planner,
         &lines,
@@ -690,12 +743,32 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         }
     }
     if !dry {
+        res.started_at = started_at.to_rfc3339();
+        res.ended_at = chrono::Utc::now().to_rfc3339();
+        res.duration_seconds = eb_pipeline::run::seconds(began.elapsed());
         if let Some(before) = &before {
             watch::record_run(&planner, &lines, &res, before);
         }
         write_summary(&s, &res, "run", result, None, &planner.offline_wrapper);
+        let value = to_sorted(&res);
+        let mut output_errors = Vec::new();
         if let Some(p) = result {
-            write_json(&to_sorted(&res), Some(p))?;
+            if let Err(f) = write_json(&value, Some(p)) {
+                output_errors.push(f.msg);
+            }
+        }
+        if let Some(p) = metrics_file {
+            match metrics::from_result(&value) {
+                Ok(status) => {
+                    if let Err(e) = metrics::write_atomic(p, &metrics::prometheus(&status)) {
+                        output_errors.push(format!("cannot write metrics {}: {e}", p.display()));
+                    }
+                }
+                Err(f) => output_errors.push(f.msg),
+            }
+        }
+        if !output_errors.is_empty() {
+            return Err(Fail::new(exit::FAILED, output_errors.join("; ")));
         }
     }
     Ok(res.exit_code)
@@ -1166,6 +1239,7 @@ fn main() {
             Mode {
                 out: out.as_deref(),
                 result: None,
+                metrics_file: None,
                 shard_plan: shard_plan.as_deref(),
                 dry: false,
                 is_run: false,
@@ -1176,6 +1250,7 @@ fn main() {
         Cmd::Run {
             common,
             result,
+            metrics_file,
             shard_plan,
             dry_run,
             oom_preflight: _,
@@ -1186,6 +1261,7 @@ fn main() {
             Mode {
                 out: None,
                 result: result.as_deref(),
+                metrics_file: metrics_file.as_deref(),
                 shard_plan: shard_plan.as_deref(),
                 dry: *dry_run,
                 is_run: true,

@@ -1,0 +1,83 @@
+#+TITLE: Publish run metrics with the node exporter
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Publish run metrics with the node exporter
+
+The Prometheus node exporter textfile collector reads metric files from a directory on the node.
+=eb-pipeline run --metrics-file= can replace one of those files when a run ends.
+The option is off by default.
+
+* Before you start
+
+- A node exporter started with =--collector.textfile.directory=.
+- Write access to that directory for the account that runs =eb-pipeline=.
+- A site file and build list that already work with =eb-pipeline run=.
+
+* Steps
+
+1. Find the textfile collector directory in the node exporter service.
+   This example uses =/var/lib/node_exporter/textfile_collector=:
+
+   #+begin_src text
+   --collector.textfile.directory=/var/lib/node_exporter/textfile_collector
+   #+end_src
+
+2. Create the destination once with permissions that let the node exporter read it, and give the pipeline account permission to replace it.
+   Keep the file name specific to the target when several targets run on one node.
+   On replacement, =eb-pipeline= preserves the existing file's permission bits even when the pipeline account has a restrictive umask.
+   A rename cannot preserve another owner's ownership without extra privileges, so make the pipeline account the file owner or arrange the directory and group ownership explicitly.
+
+3. Pass the file to the run:
+
+   #+begin_src bash
+   eb-pipeline run \
+     --site site.toml \
+     --list build.list \
+     --target cpu \
+     --build-type production \
+     --result result-cpu.json \
+     --metrics-file /var/lib/node_exporter/textfile_collector/eb-pipeline-cpu.prom
+   #+end_src
+
+   The command writes a temporary file in the collector directory and renames it over the destination.
+   The collector therefore sees the old complete file or the new complete file, not a partial write.
+   If =--result= cannot be written, the metrics replacement is still attempted and the command reports the output error.
+
+4. Repeat the option for each scheduled run.
+   A successful replacement describes the most recently completed run.
+
+* Check that it worked
+
+Ask =promtool= to parse the file:
+
+#+begin_src bash
+promtool check metrics < /var/lib/node_exporter/textfile_collector/eb-pipeline-cpu.prom
+#+end_src
+
+Then read the node exporter's metrics endpoint and look for =eb_pipeline_last_run_result=:
+
+#+begin_src bash
+curl --fail --silent http://127.0.0.1:9100/metrics |
+  grep '^eb_pipeline_last_run_result'
+#+end_src
+
+The file includes the end time and duration of the run, its result, and counts of succeeded and failed build lines.
+All names begin with =eb_pipeline_=.
+It does not report an item retry count because =eb-pipeline= does not retry build items.
+
+* If it fails
+
+| Symptom | Cause | What to do |
+|---------+-------+------------|
+| =--result and --metrics-file must name different files= | Both options resolve to the same file. | Give the JavaScript Object Notation result and Prometheus metrics separate paths. The existing file was not changed. |
+| =cannot write metrics PATH= | The destination directory is missing or is not writable. | Create the directory and grant the pipeline account permission to write it. |
+| The old sample remains | The run stopped before it completed, or no =--metrics-file= was passed. | Read the run's error output and check the command line. A failure to write =--result= alone does not skip the metrics write. |
+| The node exporter does not show the samples | Its textfile collector uses another directory, or the file name does not end in =.prom=. | Check the service's =--collector.textfile.directory= and use a =.prom= destination there. |
+| =promtool= reports an error | The file was edited or another process writes the same destination. | Give each target one destination and let =eb-pipeline= replace it. |
+
+* Related
+
+- [[file:../reference/cli.org][The eb-pipeline command]]
+- [[file:../reference/plan-and-result.org][The plan and result files]]
+- [[https://github.com/prometheus/node_exporter#textfile-collector][The node exporter textfile collector]]

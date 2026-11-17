@@ -1,0 +1,84 @@
+#+TITLE: Publish CVMFS transaction metrics with the node exporter
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Publish CVMFS transaction metrics with the node exporter
+
+The Prometheus node exporter textfile collector reads metric files from a directory on the node.
+=eb-cvmfs --metrics-file= can replace one file after each synchronization, publish or abort.
+The option is off by default.
+
+** Before you start
+
+- A working =eb-cvmfs REPOSITORY -- COMMAND= invocation.
+- A node exporter started with =--collector.textfile.directory=.
+- A separate metrics path for each CernVM File System (CVMFS) repository.
+
+** Steps
+
+1. Find the textfile collector directory in the node exporter service.
+   This example uses =/var/lib/node_exporter/textfile_collector=.
+
+2. Create the destination once, owned by the account that runs =eb-cvmfs= and readable by the node exporter:
+
+   #+begin_src bash
+   install -o cache-publisher -g node-exporter -m 0640 /dev/null \
+     /var/lib/node_exporter/textfile_collector/eb-cvmfs-repo-example.prom
+   #+end_src
+
+   Atomic replacement preserves these permission bits, including under a restrictive umask.
+   It cannot preserve another account's ownership without extra privileges.
+
+3. Add the metrics option before the repository:
+
+   #+begin_src bash
+   eb-cvmfs \
+     --metrics-file /var/lib/node_exporter/textfile_collector/eb-cvmfs-repo-example.prom \
+     repo.example -- /opt/site/bin/sync-module-cache
+   #+end_src
+
+   Give each repository its own file.
+   Invocations sharing a file are serialized with a sibling lock so a failed invocation can preserve the last successful publish time safely.
+
+4. If =[caches].command= runs =eb-cvmfs=, put the same option in that command:
+
+   #+begin_src toml
+   [caches]
+   command = "eb-cvmfs --metrics-file /var/lib/node_exporter/textfile_collector/eb-cvmfs-repo-example.prom repo.example -- /opt/site/bin/sync-module-cache"
+   #+end_src
+
+** Check that it worked
+
+Validate the generated exposition:
+
+#+begin_src bash
+promtool check metrics < \
+  /var/lib/node_exporter/textfile_collector/eb-cvmfs-repo-example.prom
+#+end_src
+
+Then ask the node exporter for the latest result:
+
+#+begin_src bash
+curl --fail --silent http://127.0.0.1:9100/metrics |
+  grep '^eb_cvmfs_last_result'
+#+end_src
+
+=eb_cvmfs_last_publish_timestamp_seconds= changes only after a successful publish.
+=eb_cvmfs_last_transaction_duration_seconds= covers an opened transaction through a completed publish or abort command.
+=eb_cvmfs_aborts= is 0 or 1 for the latest invocation; it is not a cumulative counter.
+
+** If it fails
+
+| Symptom | Cause | What to do |
+|---------+-------+------------|
+| =cannot prepare metrics PATH= | The directory or sibling lock is not writable. | Fix ownership and directory permissions before starting the transaction. |
+| =cannot write metrics PATH= | Atomic replacement failed after the repository operation. | Keep the operation's earlier error as primary, then fix the destination permissions. |
+| No publish timestamp | No publish has succeeded for this repository and file yet. | Check =eb_cvmfs_exit_code= and the command's error output. |
+| The node exporter cannot read the file | A new file was created under a restrictive umask, or ownership is wrong. | Pre-create it as in step 2 and use the same publishing account thereafter. |
+| Another invocation waits | It uses the same metrics file and holds that file's lock. | Wait for it, or use distinct files for distinct repositories. |
+
+** Related
+
+- [[file:publish-caches-with-cvmfs.org][Publish cache updates with CVMFS]]
+- [[file:../reference/cvmfs.org][The eb-cvmfs command]]
+- [[https://github.com/prometheus/node_exporter#textfile-collector][The node exporter textfile collector]]

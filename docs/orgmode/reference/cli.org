@@ -72,8 +72,9 @@ Output streams: stdout carries plan, explain, schema, init, status, targets and
 metrics, and run --dry-run or watch --dry-run output only. Events go to stderr
 as `LEVEL [phase] target: message`. The result JSON goes to --result, and each
 run's summary to summary.json and summary.html in its run directory,
-<log_root>/<log-stamp>/. `metrics` exits 0 when it can read the file, including
-when the run itself failed.
+<log_root>/<log-stamp>/. Run --metrics-file atomically replaces a Prometheus
+text file when the run ends. `metrics` exits 0 when it can read the file,
+including when the run itself failed.
 
 Exit codes:
    0  all requested work completed
@@ -198,7 +199,18 @@ It shows =<run-id>= and =<log-stamp>= where a run puts its own.
 | =--result FILE=   | =EB_PIPELINE_RESULT=   | The result file of one run; required.                                                                                            |
 | =--format FORMAT= |                        | =prometheus=, the default, prints Prometheus text; =json= prints one JSON status document.                                       |
 
-=metrics= reads that file and prints gauges =eb_pipeline_info=, =eb_pipeline_exit_code=, =eb_pipeline_lines= and =eb_pipeline_phase=.
+=metrics= reads that file and prints these gauges:
+
+- =eb_pipeline_info=
+- =eb_pipeline_exit_code=
+- =eb_pipeline_last_run_timestamp_seconds=
+- =eb_pipeline_last_run_result=
+- =eb_pipeline_last_run_duration_seconds=
+- =eb_pipeline_items_built=
+- =eb_pipeline_items_failed=
+- =eb_pipeline_lines=
+- =eb_pipeline_phase=
+
 A status the run did not use is 0.
 Log paths stay in the result file.
 Exit 0 means the file was read, including when the run's own exit code is not 0.
@@ -225,16 +237,21 @@ Exit 2 means the file is missing, is not JSON, or its =kind= is not =result=.
 
 =run= takes the common input and offline options of =plan=, and these:
 
-| Option             | Meaning                                                                                                                                                                                                       |
-|--------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| =--result FILE=    | Write the result file to =FILE= when the run ends. Without it, no result file is written. An error in the input, which stops the run before it starts, leaves an existing =FILE= as it was.                   |
+| Option                 | Meaning                                                                                                                                                                                                                         |
+|------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =--result FILE=        | Write the result file to =FILE= when the run ends. Without it, no result file is written. An error in the input, which stops the run before it starts, leaves an existing =FILE= as it was. It must differ from =--metrics-file=.   |
+| =--metrics-file FILE=  | Atomically replace =FILE= with Prometheus text when the run ends. Without it, no metrics file is written. A dry run does not write it. It must differ from =--result= and =--resume-result=.                                             |
 | =--resume-result FILE= | Continue from =FILE= when =[resume] enabled= is true and the input digest still matches. Without that, exit 2 and no result file. A mismatch, a missing =input_digest=, or an incomplete identity exits 78 and writes the result. |
-| =--shard-plan DIR= | Read the units from a plan previously written by =eb-stack stack shard=. The run does not call the shard planner or require its installed-module-directory environment variables.                           |
-| =--dry-run=        | Print each command of the plan on stdout and start nothing. No result file or summary is written, even with =--result=.                                                                                       |
-| =--oom-preflight=  | Before any package starts, ask =eb-stack stack oom= about the planned packages. Requires =--node=. Without this option no OOM check runs.                                                                       |
-| =--node NODE=      | The node passed to =eb-stack stack oom=, as =CORES:MEMORY_MIB= or =CORES:MEMORY_MIB:TARGET=. Requires =--oom-preflight=.                                                                                      |
+| =--shard-plan DIR=     | Read the units from a plan previously written by =eb-stack stack shard=. The run does not call the shard planner or require its installed-module-directory environment variables.                                             |
+| =--dry-run=            | Print each command of the plan on stdout and start nothing. No result file, metrics file or summary is written, even with an output option.                                                                                     |
+| =--oom-preflight=      | Before any package starts, ask =eb-stack stack oom= about the planned packages. Requires =--node=. Without this option no out-of-memory check runs.                                                                             |
+| =--node NODE=          | The node passed to =eb-stack stack oom=, as =CORES:MEMORY_MIB= or =CORES:MEMORY_MIB:TARGET=. Requires =--oom-preflight=.                                                                                                        |
 
 =--run-id= defaults to the log stamp, and =--log-stamp= to the UTC time at which the run starts, taken once.
+A metrics file records the final result, end time and duration after post-run work such as Software Bill of Materials (SBOM) generation.
+When both output files are requested, =run= attempts =--result= first and =--metrics-file= second even if the first write fails, then reports every output failure and exits 1.
+If =--metrics-file= resolves to the same file as either JSON option, =run= exits 2 before it starts work or changes any of those files.
+=--result= may name the same file as =--resume-result=: the complete prior result is read before the completed run atomically replaces it.
 A line that =eb-staged-rebuild= builds passes =RUN_ID-STEM= as its run id, where =STEM= is the easyconfig file name without =.eb=, with =.2=, =.3= and so on added when the list repeats the line.
 When the OOM count is greater than zero, the preflight is refused, every planned package is recorded as skipped, and the run exits 78.
 The command reads only the =oom=N= summary line from eb-stack; eb-pipeline does not estimate memory itself.
@@ -291,6 +308,7 @@ The rebuild of =watch= exits as a run would, and =watch= exits with its status.
 | =DIR/manifest.json=, =--offline-bundle DIR= | Version-one checksum index of the bundled files: =url=, =sha256=, =local_name=, =consumer= and the content-addressed =object= path.                                                                                                                                                |
 | =DIR/objects/sha256/=             | Bundle objects, stored once by SHA-256.                                                                                                                                                                                                                                                                                 |
 | =DIR/planner/=                    | =stack order= and =stack files= artifacts, plus one =foreign-NN= package-inspection bundle per =[[sources.foreign]]= input.                                                                                                                                                                                          |
+| the metrics file, =run --metrics-file= | Prometheus text for the completed run, atomically replaced for a textfile collector.                                                                                                                                                                                                                                                     |
 | =LOG_ROOT/LOG_STAMP/TARGET/=      | The log directory of a run, under =filesystems.log_root=; [[file:log-tree.org][The log tree and its locks]] lists its files.                                                                                                                                                                                                                 |
 | =LOG_ROOT/LOG_STAMP/summary.json= | The summary of the runs with that log stamp, which each =run= updates and =status= reads, with =summary.html= beside it; [[file:run-summary.org][The run summary]] lists its keys.                                                                                                                                                              |
 | =STATE_DIR/TARGET.json=           | With =[watch]=, what each install of the target that a run or =watch= built was built against in EESSI, which =watch= compares with EESSI now; [[file:watch.org][The watch state and plan]] lists its keys.                                                                                                                               |
