@@ -78,6 +78,7 @@ env | grep '^EB_PIPELINE_\|^EASYBUILD_\|^ROUTE_' | sort > "$D/env.$kind.$stem"
 if [ -n "${STUB_EB_PIPELINE:-}" ]; then
   (cd / && "$STUB_EB_PIPELINE" targets) > "$D/targets.$stem" 2>&1 || exit 1
 fi
+if [ -n "${STUB_EB_DELAY:-}" ]; then sleep "$STUB_EB_DELAY"; fi
 if [ -n "${STUB_EB_SLEEP:-}" ]; then
   echo started > "$D/started"
   trap 'echo term > "$D/termed"; kill $pid 2>/dev/null; exit 0' TERM
@@ -371,6 +372,28 @@ fn result_phases_follow_the_pipeline_order() {
     assert_eq!(names, in_order);
     assert_eq!(names.first(), Some(&"preflight"), "{names:?}");
     assert!(!r["not_configured"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn the_result_records_how_long_each_line_phase_and_run_took() {
+    let env = setup("");
+    let o = go(&env, LIST, &[("STUB_EB_DELAY", "0.3")]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = o.result.unwrap();
+    for l in r["lines"].as_array().unwrap() {
+        assert!(l["duration_seconds"].as_f64().unwrap() >= 0.3, "{l}");
+    }
+    let build = result_phase(&r, "build")["duration_seconds"]
+        .as_f64()
+        .unwrap();
+    assert!(build >= 0.6, "{r}");
+    assert!(
+        result_phase(&r, "preflight")
+            .get("duration_seconds")
+            .is_none(),
+        "a phase that ran no command has no duration: {r}"
+    );
+    assert!(r["duration_seconds"].as_f64().unwrap() >= build, "{r}");
 }
 
 #[test]

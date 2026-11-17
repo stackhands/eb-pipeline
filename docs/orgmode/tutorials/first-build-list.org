@@ -167,29 +167,32 @@ cat result.json
   "counts": {
     "success": 2
   },
-  "ended_at": "2026-11-17T02:40:48.852371271+00:00",
+  "duration_seconds": 0.041,
+  "ended_at": "2026-11-17T06:33:39.045364058+00:00",
   "exit_code": 0,
   "kind": "result",
   "lines": [
     {
+      "duration_seconds": 0.02,
       "easyconfig": "Example-1.0-GCCcore-15.2.0.eb",
       "exit_code": 0,
-      "log": "$WORK/logs/20261117_024048/cpu/Example-1.0-GCCcore-15.2.0.stdout.log",
+      "log": "$WORK/logs/20261117_063339/cpu/Example-1.0-GCCcore-15.2.0.stdout.log",
       "phase": "build",
       "status": "success",
       "unit": "all"
     },
     {
+      "duration_seconds": 0.021,
       "easyconfig": "zlib-1.3.1-GCCcore-15.2.0.eb",
       "exit_code": 0,
-      "log": "$WORK/logs/20261117_024048/cpu/zlib-1.3.1-GCCcore-15.2.0.stdout.log",
+      "log": "$WORK/logs/20261117_063339/cpu/zlib-1.3.1-GCCcore-15.2.0.stdout.log",
       "phase": "build",
       "status": "success",
       "unit": "all"
     }
   ],
   "list": "build.list",
-  "log_dir": "$WORK/logs/20261117_024048/cpu",
+  "log_dir": "$WORK/logs/20261117_063339/cpu",
   "not_configured": [
     "licences",
     "shard",
@@ -205,24 +208,25 @@ cat result.json
     },
 ...
     {
+      "duration_seconds": 0.041,
       "name": "build",
       "status": "ok"
     },
 ...
   ],
-  "run_id": "20261117_024048",
+  "run_id": "20261117_063339",
   "schema_version": 1,
   "sharded": false,
   "site": "example",
-  "started_at": "2026-11-17T02:40:48.811313154+00:00",
+  "started_at": "2026-11-17T06:33:39.004013640+00:00",
   "target": "cpu"
 }
 #+end_example
 
 - =exit_code= is the status eb-pipeline exited with, and =counts= counts the lines by status.
-- =lines= has an entry for each line, with its =status= and the =log= that its =eb= wrote to.
+- =lines= has an entry for each line, with its =status=, the =log= that its =eb= wrote to, and the =duration_seconds= it ran for.
 - =phases= has every phase of the run in order, and =not_configured= names the ones the site file leaves out.
-- =20261117_024048= is the time the run started, in Coordinated Universal Time (UTC), so yours differs.
+- =20261117_063339= is the time the run started, in Coordinated Universal Time (UTC), so yours differs.
   It names the run's log directory, and it is the =run_id= too, as no =--run-id= gave another.
 
 ** Read the log of a line
