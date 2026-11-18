@@ -4,11 +4,24 @@
 #![allow(dead_code)]
 
 use serde_json::Value;
+use std::os::fd::FromRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 pub const STAMP: &str = "20260101_000000";
+
+/// A standard-output handle whose pipeline consumer has already closed.
+pub fn closed_stdout() -> Stdio {
+    let mut fds = [0; 2];
+    // SAFETY: both descriptors are checked, and ownership of the write
+    // descriptor moves into `Stdio`.
+    unsafe {
+        assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+        assert_eq!(libc::close(fds[0]), 0);
+        Stdio::from_raw_fd(fds[1])
+    }
+}
 
 /// Fails the easyconfig stems listed in STUB_EB_FAIL. With STUB_EB_INSTALL
 /// set it installs `Name-version.eb` as EasyBuild does, a module file and
