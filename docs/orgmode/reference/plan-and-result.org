@@ -139,6 +139,12 @@ Where a run reads a value when it starts, the plan shows a stand-in: =<run-id>= 
 | =name= | string          | =probe:TOOL=, =shard=, =fetch:STEM=, =admit:UNIT=, =build:STEM=, =keep-failed:STEM=, =check=, =cache= or =rotate=.        |
 | =note= | string          | What to know about the command, such as what its exit statuses mean; only when there is something.                        |
 
+Each =argv= element is one subprocess argument, so spaces and non-ASCII
+characters stay in that element without shell quoting.
+For an easyconfig name that starts with =-=, all EasyBuild options precede
+=--= and the original name follows it. The plan's =list= and the result's
+=easyconfig= retain the original name.
+
 =STEM= is the easyconfig file name without =.eb=, with =.2=, =.3= and so on added when the list repeats a line.
 =UNIT= is =all= for the whole list, or =cpu-prerequisites=, =prelude= or the name of a shard with a shard plan.
 A =probe:TOOL= command runs the =--version= of a tool that has a =min_version=.
