@@ -19,7 +19,8 @@ pub fn is_easystack(path: &Path) -> bool {
 
 /// The build list lines of the easystack `text`, in file order.
 pub fn parse(text: &str) -> Result<Vec<ListLine>, String> {
-    let doc: Value = serde_yaml::from_str(text).map_err(|e| e.to_string())?;
+    let mut doc: Value = serde_yaml::from_str(text).map_err(|e| e.to_string())?;
+    doc.apply_merge().map_err(|e| e.to_string())?;
     let entries = match doc.get("easyconfigs") {
         Some(Value::Sequence(s)) => s,
         Some(_) => return Err("`easyconfigs` is not a list; start each entry with `- `".into()),
@@ -283,6 +284,31 @@ mod tests {
             "x-1.0.eb '--accept-eula-for=A B' --amend=versionsuffix=-a --amend=toolchain=b -f --force --from-pr=12345 --include-easyblocks=a.py,b.py --rebuild --disable-robot"
         );
         assert_eq!(crate::util::parse_list(&l.raw).unwrap()[0], *l);
+    }
+
+    #[test]
+    fn yaml_merge_keys_supply_easyconfig_options_as_in_easybuild() {
+        let text = r#"
+defaults: &defaults
+  options:
+    rebuild: true
+    robot: false
+easyconfigs:
+  - x-1.0.eb:
+      <<: *defaults
+"#;
+        assert_eq!(lines(text), ["x-1.0.eb --rebuild --disable-robot"],);
+    }
+
+    #[test]
+    fn ordinary_easystack_line_bytes_remain_unchanged() {
+        let parsed =
+            parse("easyconfigs:\n  - x-1.0.eb: {options: {rebuild: true, robot: false}}\n")
+                .unwrap();
+        assert_eq!(
+            parsed[0].raw.as_bytes(),
+            b"x-1.0.eb --rebuild --disable-robot"
+        );
     }
 
     #[test]
