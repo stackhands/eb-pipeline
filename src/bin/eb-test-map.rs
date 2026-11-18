@@ -159,6 +159,10 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 print!("{}", include_str!("eb-test-map-help.txt"));
                 std::process::exit(0);
             }
+            "-V" | "--version" => {
+                println!("eb-test-map {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
             "--allow-unmapped" => allow_unmapped = true,
             "--include-resumed" => include_resumed = true,
             "--map" | "--list" | "--result" | "--toolchain" | "--format" => {

@@ -487,3 +487,14 @@ fn reframe_output_escapes_dot_and_libstdcpp() {
         "-n ^gromacs\\.2024$\n-n ^libstdc\\+\\+$\n"
     );
 }
+
+#[test]
+fn version_flags_write_to_stdout_and_exit_zero() {
+    let expected = format!("eb-test-map {}\n", env!("CARGO_PKG_VERSION")).into_bytes();
+    for flag in ["-V", "--version"] {
+        let o = bin().arg(flag).output().unwrap();
+        assert_eq!(o.status.code(), Some(0), "{flag}: {:?}", o.stderr);
+        assert_eq!(o.stdout, expected, "{flag}");
+        assert!(o.stderr.is_empty(), "{flag}: {:?}", o.stderr);
+    }
+}
