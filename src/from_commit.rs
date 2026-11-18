@@ -72,12 +72,7 @@ pub fn run(site: Option<&Site>, list: &Path, opts: &Options<'_>) -> Result<i32, 
         .args(argv(list, opts))
         .stdin(Stdio::null())
         .output()
-        .map_err(|e| {
-            Fail::new(
-                exit::FAILED,
-                format!("cannot run `{bin} stack from-commit`: {e}"),
-            )
-        })?;
+        .map_err(|e| Fail::usage(format!("cannot run `{bin} stack from-commit`: {e}")))?;
     let _ = std::io::stdout().write_all(&output.stdout);
     let _ = std::io::stderr().write_all(&output.stderr);
     let code = output
