@@ -273,12 +273,26 @@ fn root_of(text: &str) -> Option<String> {
         let l = l.trim();
         if let Some(rest) = l.strip_prefix("local root") {
             let v = rest.trim_start().strip_prefix('=')?.trim();
-            return Some(v.trim_matches('"').to_string());
+            return path_value(v).map(str::to_string);
         }
-        let rest = l.strip_prefix("set")?;
-        let mut w = rest.split_whitespace();
-        (w.next()? == "root").then(|| w.next().map(str::to_string))?
+        let rest = l.strip_prefix("set")?.trim_start();
+        let value = rest.strip_prefix("root")?;
+        value
+            .chars()
+            .next()
+            .is_some_and(char::is_whitespace)
+            .then(|| path_value(value).map(str::to_string))?
     })
+}
+
+fn path_value(text: &str) -> Option<&str> {
+    let text = text.trim();
+    for quote in ['"', '\''] {
+        if let Some(rest) = text.strip_prefix(quote) {
+            return rest.split_once(quote).map(|(value, _)| value);
+        }
+    }
+    text.split_whitespace().next()
 }
 
 /// 64-bit FNV-1a, enough to tell a changed module from an unchanged one.
@@ -366,9 +380,10 @@ mod tests {
     #[test]
     fn tcl_and_lua_module_files_name_their_root() {
         assert_eq!(root_of("local root = \"/a/b\"\n").as_deref(), Some("/a/b"));
+        assert_eq!(root_of("local root = '/a c'\n").as_deref(), Some("/a c"));
         assert_eq!(
-            root_of("#%Module\nset root    /a/c\n").as_deref(),
-            Some("/a/c")
+            root_of("#%Module\nset root    \"/a d\"\n").as_deref(),
+            Some("/a d")
         );
         assert_eq!(root_of("setenv FOO 1\n"), None);
     }
