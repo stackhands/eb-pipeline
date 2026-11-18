@@ -23,7 +23,9 @@ path is used as written and must still be readable.
 
 Without `--status`, every unfinished status (`failed`, `refused`, `pending`,
 `skipped`, and lines not yet reached before a non-zero exit) is included.
-Deselected lines and lines recorded as `success` are left out.
+Deselected lines and lines recorded as `success` are left out. A `skipped`
+line whose note starts with `resumed:` is also left out because its outputs
+were already checked. Pass `--status skipped` to include it explicitly.
 
 With `--classify`, each unfinished line's recorded log is passed to
 `eb-stack stack bot-classify --json`. Without `--class`, only the
