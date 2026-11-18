@@ -233,6 +233,7 @@ A build list can mark a line for some targets only, with an option of the line t
 =plan= and =run= apply the selection to the whole list, or to each shard unit, and drop a unit left without lines.
 With a selection, =run= writes the lines it keeps, in list order and with =strip= applied, to =LOG_DIR/selected-TARGET.list=, and passes that file to =stack shard --build-list=.
 The plan and the result list the lines left out under =deselected=, and no status count includes them.
+The separate-token form needs a value before the next option; otherwise =plan= and =run= exit 2 and name the list line.
 
 *** =[targets.hardware]=
 
