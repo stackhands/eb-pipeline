@@ -473,6 +473,7 @@ When =stack oom= rejects its generated easystack, the error names the source bui
 *** eb-shard-weights
 
 =eb-shard-weights= turns observed =duration_seconds= of succeeded =build= lines from =result.json=, =summary.json= or =--log-root= into the =MODULE<TAB>SECONDS= table read by =eb-stack stack shard --weights= and =[shards] weights=.
+Each succeeded =build= line in a result must contain a non-negative numeric =duration_seconds=.
 
 #+begin_example
 eb-shard-weights (--result FILE... | --summary FILE... | --log-root DIR [--last N])
@@ -486,7 +487,7 @@ eb-shard-weights (--result FILE... | --summary FILE... | --log-root DIR [--last 
 | =--summary FILE= | Run summary file (=summary.json=). Repeatable. |
 | =--log-root DIR= | Log root holding =LOG_STAMP= run directories to scan. |
 | =--last N= | How many newest run directories under =--log-root= to read (1 to 65535; default 10). |
-| =--target NAME= | Keep observations from this target only. |
+| =--target NAME= | Keep observations from this target only; exit 2 when no input contains it. |
 | =--existing FILE= | Seed weights TSV (=MODULE<TAB>SECONDS=) to merge with new observations. |
 | =--min-samples N= | Update a module only after N selected observations, from 1 to 65535; 1 when absent. Under-sampled existing weights remain unchanged. |
 | =--mode MODE= | Combine durations with =max= (default), =latest= or =mean=. |

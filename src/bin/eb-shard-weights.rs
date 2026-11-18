@@ -75,8 +75,9 @@ fn run() -> Result<ExitCode, String> {
 
     let mut observations = Vec::new();
     let mut seq = 0usize;
+    let mut target_matched = args.target.is_none();
     for path in &args.results {
-        collect_result(
+        target_matched |= collect_result(
             Path::new(path),
             args.target.as_deref(),
             &mut observations,
@@ -86,7 +87,7 @@ fn run() -> Result<ExitCode, String> {
     for path in &args.summaries {
         let text = fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
         let s = parse_summary_json(&text, Path::new(path))?;
-        collect_summary(&s, args.target.as_deref(), &mut observations, &mut seq);
+        target_matched |= collect_summary(&s, args.target.as_deref(), &mut observations, &mut seq);
     }
     if let Some(root) = &args.log_root {
         let last = args.last.unwrap_or(10);
@@ -95,9 +96,16 @@ fn run() -> Result<ExitCode, String> {
         // falls back cleanly when timestamps match.
         for entry in entries.into_iter().rev() {
             if let Ok(s) = entry.summary {
-                collect_summary(&s, args.target.as_deref(), &mut observations, &mut seq);
+                target_matched |=
+                    collect_summary(&s, args.target.as_deref(), &mut observations, &mut seq);
             }
         }
+    }
+    if !target_matched {
+        return Err(format!(
+            "no input data matched target `{}`",
+            args.target.as_deref().unwrap_or_default()
+        ));
     }
     if args.min_samples > 1 {
         let mut counts = BTreeMap::new();
@@ -357,7 +365,7 @@ fn collect_result(
     target_filter: Option<&str>,
     out: &mut Vec<Observation>,
     seq: &mut usize,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let text =
         fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let v: Value =
@@ -381,7 +389,7 @@ fn collect_result(
             .and_then(Value::as_str)
             .ok_or_else(|| format!("{}: missing string `target`", path.display()))?;
         if got != want {
-            return Ok(());
+            return Ok(false);
         }
     }
     let ended_at = obj
@@ -402,11 +410,20 @@ fn collect_result(
         if phase != "build" || status != "success" {
             continue;
         }
-        let Some(secs) = line.get("duration_seconds").and_then(Value::as_f64) else {
-            continue;
-        };
+        let secs = line
+            .get("duration_seconds")
+            .and_then(Value::as_f64)
+            .ok_or_else(|| {
+                format!(
+                    "{}: lines[{i}].duration_seconds must be a non-negative number",
+                    path.display()
+                )
+            })?;
         if !secs.is_finite() || secs < 0.0 {
-            continue;
+            return Err(format!(
+                "{}: lines[{i}].duration_seconds must be a non-negative number",
+                path.display()
+            ));
         }
         let ec = line
             .get("easyconfig")
@@ -421,7 +438,7 @@ fn collect_result(
             seq: *seq,
         });
     }
-    Ok(())
+    Ok(true)
 }
 
 fn parse_summary_json(text: &str, path: &Path) -> Result<Summary, String> {
@@ -445,12 +462,14 @@ fn collect_summary(
     target_filter: Option<&str>,
     out: &mut Vec<Observation>,
     seq: &mut usize,
-) {
+) -> bool {
+    let mut matched = target_filter.is_none();
     for t in &s.targets {
         if let Some(want) = target_filter {
             if t.name != want {
                 continue;
             }
+            matched = true;
         }
         for p in &t.packages {
             if p.phase != "build" || p.status != "success" {
@@ -472,6 +491,7 @@ fn collect_summary(
             });
         }
     }
+    matched
 }
 
 fn module_key(module: Option<&str>, easyconfig: &str) -> String {
