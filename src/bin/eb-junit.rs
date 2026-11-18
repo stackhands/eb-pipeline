@@ -3,8 +3,11 @@
 //! Each recorded line keeps the status the result file already has. This
 //! tool does not classify failures and does not call eb-stack.
 
-use eb_pipeline::util;
-use serde_json::{Map, Number, Value};
+use eb_pipeline::util::{
+    self, json_object as object, json_opt_i64 as opt_i64, json_opt_str as opt_str,
+    json_req_i64 as req_i64, json_req_str as req_str,
+};
+use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
@@ -655,53 +658,6 @@ fn disambiguate(names: &[String]) -> Vec<String> {
         }
     }
     out
-}
-
-fn object<'a>(value: &'a Value, what: &str) -> Result<&'a Map<String, Value>, String> {
-    value
-        .as_object()
-        .ok_or_else(|| format!("{what} must be a JSON object"))
-}
-
-fn req_str<'a>(obj: &'a Map<String, Value>, key: &str, what: &str) -> Result<&'a str, String> {
-    match obj.get(key) {
-        Some(Value::String(s)) => Ok(s),
-        Some(_) => Err(format!("{what}.{key} must be a string")),
-        None => Err(format!("{what} is missing `{key}`")),
-    }
-}
-
-fn opt_str<'a>(
-    obj: &'a Map<String, Value>,
-    key: &str,
-    what: &str,
-) -> Result<Option<&'a str>, String> {
-    match obj.get(key) {
-        None => Ok(None),
-        Some(Value::String(s)) => Ok(Some(s)),
-        Some(_) => Err(format!("{what}.{key} must be a string")),
-    }
-}
-
-fn req_i64(obj: &Map<String, Value>, key: &str, what: &str) -> Result<i64, String> {
-    match obj.get(key) {
-        Some(Value::Number(n)) => i64_of(n, &format!("{what}.{key}")),
-        Some(_) => Err(format!("{what}.{key} must be an integer")),
-        None => Err(format!("{what} is missing `{key}`")),
-    }
-}
-
-fn opt_i64(obj: &Map<String, Value>, key: &str, what: &str) -> Result<Option<i64>, String> {
-    match obj.get(key) {
-        None => Ok(None),
-        Some(Value::Number(n)) => i64_of(n, &format!("{what}.{key}")).map(Some),
-        Some(_) => Err(format!("{what}.{key} must be an integer")),
-    }
-}
-
-fn i64_of(n: &Number, what: &str) -> Result<i64, String> {
-    n.as_i64()
-        .ok_or_else(|| format!("{what} must be an integer"))
 }
 
 fn opt_bool(obj: &Map<String, Value>, key: &str, what: &str) -> Result<Option<bool>, String> {
