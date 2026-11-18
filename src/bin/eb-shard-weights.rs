@@ -28,6 +28,7 @@ struct Args {
     last: Option<usize>,
     target: Option<String>,
     existing: Option<String>,
+    min_samples: usize,
     mode: Mode,
     out: Option<String>,
 }
@@ -82,6 +83,17 @@ fn run() -> Result<ExitCode, String> {
             }
         }
     }
+    if args.min_samples > 1 {
+        let mut counts = BTreeMap::new();
+        for observation in &observations {
+            *counts.entry(observation.module.clone()).or_insert(0usize) += 1;
+        }
+        observations.retain(|observation| {
+            counts
+                .get(&observation.module)
+                .is_some_and(|count| *count >= args.min_samples)
+        });
+    }
 
     merge_weights(&mut weights, &observations, args.mode);
 
@@ -109,6 +121,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut last: Option<usize> = None;
     let mut target = None;
     let mut existing = None;
+    let mut min_samples = 1usize;
     let mut mode = Mode::Max;
     let mut out = None;
     let mut words = words.peekable();
@@ -124,7 +137,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 std::process::exit(0);
             }
             "--result" | "--summary" | "--log-root" | "--last" | "--target" | "--existing"
-            | "--mode" | "--out" => {
+            | "--min-samples" | "--mode" | "--out" => {
                 let value = words
                     .next()
                     .filter(|v| !v.is_empty())
@@ -138,6 +151,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                     &mut last,
                     &mut target,
                     &mut existing,
+                    &mut min_samples,
                     &mut mode,
                     &mut out,
                 )?;
@@ -152,6 +166,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                             | "--last"
                             | "--target"
                             | "--existing"
+                            | "--min-samples"
                             | "--mode"
                             | "--out"
                     ) {
@@ -167,6 +182,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                             &mut last,
                             &mut target,
                             &mut existing,
+                            &mut min_samples,
                             &mut mode,
                             &mut out,
                         )?;
@@ -191,6 +207,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
         last,
         target,
         existing,
+        min_samples,
         mode,
         out,
     })
@@ -206,6 +223,7 @@ fn assign_flag(
     last: &mut Option<usize>,
     target: &mut Option<String>,
     existing: &mut Option<String>,
+    min_samples: &mut usize,
     mode: &mut Mode,
     out: &mut Option<String>,
 ) -> Result<(), String> {
@@ -215,6 +233,15 @@ fn assign_flag(
         "--log-root" => *log_root = Some(value),
         "--target" => *target = Some(value),
         "--existing" => *existing = Some(value),
+        "--min-samples" => {
+            let n: u16 = value.parse().map_err(|_| {
+                format!("--min-samples `{value}` must be an integer from 1 to 65535")
+            })?;
+            if n == 0 {
+                return Err("--min-samples must be at least 1".into());
+            }
+            *min_samples = usize::from(n);
+        }
         "--out" => *out = Some(value),
         "--last" => {
             let n: u16 = value

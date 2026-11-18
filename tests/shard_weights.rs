@@ -46,6 +46,45 @@ fn successful_build_durations_become_sorted_tab_separated_weights() {
 }
 
 #[test]
+fn minimum_samples_is_opt_in_and_default_bytes_stay_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let result = dir.path().join("result.json");
+    let existing = dir.path().join("existing.tsv");
+    std::fs::write(
+        &result,
+        r#"{
+  "kind": "result",
+  "target": "cpu",
+  "ended_at": "2026-11-18T07:00:00Z",
+  "lines": [
+    {"easyconfig": "A-1.0.eb", "phase": "build", "status": "success", "duration_seconds": 10.0},
+    {"easyconfig": "B-1.0.eb", "phase": "build", "status": "success", "duration_seconds": 12.0},
+    {"easyconfig": "B-1.0.eb", "phase": "build", "status": "success", "duration_seconds": 20.0}
+  ]
+}"#,
+    )
+    .unwrap();
+    std::fs::write(&existing, "A/1.0\t99\nKeep/1.0\t7\n").unwrap();
+
+    let o = bin().args(["--result"]).arg(&result).output().unwrap();
+    assert_eq!(o.status.code(), Some(0));
+    assert_eq!(o.stdout, b"A/1.0\t10\nB/1.0\t20\n");
+    assert_eq!(o.stderr, b"");
+
+    let o = bin()
+        .args(["--result"])
+        .arg(&result)
+        .args(["--existing"])
+        .arg(&existing)
+        .args(["--min-samples", "2"])
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(0));
+    assert_eq!(o.stdout, b"A/1.0\t99\nB/1.0\t20\nKeep/1.0\t7\n");
+    assert_eq!(o.stderr, b"");
+}
+
+#[test]
 fn log_root_and_existing_weights_aggregate_with_mode_and_target_filter() {
     let dir = tempfile::tempdir().unwrap();
     let logs = dir.path().join("logs");
@@ -220,6 +259,12 @@ fn invalid_inputs_exit_2() {
         vec![
             "--log-root",
             dir.path().to_str().unwrap(),
+            "--min-samples",
+            "0",
+        ],
+        vec![
+            "--log-root",
+            dir.path().to_str().unwrap(),
             "--mode",
             "median",
         ],
@@ -248,5 +293,6 @@ fn docs_name_eb_shard_weights() {
         let page = std::fs::read_to_string(root.join(rel)).unwrap();
         assert!(page.contains("eb-shard-weights"), "{rel}");
         assert!(page.contains("--weights"), "{rel}");
+        assert!(page.contains("--min-samples"), "{rel}");
     }
 }
