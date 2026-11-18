@@ -162,10 +162,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
             }
             "--result" | "--summary" | "--log-root" | "--last" | "--target" | "--existing"
             | "--min-samples" | "--mode" | "--out" => {
-                let value = words
-                    .next()
-                    .filter(|v| !v.is_empty())
-                    .ok_or_else(|| format!("{word} needs a value"))?;
+                let value = util::separate_value(&mut words, &format!("{word} needs a value"))?;
                 assign_flag(
                     &word,
                     value,
