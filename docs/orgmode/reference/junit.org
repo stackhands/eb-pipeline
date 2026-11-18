@@ -17,7 +17,7 @@ eb-junit [--result FILE]... [--reframe-report FILE]... [--out FILE]
 |--------+---------|
 | =--result FILE= | One result file. Repeat the option for another file. |
 | =--reframe-report FILE= | One ReFrame report JSON from =reframe --report-file=. Repeat the option for another file. |
-| =--out FILE= | Write the document to =FILE=. =-= or absent prints it on stdout. An existing file is overwritten. |
+| =--out FILE= | Write the document to =FILE=. =-= or absent prints it on stdout. An existing file is overwritten unless it aliases a result or ReFrame report input, which is refused. |
 | =--property NAME=VALUE= | Add the property to every suite. Repeat for more properties. |
 | =--fail-on-failure= | After writing the complete document, exit 1 when it contains at least one =failure= case. |
 

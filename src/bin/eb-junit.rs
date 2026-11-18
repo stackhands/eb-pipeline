@@ -3,11 +3,13 @@
 //! Each recorded line keeps the status the result file already has. This
 //! tool does not classify failures and does not call eb-stack.
 
+use eb_pipeline::util;
 use serde_json::{Map, Number, Value};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io::{self, Write};
+use std::path::Path;
 use std::process::ExitCode;
 
 struct Args {
@@ -55,6 +57,17 @@ fn main() -> ExitCode {
 
 fn run() -> Result<ExitCode, String> {
     let args = parse(env::args().skip(1))?;
+    let inputs: Vec<_> = args
+        .results
+        .iter()
+        .map(|path| ("--result", Some(Path::new(path))))
+        .chain(
+            args.reframe_reports
+                .iter()
+                .map(|path| ("--reframe-report", Some(Path::new(path)))),
+        )
+        .collect();
+    util::refuse_output_alias("--out", args.out.as_deref().map(Path::new), &inputs)?;
     let mut labeled = Vec::with_capacity(args.results.len());
     for path in &args.results {
         let text = fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;

@@ -796,36 +796,42 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         oom_node,
         resume_result,
     } = m;
+    let source_inputs = [
+        ("--site", Some(c.site.as_path())),
+        ("--list", c.list.as_deref()),
+    ];
+    let refuse_alias = |output_option, output, inputs: &[(&str, Option<&Path>)]| {
+        util::refuse_output_alias(output_option, output, inputs).map_err(Fail::usage)
+    };
+    refuse_alias("--out", out, &source_inputs)?;
+    refuse_alias("--result", result, &source_inputs)?;
     if let Some(plan_out) = plan_out {
         if plan_out == Path::new("-") {
             return Err(Fail::usage("--plan-out must name a file"));
         }
-        for (other_option, other_path) in [
-            ("--result", result),
-            ("--metrics-file", metrics_file),
-            ("--resume-result", resume_result),
-        ] {
-            if let Some(other_path) = other_path {
-                if util::paths_alias(other_path, plan_out) {
-                    return Err(Fail::usage(format!(
-                        "{other_option} and --plan-out must name different files, both resolve to {}",
-                        util::resolved_path(other_path).display()
-                    )));
-                }
-            }
-        }
+        refuse_alias(
+            "--plan-out",
+            Some(plan_out),
+            &[
+                ("--site", Some(c.site.as_path())),
+                ("--list", c.list.as_deref()),
+                ("--result", result),
+                ("--metrics-file", metrics_file),
+                ("--resume-result", resume_result),
+            ],
+        )?;
     }
     if let Some(metrics_file) = metrics_file {
-        for (json_option, json_path) in [("--result", result), ("--resume-result", resume_result)] {
-            if let Some(json_path) = json_path {
-                if util::paths_alias(json_path, metrics_file) {
-                    return Err(Fail::usage(format!(
-                        "{json_option} and --metrics-file must name different files, both resolve to {}",
-                        util::resolved_path(json_path).display()
-                    )));
-                }
-            }
-        }
+        refuse_alias(
+            "--metrics-file",
+            Some(metrics_file),
+            &[
+                ("--site", Some(c.site.as_path())),
+                ("--list", c.list.as_deref()),
+                ("--result", result),
+                ("--resume-result", resume_result),
+            ],
+        )?;
     }
     if let Some(stamp) = c.log_stamp.as_deref().filter(|s| !util::is_log_stamp(s)) {
         return Err(Fail::usage(format!(
@@ -1119,6 +1125,14 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             "--log-stamp `{stamp}` is not a UTC time as YYYYMMDD_HHMMSS"
         )));
     }
+    util::refuse_output_alias(
+        "--plan-out",
+        w.plan_out,
+        &[("--site", Some(w.site)), ("--result", w.result)],
+    )
+    .map_err(Fail::usage)?;
+    util::refuse_output_alias("--result", w.result, &[("--site", Some(w.site))])
+        .map_err(Fail::usage)?;
     let s = load_valid(w.site, None)?;
     let target = s.target(w.target)?;
     let Some(conf) = s.watch_on() else {

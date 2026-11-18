@@ -36,6 +36,31 @@ pub fn resolved_path(path: &Path) -> PathBuf {
     }
 }
 
+/// Refuse an output path that aliases any input path.
+///
+/// `-` means standard output and is not a file destination.
+pub fn refuse_output_alias(
+    output_option: &str,
+    output: Option<&Path>,
+    inputs: &[(&str, Option<&Path>)],
+) -> Result<(), String> {
+    let Some(output) = output.filter(|path| *path != Path::new("-")) else {
+        return Ok(());
+    };
+    for (input_option, input) in inputs {
+        let Some(input) = input else {
+            continue;
+        };
+        if paths_alias(input, output) {
+            return Err(format!(
+                "{input_option} and {output_option} must name different files, both resolve to {}",
+                resolved_path(input).display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Split a string on whitespace, honouring single and double quotes.
 pub fn split_args(s: &str) -> Result<Vec<String>, Fail> {
     let mut out = Vec::new();

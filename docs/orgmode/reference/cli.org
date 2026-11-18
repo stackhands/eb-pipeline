@@ -283,7 +283,7 @@ Exit 2 means the file is missing, is not JSON, or its =kind= is not =result=.
 | =--build-type NAME= | =EB_PIPELINE_BUILD_TYPE= | The build type; required. A name without a =[targets.build_types.NAME]= table takes the values of the target.                                                                    |
 | =--run-id ID=       | =EB_PIPELINE_RUN_ID=     | The run label passed to the tools; =<run-id>= when absent.                                                                                                                       |
 | =--log-stamp STAMP= | =EB_PIPELINE_LOG_STAMP=  | The name of the run's directory under the log root, a Coordinated Universal Time (UTC) as =YYYYMMDD_HHMMSS=; =<log-stamp>= when absent. Any other value is refused, with exit 2. |
-| =--out FILE=        |                          | Write the plan to =FILE= instead of stdout; =-= is stdout.                                                                                                                       |
+| =--out FILE=        |                          | Write the plan to =FILE= instead of stdout; =-= is stdout. =FILE= must differ from the site and list files.                                                                       |
 | =--shard-plan DIR=  |                          | Read =DIR/plan.json=, written by =eb-stack stack shard=, and plan its units and their lines instead of the list as one unit.                                                     |
 | =--offline-bundle DIR= |                       | Add the opt-in offline planner calls to the sources phase and name the bundle that =run= writes. Needs an active =[sources]= table, a source path and configured easyconfig trees. |
 | =--require-offline= |                          | Place =sources.offline_wrapper= before admission, build, check, cache, log and notification commands. Requires =--offline-bundle= and a non-empty wrapper.                       |
@@ -304,6 +304,7 @@ Exit 2 means the file is missing, is not JSON, or its =kind= is not =result=.
 | =--node NODE=          | The node passed to =eb-stack stack oom=, as =CORES:MEMORY_MIB= or =CORES:MEMORY_MIB:TARGET=. Requires =--oom-preflight=.                                                                                                        |
 
 =--run-id= defaults to the log stamp, and =--log-stamp= to the UTC time at which the run starts, taken once.
+Every explicit run output must differ from the site and list files.
 A metrics file records the final result, end time and duration after post-run work such as Software Bill of Materials (SBOM) generation.
 If the plan file cannot be written, =run= exits 1 before starting a phase command.
 When both output files are requested, =run= attempts =--result= first and =--metrics-file= second even if the first write fails, then reports every output failure and exits 1.
@@ -347,6 +348,7 @@ Without =[attest] enabled=, =verify= exits 2.
 | =--plan-out FILE=   |                          | Write the plan to =FILE= in JSON, including the assessed actions when rebuild ordering stops before an order is computed.                                     |
 | =--result FILE=     |                          | Write the result file of the rebuild to =FILE=. Without it, or without a rebuild, no result file is written.                                                  |
 
+The plan and result destinations must differ from the site file and from each other.
 Without =--dry-run=, =watch= prints the plan to stderr, then runs the rebuild list through the phases of the site file, as =run= runs a build list.
 [[file:watch.org][The watch state and plan]] says what =watch= compares, what its plan holds and how it rebuilds.
 
@@ -467,7 +469,7 @@ eb-shard-weights (--result FILE... | --summary FILE... | --log-root DIR [--last 
 | =--existing FILE= | Seed weights TSV (=MODULE<TAB>SECONDS=) to merge with new observations. |
 | =--min-samples N= | Update a module only after N selected observations, from 1 to 65535; 1 when absent. Under-sampled existing weights remain unchanged. |
 | =--mode MODE= | Combine durations with =max= (default), =latest= or =mean=. |
-| =--out FILE= | Write the table to =FILE=; =-= or absent prints to stdout. |
+| =--out FILE= | Write the table to =FILE=; =-= or absent prints to stdout. =FILE= must differ from every result, summary and existing weights file. |
 
 Exit 0 means the table was written. Exit 2 is a missing or invalid input.
 
@@ -486,7 +488,7 @@ eb-junit [--result FILE]... [--reframe-report FILE]... [--out FILE]
 |--------+---------|
 | =--result FILE= | A result file written by =eb-pipeline run --result=. Repeat for each file. |
 | =--reframe-report FILE= | A ReFrame report JSON written by =reframe --report-file=. Repeat for each file. |
-| =--out FILE= | Write the report to =FILE=. =-= or absent prints it on stdout. |
+| =--out FILE= | Write the report to =FILE=. =-= or absent prints it on stdout. =FILE= must differ from every result and ReFrame report file. |
 | =--property NAME=VALUE= | Add the property to every suite. Repeat for more properties; the last value for a name wins. |
 | =--fail-on-failure= | Write the complete report, then exit 1 when it contains at least one failure. |
 

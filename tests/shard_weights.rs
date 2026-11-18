@@ -85,6 +85,60 @@ fn minimum_samples_is_opt_in_and_default_bytes_stay_unchanged() {
 }
 
 #[test]
+fn output_aliases_are_refused_before_weight_inputs_are_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    let result = dir.path().join("result.json");
+    let result_bytes = r#"{
+  "kind": "result",
+  "target": "cpu",
+  "lines": []
+}"#;
+    std::fs::write(&result, result_bytes).unwrap();
+    let output = dir.path().join("weights.tsv");
+    std::os::unix::fs::symlink(&result, &output).unwrap();
+
+    let command = bin()
+        .arg("--result")
+        .arg(&result)
+        .arg("--out")
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert_eq!(command.status.code(), Some(2));
+    assert_eq!(command.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&command.stderr)
+            .contains("--result and --out must name different files"),
+        "{}",
+        String::from_utf8_lossy(&command.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(&result).unwrap(), result_bytes);
+
+    let existing = dir.path().join("existing.tsv");
+    std::fs::write(&existing, "Keep/1.0\t4\n").unwrap();
+    let existing_alias = dir.path().join("existing.out");
+    std::fs::hard_link(&existing, &existing_alias).unwrap();
+    let command = bin()
+        .arg("--result")
+        .arg(&result)
+        .arg("--existing")
+        .arg(&existing)
+        .arg("--out")
+        .arg(&existing_alias)
+        .output()
+        .unwrap();
+    assert_eq!(command.status.code(), Some(2));
+    assert_eq!(command.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&command.stderr)
+            .contains("--existing and --out must name different files"),
+        "{}",
+        String::from_utf8_lossy(&command.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(&existing).unwrap(), "Keep/1.0\t4\n");
+}
+
+#[test]
 fn log_root_and_existing_weights_aggregate_with_mode_and_target_filter() {
     let dir = tempfile::tempdir().unwrap();
     let logs = dir.path().join("logs");
