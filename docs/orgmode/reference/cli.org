@@ -297,6 +297,7 @@ An easystack uses the same YAML anchors, aliases and =<<= merge keys as EasyBuil
 Comments do not become data, an empty =options= mapping adds no arguments, duplicate entries stay in file order, and top-level keys other than =easyconfigs= are ignored.
 Each easyconfig entry may contain only its =options= mapping after YAML merges are applied.
 Syntax, duplicate-key and encoding errors name the input as =FILE:LINE:COLUMN=.
+A duplicate-key error points to the repeated key in its own mapping.
 UTF-8 byte-order marks and CRLF line endings are accepted.
 
 *** run
