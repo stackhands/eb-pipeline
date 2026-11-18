@@ -546,6 +546,7 @@ fn patch_literals(text: &str) -> Vec<String> {
 
 /// `easyblock = 'Class'` on its own, ignoring a trailing `#` comment.
 fn easyblock_literal(text: &str) -> Option<String> {
+    let mut literal = None;
     for line in text.lines() {
         let code = line.split('#').next().unwrap_or(line).trim();
         let Some(rest) = code.strip_prefix("easyblock") else {
@@ -554,6 +555,7 @@ fn easyblock_literal(text: &str) -> Option<String> {
         let Some(rest) = rest.trim().strip_prefix('=') else {
             continue;
         };
+        literal = None;
         let Some(quote) = rest.trim().chars().next() else {
             continue;
         };
@@ -566,10 +568,10 @@ fn easyblock_literal(text: &str) -> Option<String> {
         };
         let name = &body[..end];
         if is_ident(name) {
-            return Some(name.to_string());
+            literal = Some(name.to_string());
         }
     }
-    None
+    literal
 }
 
 fn is_ident(name: &str) -> bool {
@@ -814,6 +816,18 @@ mod tests {
         let text = "easyblock = 'EB_Foo'  # local\npatches = ['a.patch', \"dir/b.patch\"]\n";
         assert_eq!(easyblock_literal(text).as_deref(), Some("EB_Foo"));
         assert_eq!(patch_literals(text), ["a.patch", "dir/b.patch"]);
+    }
+
+    #[test]
+    fn the_last_easyblock_assignment_determines_the_literal() {
+        assert_eq!(
+            easyblock_literal("easyblock = 'EB_Old'\neasyblock = 'EB_New'\n").as_deref(),
+            Some("EB_New")
+        );
+        assert_eq!(
+            easyblock_literal("easyblock = 'EB_Old'\neasyblock = selected_easyblock\n"),
+            None
+        );
     }
 
     #[test]
