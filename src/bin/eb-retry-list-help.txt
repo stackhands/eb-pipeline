@@ -5,6 +5,7 @@ eb-retry-list: extract the unfinished lines of a build list from a run result or
                 [--status STATUS,...] [--classify] [--class CLASS,...]
                 [--node CORES:MEMORY_MIB[:TARGET]] [--drop-oom]
                 [--easyconfigs DIR]... [--arch ARCH]... [--out FILE]
+                [--require-lines]
 
 Reads the result file of `eb-pipeline run --result` or one target of a run
 summary (`summary.json`), matches each line of the selected build list or
@@ -36,3 +37,6 @@ run out of memory is reported on stderr. `--drop-oom` leaves those lines
 out; without it they are still written. `--drop-oom`, `--easyconfigs` and
 `--arch` need `--node`. eb-retry-list does not classify a log or estimate
 memory itself.
+
+`--require-lines` exits 1 after writing when the retry list is empty. Without
+it, an empty retry list exits 0.

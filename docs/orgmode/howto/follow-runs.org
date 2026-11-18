@@ -176,6 +176,19 @@ eb-retry-list --result result.json --recorded-list --out retry.list
 The recorded path is used as written.
 Keep =--list= when the list moved or when you run the command from another working directory.
 
+To branch on the command status instead of inspecting the output file, add =--require-lines=:
+
+#+begin_src bash
+if eb-retry-list --result result.json --recorded-list \
+     --out retry.list --require-lines; then
+    eb-pipeline run --site site.toml --list retry.list \
+      --target zen2 --build-type production
+fi
+#+end_src
+
+The option exits 1 after writing an empty retry list and exits 0 after writing one or more lines.
+Input and processing errors still exit 2.
+
 To retry only failures that =eb-stack= identifies as transient, add =--classify=:
 
 #+begin_src bash

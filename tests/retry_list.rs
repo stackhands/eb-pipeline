@@ -161,6 +161,71 @@ easyconfigs:
 }
 
 #[test]
+fn require_lines_reports_an_empty_selection_after_writing_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = dir.path().join("build.list");
+    let result = dir.path().join("result.json");
+    let out = dir.path().join("retry.list");
+    std::fs::write(&list, "Done-1.0.eb --robot\n").unwrap();
+    std::fs::write(
+        &result,
+        r#"{"kind":"result","exit_code":0,"lines":[{"easyconfig":"Done-1.0.eb","status":"success"}]}"#,
+    )
+    .unwrap();
+
+    let default = bin()
+        .args(["--result"])
+        .arg(&result)
+        .args(["--list"])
+        .arg(&list)
+        .output()
+        .unwrap();
+    assert_eq!(default.status.code(), Some(0));
+    assert_eq!(default.stdout, b"");
+    assert_eq!(default.stderr, b"");
+
+    let required = bin()
+        .args(["--result"])
+        .arg(&result)
+        .args(["--list"])
+        .arg(&list)
+        .args(["--out"])
+        .arg(&out)
+        .arg("--require-lines")
+        .output()
+        .unwrap();
+    assert_eq!(required.status.code(), Some(1));
+    assert_eq!(required.stdout, b"");
+    assert_eq!(required.stderr, b"");
+    assert_eq!(std::fs::read(&out).unwrap(), b"");
+}
+
+#[test]
+fn require_lines_keeps_a_nonempty_retry_list_successful() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = dir.path().join("build.list");
+    let result = dir.path().join("result.json");
+    std::fs::write(&list, "Retry-1.0.eb --rebuild\n").unwrap();
+    std::fs::write(
+        &result,
+        r#"{"kind":"result","exit_code":1,"lines":[{"easyconfig":"Retry-1.0.eb","status":"failed"}]}"#,
+    )
+    .unwrap();
+
+    let o = bin()
+        .args(["--result"])
+        .arg(&result)
+        .args(["--list"])
+        .arg(&list)
+        .arg("--require-lines")
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(0));
+    assert_eq!(o.stdout, b"Retry-1.0.eb --rebuild\n");
+    assert_eq!(o.stderr, b"");
+}
+
+#[test]
 fn recorded_list_reads_the_path_from_a_result_or_summary_target() {
     let dir = tempfile::tempdir().unwrap();
     let list = dir.path().join("build list.txt");
