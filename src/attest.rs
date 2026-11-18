@@ -18,8 +18,9 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 
 /// The `kind` of a canonical input record.
 pub const KIND: &str = "eb-pipeline-input-attestation-v1";
@@ -442,10 +443,12 @@ fn resolved_easyconfigs(req: &Request<'_>) -> Result<Vec<PathBuf>, Fail> {
         .output()
         .map_err(|e| Fail::new(exit::FAILED, format!("cannot run `{bin}`: {e}")))?;
     if !out.status.success() {
-        let code = out.status.code().unwrap_or(1);
+        let code = subprocess_code(&out.status);
         let err = stderr_text(&out.stderr);
         let exit_code = if code == 2 {
             exit::USAGE
+        } else if out.status.code().is_none() {
+            code
         } else {
             exit::REFUSED
         };
@@ -754,15 +757,28 @@ fn run(argv: &[String], on_error: i32) -> Result<String, Fail> {
         .output()
         .map_err(|e| Fail::new(exit::FAILED, format!("cannot run `{bin}`: {e}")))?;
     if !out.status.success() {
-        let code = out.status.code().unwrap_or(1);
+        let code = subprocess_code(&out.status);
         let err = stderr_text(&out.stderr);
-        let exit_code = if code == 2 { exit::USAGE } else { on_error };
+        let exit_code = if code == 2 {
+            exit::USAGE
+        } else if out.status.code().is_none() {
+            code
+        } else {
+            on_error
+        };
         return Err(Fail::new(
             exit_code,
             format!("`{}` exited {code}: {err}", argv.join(" ")),
         ));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+fn subprocess_code(status: &ExitStatus) -> i32 {
+    status
+        .code()
+        .or_else(|| status.signal().map(|signal| 128 + signal))
+        .unwrap_or(exit::FAILED)
 }
 
 fn stderr_text(bytes: &[u8]) -> String {
