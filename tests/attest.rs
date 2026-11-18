@@ -235,7 +235,7 @@ fn an_enabled_plan_appends_a_record_and_verify_recomputes_it() {
     let easyconfig = root.join("easyconfigs/Foo-1.0.eb");
     std::fs::write(
         &easyconfig,
-        "easyblock = 'EB_Foo'\npatches = ['foo.patch']\n",
+        "name = 'Foo'\neasyblock = 'EB_Foo'\npatches = ['foo.patch']\n",
     )
     .unwrap();
     std::fs::write(root.join("patches/foo.patch"), "diff\n").unwrap();
@@ -413,7 +413,7 @@ fn an_enabled_plan_appends_a_record_and_verify_recomputes_it() {
 
     std::fs::write(
         &easyconfig,
-        "easyblock = 'EB_Foo'\npatches = ['foo.patch']\nchanged\n",
+        "name = 'Foo'\neasyblock = 'EB_Foo'\npatches = ['foo.patch']\nchanged\n",
     )
     .unwrap();
     let mismatch = tree.run(
@@ -445,7 +445,7 @@ fn an_enabled_plan_appends_a_record_and_verify_recomputes_it() {
 
     std::fs::write(
         &easyconfig,
-        "easyblock = 'EB_Foo'\npatches = ['foo.patch']\n",
+        "name = 'Foo'\neasyblock = 'EB_Foo'\npatches = ['foo.patch']\n",
     )
     .unwrap();
     let mut tampered = plan_json.clone();
@@ -481,6 +481,57 @@ fn an_enabled_plan_appends_a_record_and_verify_recomputes_it() {
         String::from_utf8_lossy(&rejected.stderr).contains("proof rejected"),
         "{}",
         String::from_utf8_lossy(&rejected.stderr)
+    );
+}
+
+#[test]
+fn attestation_helper_signals_are_reported_as_signal_exits() {
+    let tree = Tree::new();
+    let root = tree.path();
+    std::fs::create_dir_all(root.join("easyconfigs")).unwrap();
+    std::fs::create_dir_all(root.join("easyblocks")).unwrap();
+    std::fs::create_dir_all(root.join("patches")).unwrap();
+    let easyconfig = root.join("easyconfigs/Foo-1.0.eb");
+    std::fs::write(&easyconfig, "name = 'Foo'\n").unwrap();
+    std::fs::write(root.join("key.pem"), "not-a-key\n").unwrap();
+    std::fs::write(root.join("site.toml"), attest_site(root)).unwrap();
+    std::fs::write(root.join("list.txt"), "Foo-1.0.eb\n").unwrap();
+    write_exec(
+        &root.join("stubs/rfc9162-sidecar"),
+        "#!/bin/sh\nkill -TERM $$\n",
+    );
+
+    let ec = easyconfig.display().to_string();
+    let out = plan(
+        &tree,
+        &[
+            ("STUB_EASYCONFIG", ec.as_str()),
+            ("EB_IMAGE_DIGEST", "sha256:abc"),
+            ("EB_ROUTE_RECEIPT", "receipt-1"),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(143), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("exited 143"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    write_exec(&root.join("stubs/rfc9162-sidecar"), SIDECAR);
+    write_exec(&root.join("stubs/eb-stack"), "#!/bin/sh\nkill -TERM $$\n");
+    let out = plan(
+        &tree,
+        &[
+            ("STUB_EASYCONFIG", ec.as_str()),
+            ("EB_IMAGE_DIGEST", "sha256:abc"),
+            ("EB_ROUTE_RECEIPT", "receipt-1"),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(143), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("exited 143"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }
 

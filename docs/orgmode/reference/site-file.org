@@ -233,6 +233,7 @@ A build list can mark a line for some targets only, with an option of the line t
 =plan= and =run= apply the selection to the whole list, or to each shard unit, and drop a unit left without lines.
 With a selection, =run= writes the lines it keeps, in list order and with =strip= applied, to =LOG_DIR/selected-TARGET.list=, and passes that file to =stack shard --build-list=.
 The plan and the result list the lines left out under =deselected=, and no status count includes them.
+The separate-token form needs a value before the next option; otherwise =plan= and =run= exit 2 and name the list line.
 
 *** =[targets.hardware]=
 
@@ -361,6 +362,7 @@ It is started as a subprocess and is not probed with =--version=.
 =easyconfigs= are the trees given to =eb-stack stack order --easyconfigs=.
 When that list is empty, =resume.easyconfigs= is used, then =shards.easyconfigs=.
 =easyblocks= are directories searched for the Python file that defines each class.
+A quoted =easyblock= assignment is read anywhere in the easyconfig, regardless of earlier assignments.
 A class with no file is recorded with an empty path.
 =patches= are extra directories searched, together with the easyconfig's own directory and the easyconfig trees, for a quoted name that ends in =.patch=.
 Two files of the same name with different contents refuse the attestation.
@@ -578,6 +580,7 @@ A POST that cannot start, fails or runs out of time is a =WARN= line, and the ru
 With the table, a clean =run= starts =eb-stack stack sbom --lock LOCK --out LOG_ROOT/LOG_STAMP/sbom.cdx.json= and keeps that file beside =summary.json=.
 A build that did not exit 0 does not start it, and neither does =run --dry-run=.
 A command that cannot be started, or that exits with a status other than 0, fails the run with that status and leaves no =sbom.cdx.json=.
+When a signal ends the command, the run uses =128 + SIGNAL=, such as 143 for =SIGTERM=.
 eb-stack reads the lock and writes the document; eb-pipeline does not compute a bill of materials of its own.
 
 | Key       | Type    | Default | Meaning                                                                                                        |

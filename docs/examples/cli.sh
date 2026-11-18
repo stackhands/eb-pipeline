@@ -24,6 +24,7 @@ synopsis=(
     'run [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>'
     'verify [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE> --from <FROM>'
     'watch [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>'
+    'audit [OPTIONS] --site <SITE> --target <TARGET> --out-dir <OUT_DIR>'
 )
 for usage in "${synopsis[@]}"; do
     run "eb-pipeline ${usage%% *} --help"
