@@ -2250,6 +2250,15 @@ fn the_eessi_template_has_one_default_target() {
 }
 
 #[test]
+fn the_eessi_template_shares_the_route_work_directory_writable() {
+    let text = std::fs::read_to_string(example("eessi-site.toml")).unwrap();
+    let site = site::parse(&text).unwrap();
+    let route = site.target("gpu-a").unwrap().route.as_ref().unwrap();
+    assert!(!route.shares_ro.iter().any(|path| path == "{work_dir}"));
+    assert!(route.shares_rw.iter().any(|path| path == "{work_dir}"));
+}
+
+#[test]
 fn eessi_example_exercises_the_target_keys() {
     let list = "<Name>-1.0.eb\nB-1.0.eb --only-targets=gpu-b\nC-1.0.eb --only-targets=gpu-a,gpu-b --rebuild\n";
     let text = std::fs::read_to_string(example("eessi-site.toml")).unwrap();
