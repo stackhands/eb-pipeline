@@ -78,7 +78,7 @@ Phases are not cases.
 
 | Attribute | Value |
 |-----------+-------|
-| =name= | =TARGET/EASYCONFIG=. A later line with the same easyconfig in that result is =TARGET/EASYCONFIG #2=, then =#3=, and so on. GitLab keeps the first case of a repeated name and drops the rest, including across the reports of one pipeline, so the target is part of the name and a repeated line is numbered. The name does not include the run id, so the same line has the same name on the next run. |
+| =name= | =TARGET/EASYCONFIG=. A later line with the same XML-safe name in that result is =TARGET/EASYCONFIG #2=, then =#3=, and so on. Names are compared after XML 1.0 character removal, so distinct recorded names cannot collapse into one displayed case. GitLab keeps the first case of a repeated name and drops the rest, including across the reports of one pipeline, so the target is part of the name and a repeated line is numbered. The name does not include the run id, so the same line has the same name on the next run. |
 | =classname= | =SITE/TARGET=. GitLab shows this as the suite. |
 | =file= | The easyconfig, as recorded. |
 | =time= | =duration_seconds=, to the millisecond. Absent when the line did not start. |

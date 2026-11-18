@@ -263,9 +263,13 @@ pub fn record(site: &str, entry: TargetSummary, run_dir: &Path) -> Result<Summar
     lock.lock().map_err(|e| shown(&lock_path, e))?;
     let path = run_dir.join(JSON);
     let earlier = match std::fs::read_to_string(&path) {
-        Ok(t) => serde_json::from_str::<Summary>(&t)
-            .ok()
-            .filter(|s| s.schema_version == SCHEMA_VERSION),
+        Ok(t) => match serde_json::from_str::<Summary>(&t) {
+            Ok(summary) if summary.schema_version == SCHEMA_VERSION => Some(summary),
+            Ok(_) => None,
+            Err(error) => {
+                return Err(format!("cannot parse {}: {error}", path.display()));
+            }
+        },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(shown(&path, e)),
     };

@@ -118,6 +118,31 @@ fn minimum_samples_is_opt_in_and_default_bytes_stay_unchanged() {
 }
 
 #[test]
+fn duplicate_existing_modules_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let result = dir.path().join("result.json");
+    let existing = dir.path().join("existing.tsv");
+    std::fs::write(&result, r#"{"kind":"result","target":"cpu","lines":[]}"#).unwrap();
+    std::fs::write(&existing, "A/1.0\t5\nA/1.0\t50\n").unwrap();
+
+    let output = bin()
+        .arg("--result")
+        .arg(&result)
+        .arg("--existing")
+        .arg(&existing)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert_eq!(output.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("line 2: module `A/1.0` was already set on line 1"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn output_aliases_are_refused_before_weight_inputs_are_changed() {
     let dir = tempfile::tempdir().unwrap();
     let result = dir.path().join("result.json");
