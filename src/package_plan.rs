@@ -249,7 +249,11 @@ fn verification(bundle: &Path, recipes: &[PathBuf]) -> Result<Vec<Verification>,
                 Ok(path)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        out.extend(for_recipes(&origin, &package, &paths));
+        for check in for_recipes(&origin, &package, &paths) {
+            if !out.contains(&check) {
+                out.push(check);
+            }
+        }
     }
     Ok(out)
 }
@@ -335,6 +339,36 @@ pub const R_DESCRIPTION_CHECK: &str = r#"p <- commandArgs(TRUE)[1]; i <- install
 #[cfg(test)]
 mod tests {
     use super::load;
+
+    #[test]
+    fn closure_references_verify_each_recipe_once() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("easyconfigs")).unwrap();
+        std::fs::write(
+            root.path().join("package.plan.json"),
+            r#"{"schema_version":1,"origin":"pypi","package":{"name":"demo"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join("companion.plan.json"),
+            r#"{"schema_version":1,"origin":"pypi","package":{"name":"companion"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join("build-order.json"),
+            r#"{"schema_version":1,"recipes":["easyconfigs/demo-1.0.eb"]}"#,
+        )
+        .unwrap();
+        std::fs::write(root.path().join("easyconfigs/demo-1.0.eb"), "").unwrap();
+        std::fs::write(
+            root.path().join("closure.plan.json"),
+            r#"{"schema_version":1,"root":{"manifest":"package.plan.json","recipes":["easyconfigs/demo-1.0.eb"]},"companions":[{"manifest":"companion.plan.json","recipes":["easyconfigs/demo-1.0.eb"]}]}"#,
+        )
+        .unwrap();
+
+        let input = load(root.path()).unwrap();
+        assert_eq!(input.verification.len(), 1, "{:?}", input.verification);
+    }
 
     #[test]
     fn closure_recipes_must_appear_in_the_build_order() {
