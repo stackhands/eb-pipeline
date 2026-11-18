@@ -347,6 +347,26 @@ fn failed_sync_preserves_the_last_publish_and_records_its_completed_abort() {
 }
 
 #[test]
+fn signaled_sync_preserves_128_plus_signal_exit_code() {
+    let fixture = Fixture::new();
+    let metrics = fixture.dir.path().join("cvmfs.prom");
+    write_exec(
+        &fixture.sync,
+        "#!/bin/sh\necho \"sync $*\" >> \"$CALLS\"\nkill -TERM \"$$\"\n",
+    );
+
+    let output = fixture.command_with_metrics(Some(&metrics)).sync_output();
+
+    assert_eq!(code(&output), 143, "{}", stderr(&output));
+    assert_eq!(
+        fixture.calls(),
+        "list\ntransaction repo.example\nsync --delete\nabort -f repo.example\n"
+    );
+    let text = std::fs::read_to_string(metrics).unwrap();
+    assert_eq!(sample(&text, "eb_cvmfs_exit_code"), Some(143.0));
+}
+
+#[test]
 fn an_abort_that_cannot_start_is_not_counted_or_called_complete() {
     let fixture = Fixture::new();
     let metrics = fixture.dir.path().join("cvmfs.prom");
