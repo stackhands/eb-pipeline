@@ -1305,7 +1305,16 @@ pub fn build_plan(
     } else if boundary && !kept.is_empty() {
         shard_cmds.push(p.boundary_shard_cmd()?);
     }
-    phases.push(if shard_cmds.is_empty() {
+    phases.push(if shard_units.is_some() {
+        PlanPhase {
+            name: "shard".into(),
+            status: "reused".into(),
+            reason: Some("using the supplied shard plan".into()),
+            role: None,
+            env: BTreeMap::new(),
+            commands: vec![],
+        }
+    } else if shard_cmds.is_empty() {
         skip("shard", "not configured")
     } else {
         planned("shard", Some(Role::Plan), shard_cmds)
@@ -1510,6 +1519,12 @@ pub fn read_units(dir: &Path) -> Result<Vec<Unit>, Fail> {
                 .unwrap_or_else(|| format!("shard-{:02}", i + 1));
             add(name, Role::Build, s)?;
         }
+    }
+    if units.is_empty() {
+        return Err(Fail::new(
+            exit::FAILED,
+            format!("{} contains no build units", plan_path.display()),
+        ));
     }
     Ok(units)
 }
