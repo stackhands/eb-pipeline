@@ -608,6 +608,55 @@ fn a_successful_result_line_requires_a_numeric_duration() {
 }
 
 #[test]
+fn a_successful_summary_package_requires_a_duration() {
+    let dir = tempfile::tempdir().unwrap();
+    let summary = dir.path().join("summary.json");
+    std::fs::write(
+        &summary,
+        r#"{
+  "schema_version": 1,
+  "kind": "summary",
+  "tool": "eb-pipeline 0.3.1",
+  "site": "example",
+  "run": "20261118_230000",
+  "updated_at": "2026-11-18T23:10:00Z",
+  "exit_code": 0,
+  "status": "success",
+  "targets": [{
+    "name": "cpu",
+    "command": "run",
+    "build_type": "production",
+    "run_id": "r1",
+    "list": "build.list",
+    "log_dir": "/tmp/logs/cpu",
+    "started_at": "2026-11-18T23:00:00Z",
+    "ended_at": "2026-11-18T23:10:00Z",
+    "duration_seconds": 600.0,
+    "exit_code": 0,
+    "status": "success",
+    "counts": {"success": 2},
+    "phases": [],
+    "packages": [
+      {"easyconfig": "A-1.0.eb", "unit": "all", "phase": "build", "status": "success", "log": "/tmp/a.log"},
+      {"easyconfig": "B-1.0.eb", "unit": "all", "phase": "build", "status": "success", "duration_seconds": 3.0, "log": "/tmp/b.log"}
+    ]
+  }]
+}"#,
+    )
+    .unwrap();
+
+    let output = bin().args(["--summary"]).arg(&summary).output().unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("targets[0].packages[0].duration_seconds must be a non-negative number"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn value_options_do_not_consume_the_next_long_option() {
     let output = bin()
         .args(["--result", "--target", "cpu"])
