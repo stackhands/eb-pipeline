@@ -1643,21 +1643,22 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                     return finish(st, Some(f.code));
                 }
             };
+            let code = signal_exit().unwrap_or(ex.code);
             let mut lr = LineResult {
                 easyconfig: l.easyconfig.clone(),
                 unit: u.name.clone(),
                 phase: "build".into(),
                 status: "success".into(),
-                exit_code: Some(ex.code),
+                exit_code: Some(code),
                 translated_from: None,
                 log: ex.log.display().to_string(),
                 note: staged.then(|| "ran through eb-staged-rebuild".into()),
                 duration_seconds: Some(seconds(ex.elapsed)),
                 outputs: Vec::new(),
             };
-            if ex.code != 0 {
+            if code != 0 {
                 let outcome = if staged {
-                    map_staged(ex.code)
+                    map_staged(code)
                 } else {
                     StagedOutcome::Failed
                 };
@@ -1665,7 +1666,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                 match outcome {
                     StagedOutcome::Refused => {
                         lr.status = "refused".into();
-                        lr.translated_from = Some(ex.code);
+                        lr.translated_from = Some(code);
                         lr.exit_code = Some(exit::REFUSED);
                         detail = lock_refusal(p, &cmd, &env, &ex.log);
                         lr.note = Some(match &detail {
@@ -1696,10 +1697,10 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                     "ERROR",
                     "build",
                     &target,
-                    &format!("{s}: {} (exit {}){detail}", lr.status, ex.code),
+                    &format!("{s}: {} (exit {code}){detail}", lr.status),
                 );
                 if interrupted().is_none() && keep_failed && lr.status == "failed" {
-                    if let Ok(kc) = p.keep_failed_cmd(s, &ex.code.to_string()) {
+                    if let Ok(kc) = p.keep_failed_cmd(s, &code.to_string()) {
                         let kx = st.exec(
                             "logs",
                             &kc,

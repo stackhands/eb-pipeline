@@ -295,8 +295,8 @@ cat result.json
 
 | Status    | Meaning                                                                                                               |
 |-----------+-----------------------------------------------------------------------------------------------------------------------|
-| =success= | Its command exited 0.                                                                                                 |
-| =failed=  | Its command, or the prefetch of its sources, exited with a status that means failure.                                 |
+| =success= | Its command exited 0, and the run received no signal before it recorded the line.                                     |
+| =failed=  | Its command or source prefetch failed, or a signal stopped the run while the line was active. An active line stopped by =SIGINT= or =SIGTERM= has exit status 130 or 143, even when its command handled the signal and exited 0. |
 | =refused= | =eb-staged-rebuild run= refused it, with exit 2.                                                                      |
 | =pending= | =eb-staged-rebuild run= exited 75: a ledger event it requires is pending.                                             |
 | =skipped= | It did not run: admission refused its unit or an earlier one, a signal stopped the run first, or =[resume]= skipped a unit whose prior lines succeeded and whose module files are still present. The note says which. |
