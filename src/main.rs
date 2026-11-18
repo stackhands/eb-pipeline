@@ -6,8 +6,8 @@ use eb_pipeline::plan::{build_plan, read_units, Planner};
 use eb_pipeline::resolve::{explain, Scope};
 use eb_pipeline::run::{install_handlers, log, run, Options, RunResult};
 use eb_pipeline::{
-    audit, easystack, eessi, metrics, notify, sbom, schema, site, stack_checks, summary, templates,
-    tools, util, watch,
+    audit, easystack, eessi, from_commit, metrics, notify, sbom, schema, site, stack_checks,
+    summary, templates, tools, util, watch,
 };
 use serde::Serialize;
 use std::os::unix::fs::MetadataExt;
@@ -18,6 +18,7 @@ const ROOT_HELP: &str = "\
 Examples:
   eb-pipeline init --template small-cluster --out site.toml
   eb-pipeline check --site site.toml
+  eb-pipeline check --list stack.yml --check-from-commit --easyconfigs-repo DIR
   eb-pipeline targets --site site.toml --format json
   eb-pipeline plan --site site.toml --list list.txt --target cpu --build-type production --out plan.json
   eb-pipeline run --site site.toml --list list.txt --target cpu --build-type production --result result.json
@@ -79,8 +80,12 @@ enum Cmd {
     /// Parse and validate a site file.
     Check {
         /// Site file.
-        #[arg(long, env = "EB_PIPELINE_SITE")]
-        site: PathBuf,
+        #[arg(
+            long,
+            env = "EB_PIPELINE_SITE",
+            required_unless_present = "check_from_commit"
+        )]
+        site: Option<PathBuf>,
         /// Directory that must hold every build list a target names.
         #[arg(long, env = "EB_PIPELINE_LISTS_DIR")]
         lists_dir: Option<PathBuf>,
@@ -96,6 +101,19 @@ enum Cmd {
         /// Comma-separated eb-stack checks to run before any allocation.
         #[arg(long, value_delimiter = ',', requires = "list", value_enum)]
         stack_checks: Vec<stack_checks::StackCheck>,
+        /// Ask `eb-stack stack from-commit` whether pins are already in the
+        /// EasyBuild release tag.
+        #[arg(long, requires = "list")]
+        check_from_commit: bool,
+        /// easybuild-easyconfigs checkout for `from-commit` pins.
+        #[arg(long, requires = "check_from_commit")]
+        easyconfigs_repo: Option<PathBuf>,
+        /// easybuild-easyblocks checkout for `include-easyblocks-from-commit`.
+        #[arg(long, requires = "check_from_commit")]
+        easyblocks_repo: Option<PathBuf>,
+        /// EasyBuild release `X.Y.Z`. Overrides `eb-X.Y.Z` in the list file name.
+        #[arg(long, requires = "check_from_commit")]
+        easybuild_version: Option<String>,
     },
     /// Print the site file reference: every key, type, default and meaning.
     Schema,
@@ -400,60 +418,78 @@ fn site_file(path: &Path) -> Option<String> {
 }
 
 fn cmd_check(
-    site_path: &Path,
+    site_path: Option<&Path>,
     lists_dir: Option<&Path>,
     probe: bool,
     list: Option<&Path>,
     target: Option<&str>,
     stack_checks: &[stack_checks::StackCheck],
+    from_commit: Option<(&Path, from_commit::Options<'_>)>,
 ) -> Result<i32, Fail> {
-    let s = load_valid(site_path, lists_dir)?;
-    let m = &s.modules;
-    if let Some(first) = m
-        .init
-        .first()
-        .filter(|f| m.unuse_path && !f.starts_with('/'))
-    {
-        log(
-            "WARN",
-            "check",
-            &s.site.name,
-            &format!(
-                "modules.unuse_path clears MODULEPATH after shell_init, so `{first}` has no path to load from; load it by absolute path or drop unuse_path"
-            ),
-        );
-    }
-    if let Some(a) = s.admission_on() {
-        if a.required && (a.quota_cmd.is_none() || a.reservations.is_none()) {
+    let site = match site_path {
+        Some(path) => Some(load_valid(path, lists_dir)?),
+        None if from_commit.is_none() || !stack_checks.is_empty() => {
+            return Err(Fail::usage(
+                "pass --site or --check-from-commit with --list",
+            ));
+        }
+        None => None,
+    };
+    let mut code = exit::OK;
+    if let Some(s) = &site {
+        let m = &s.modules;
+        if let Some(first) = m
+            .init
+            .first()
+            .filter(|f| m.unuse_path && !f.starts_with('/'))
+        {
             log(
                 "WARN",
                 "check",
                 &s.site.name,
-                "admission.required is set without quota_cmd and reservations; `run` will refuse with exit 78",
+                &format!(
+                    "modules.unuse_path clears MODULEPATH after shell_init, so `{first}` has no path to load from; load it by absolute path or drop unuse_path"
+                ),
             );
         }
-        if a.live_jobs_cmd.is_none() && a.quota_cmd.is_some() && a.reservations.is_some() {
-            log(
-                "WARN",
-                "check",
-                &s.site.name,
-                "admission.live_jobs_cmd is unset; stack admit then counts every other job's reservation, including those of jobs that ended without removing theirs",
-            );
+        if let Some(a) = s.admission_on() {
+            if a.required && (a.quota_cmd.is_none() || a.reservations.is_none()) {
+                log(
+                    "WARN",
+                    "check",
+                    &s.site.name,
+                    "admission.required is set without quota_cmd and reservations; `run` will refuse with exit 78",
+                );
+            }
+            if a.live_jobs_cmd.is_none() && a.quota_cmd.is_some() && a.reservations.is_some() {
+                log(
+                    "WARN",
+                    "check",
+                    &s.site.name,
+                    "admission.live_jobs_cmd is unset; stack admit then counts every other job's reservation, including those of jobs that ended without removing theirs",
+                );
+            }
+        }
+        if probe {
+            tools::check_versions(s, true)?;
+        }
+        if !stack_checks.is_empty() {
+            stack_checks::run(
+                s,
+                list.expect("clap requires --list with --stack-checks"),
+                target,
+                stack_checks,
+            )?;
+        }
+        log("INFO", "check", &s.site.name, "site file is valid");
+    }
+    if let Some((list, opts)) = from_commit {
+        let fc = from_commit::run(site.as_ref(), list, &opts)?;
+        if fc != exit::OK {
+            code = fc;
         }
     }
-    if probe {
-        tools::check_versions(&s, true)?;
-    }
-    if !stack_checks.is_empty() {
-        stack_checks::run(
-            &s,
-            list.expect("clap requires --list with --stack-checks"),
-            target,
-            stack_checks,
-        )?;
-    }
-    log("INFO", "check", &s.site.name, "site file is valid");
-    Ok(exit::OK)
+    Ok(code)
 }
 
 fn cmd_explain(
@@ -1492,14 +1528,31 @@ fn main() {
             list,
             target,
             stack_checks,
-        } => cmd_check(
-            site,
-            lists_dir.as_deref(),
-            *probe_tools,
-            list.as_deref(),
-            target.as_deref(),
-            stack_checks,
-        ),
+            check_from_commit,
+            easyconfigs_repo,
+            easyblocks_repo,
+            easybuild_version,
+        } => {
+            let fc = check_from_commit.then(|| {
+                (
+                    list.as_deref().expect("--list with --check-from-commit"),
+                    from_commit::Options {
+                        easyconfigs_repo: easyconfigs_repo.as_deref(),
+                        easyblocks_repo: easyblocks_repo.as_deref(),
+                        easybuild_version: easybuild_version.as_deref(),
+                    },
+                )
+            });
+            cmd_check(
+                site.as_deref(),
+                lists_dir.as_deref(),
+                *probe_tools,
+                list.as_deref(),
+                target.as_deref(),
+                stack_checks,
+                fc,
+            )
+        }
         Cmd::Schema => {
             print!("{}", schema::reference());
             Ok(exit::OK)

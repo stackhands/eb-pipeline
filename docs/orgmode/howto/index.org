@@ -30,6 +30,7 @@ The title names the task.
    check-oom-before-building
    resume-a-run
    attest-build-inputs
+   check-from-commit-pins
    follow-runs
    run-tests-for-what-you-built
    rebuild-when-eessi-changes

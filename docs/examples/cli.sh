@@ -13,7 +13,7 @@ expect_status 0
 expect_line "eb-pipeline $(crate_version)"
 
 synopsis=(
-    'check [OPTIONS] --site <SITE>'
+    'check [OPTIONS]'
     'schema'
     'init [OPTIONS]'
     'explain [OPTIONS] --site <SITE>'
