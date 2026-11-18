@@ -1,5 +1,6 @@
 //! `eb-junit` turns `eb-pipeline run --result` files into a JUnit report.
 
+use std::os::unix::fs::MetadataExt;
 use std::process::Command;
 
 fn bin() -> Command {
@@ -254,6 +255,8 @@ fn a_result_file_is_reported_and_left_unchanged() {
     );
     std::fs::write(&path, &raw).unwrap();
     let out = dir.path().join("junit.xml");
+    std::fs::write(&out, b"complete old report\n").unwrap();
+    let old_inode = std::fs::metadata(&out).unwrap().ino();
     let o = bin()
         .arg("--result")
         .arg(&path)
@@ -269,6 +272,7 @@ fn a_result_file_is_reported_and_left_unchanged() {
     );
     assert!(o.stdout.is_empty());
     assert!(o.stderr.is_empty());
+    assert_ne!(std::fs::metadata(&out).unwrap().ino(), old_inode);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), raw);
     let xml = std::fs::read_to_string(&out).unwrap();
     assert!(xml.contains("tests=\"2\" failures=\"1\" errors=\"0\" skipped=\"0\""));

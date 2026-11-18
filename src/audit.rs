@@ -11,6 +11,7 @@ use crate::resolve::Scope;
 use crate::run::{exec_logged, log};
 use crate::schema::{Site, Target};
 use crate::tools::Tool;
+use crate::util;
 use crate::watch;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -284,7 +285,10 @@ fn copy_rebuilds(src: &Path, dst: &Path) -> Result<(), Fail> {
         let path = entry.path();
         if path.extension().is_some_and(|ext| ext == "yml") {
             let to = dst.join(entry.file_name());
-            std::fs::copy(&path, &to).map_err(|e| {
+            let bytes = std::fs::read(&path).map_err(|e| {
+                Fail::new(exit::FAILED, format!("cannot read {}: {e}", path.display()))
+            })?;
+            util::write_atomic(&to, &bytes).map_err(|e| {
                 Fail::new(
                     exit::FAILED,
                     format!("cannot copy {} to {}: {e}", path.display(), to.display()),

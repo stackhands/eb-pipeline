@@ -1,7 +1,7 @@
 //! `run --resume-result` against stub `eb` and `eb-stack` programs.
 
 use serde_json::Value;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -456,6 +456,7 @@ fn result_may_atomically_replace_the_resume_result_after_it_is_read() {
         ],
     );
     assert_eq!(first.code, 0, "{}", first.stderr);
+    let first_inode = std::fs::metadata(&shared).unwrap().ino();
 
     let second = invoke(
         &w,
@@ -480,6 +481,35 @@ fn result_may_atomically_replace_the_resume_result_after_it_is_read() {
     assert_eq!(result["counts"]["skipped"], 1);
     let on_disk: Value = serde_json::from_str(&std::fs::read_to_string(&shared).unwrap()).unwrap();
     assert_eq!(on_disk, result);
+    assert_ne!(std::fs::metadata(&shared).unwrap().ino(), first_inode);
+}
+
+#[test]
+fn a_truncated_resume_result_is_rejected_without_replacing_it() {
+    let w = world(resume(1));
+    let shared = w.root.join("result.json");
+    let truncated = b"{\"kind\":\"result\",\"input_digest\":\"abc\",\"lines\":[";
+    std::fs::write(&shared, truncated).unwrap();
+
+    let out = invoke(
+        &w,
+        "run",
+        Some("Foo-1.0-foss-2025a.eb\n"),
+        &[],
+        &[
+            "--resume-result",
+            shared.to_str().unwrap(),
+            "--result",
+            shared.to_str().unwrap(),
+        ],
+    );
+
+    assert_eq!(out.code, 2, "{}", out.stderr);
+    assert!(out.stdout.is_empty());
+    assert!(out.stderr.contains("EOF"), "{}", out.stderr);
+    assert_eq!(std::fs::read(&shared).unwrap(), truncated);
+    assert!(calls(&w, "eb.calls").is_empty());
+    assert!(calls(&w, "eb-stack.calls").is_empty());
 }
 
 #[test]

@@ -83,7 +83,8 @@ fn run() -> Result<ExitCode, String> {
     let (report, failures) = render_labeled_counted(&labeled, &reframe, &args.properties)?;
     match args.out.as_deref() {
         Some(path) if path != "-" => {
-            fs::write(path, &report).map_err(|e| format!("cannot write {path}: {e}"))?;
+            util::write_atomic(Path::new(path), report.as_bytes())
+                .map_err(|e| format!("cannot write {path}: {e}"))?;
         }
         _ => {
             let mut out = io::stdout().lock();

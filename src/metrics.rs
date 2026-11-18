@@ -4,11 +4,9 @@
 //! run is still a successful rendering: the exit code in the file is data.
 
 use crate::exit::Fail;
+use crate::util;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 /// Line statuses a result records, in label order.
@@ -283,61 +281,9 @@ pub fn status_json(status: &Status) -> String {
     serde_json::to_string_pretty(&status_value(status)).expect("status is json") + "\n"
 }
 
-/// Atomically replace `path` through a temporary sibling.
-///
-/// An existing regular file's permission bits are applied to the temporary
-/// file before the rename. Ownership follows the account creating the
-/// temporary file.
+/// Atomically replace a metrics file through a fully written temporary sibling.
 pub fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let existing_mode = match std::fs::metadata(path) {
-        Ok(metadata) if metadata.is_file() => Some(metadata.permissions().mode() & 0o7777),
-        Ok(_) => None,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(e),
-    };
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("metrics");
-    for attempt in 0..1000u32 {
-        let temporary = parent.join(format!(".{name}.{}.{}.tmp", std::process::id(), attempt));
-        let mut file = match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-        {
-            Ok(file) => file,
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e),
-        };
-        if let Some(mode) = existing_mode {
-            if let Err(e) =
-                std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(mode))
-            {
-                drop(file);
-                let _ = std::fs::remove_file(&temporary);
-                return Err(e);
-            }
-        }
-        let written = file
-            .write_all(text.as_bytes())
-            .and_then(|()| file.sync_all());
-        drop(file);
-        if let Err(e) = written {
-            let _ = std::fs::remove_file(&temporary);
-            return Err(e);
-        }
-        if let Err(e) = std::fs::rename(&temporary, path) {
-            let _ = std::fs::remove_file(&temporary);
-            return Err(e);
-        }
-        return Ok(());
-    }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::AlreadyExists,
-        "cannot allocate a temporary metrics file",
-    ))
+    util::write_atomic(path, text.as_bytes())
 }
 
 fn need_str<'a>(obj: &'a Map<String, Value>, key: &str) -> Result<&'a str, Fail> {

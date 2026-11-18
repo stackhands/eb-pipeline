@@ -4,6 +4,7 @@ use crate::exit::{self, Fail};
 use crate::resolve::Scope;
 use crate::schema::Site;
 use crate::tools::Tool;
+use crate::util;
 use clap::Args;
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -149,7 +150,7 @@ fn execute(bin: &str, argv: &[String]) -> Result<Output, Fail> {
 }
 
 fn write(path: &Path, bytes: &[u8]) -> Result<(), Fail> {
-    std::fs::write(path, bytes).map_err(|error| {
+    util::write_atomic(path, bytes).map_err(|error| {
         Fail::new(
             exit::FAILED,
             format!("cannot write {}: {error}", path.display()),

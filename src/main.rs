@@ -411,7 +411,7 @@ fn to_sorted<T: Serialize>(v: &T) -> serde_json::Value {
 fn write_json(v: &serde_json::Value, path: Option<&Path>) -> Result<(), Fail> {
     let text = serde_json::to_string_pretty(v).expect("serializable") + "\n";
     match path {
-        Some(p) if p != Path::new("-") => std::fs::write(p, text)
+        Some(p) if p != Path::new("-") => util::write_atomic(p, text.as_bytes())
             .map_err(|e| Fail::new(exit::FAILED, format!("cannot write {}: {e}", p.display()))),
         _ => {
             print!("{text}");
