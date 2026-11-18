@@ -495,6 +495,8 @@ eb-shard-weights (--result FILE... | --summary FILE... | --log-root DIR [--last 
 | =--mode MODE= | Combine durations with =max= (default), =latest= or =mean=. |
 | =--out FILE= | Atomically replace =FILE= with the complete table; =-= or absent prints to stdout. =FILE= must differ from every result, summary and existing weights file. |
 
+An existing weights file that sets one module more than once is refused with both line numbers.
+
 With no input option, =EB_PIPELINE_RESULT= supplies one result file.
 =EB_PIPELINE_TARGET= supplies =--target=. A command-line option wins.
 

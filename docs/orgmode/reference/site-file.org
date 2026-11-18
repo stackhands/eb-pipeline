@@ -130,7 +130,7 @@ So every job that a run or =watch= starts needs the directory, whatever its phas
 | Key           | Type   | Default                                  | Meaning                                                                                                                                                                                                                                                      |
 |---------------+--------+------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | =bin=         | string | the tool's own name, looked up on =PATH= | The program: a path, or a name to look up on =PATH=.                                                                                                                                                                                                         |
-| =min_version= | string | none                                     | The lowest version accepted, as dotted numbers such as =0.7.4=. When a phase that calls the tool is on, =run= starts =BIN --version= before any other command, and exits 2 when the tool cannot start, prints no dotted number, or prints a lower one first. |
+| =min_version= | string | none                                     | The lowest version accepted, as dotted numbers such as =0.7.4=. When a phase that calls the tool is on, =run= starts =BIN --version= before any other command, and exits 2 when the tool cannot start, exits nonzero, prints no dotted number, or prints a lower one first. |
 
 ** =[scheduler]=
 
@@ -362,6 +362,7 @@ It is started as a subprocess and is not probed with =--version=.
 =easyconfigs= are the trees given to =eb-stack stack order --easyconfigs=.
 When that list is empty, =resume.easyconfigs= is used, then =shards.easyconfigs=.
 =easyblocks= are directories searched for the Python file that defines each class.
+A quoted =easyblock= assignment is read anywhere in the easyconfig, regardless of earlier assignments.
 A class with no file is recorded with an empty path.
 =patches= are extra directories searched, together with the easyconfig's own directory and the easyconfig trees, for a quoted name that ends in =.patch=.
 Two files of the same name with different contents refuse the attestation.
