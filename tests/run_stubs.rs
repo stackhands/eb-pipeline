@@ -1393,6 +1393,35 @@ fn sigterm_is_forwarded_and_exit_is_143() {
 }
 
 #[test]
+fn sigterm_during_source_prefetch_records_every_line() {
+    let env = setup("[sources]\n");
+    let mut child = driver(&env, LIST, &[("STUB_EB_SLEEP", "1")], &[]);
+    let started = env.dir.path().join("started");
+    let t0 = Instant::now();
+    while !started.exists() {
+        assert!(t0.elapsed() < Duration::from_secs(20), "stub never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // SAFETY: the pid is the driver child this test started.
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+    }
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(143));
+    let result: Value =
+        serde_json::from_str(&std::fs::read_to_string(env.dir.path().join("result.json")).unwrap())
+            .unwrap();
+    let lines = result["lines"].as_array().unwrap();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines[0]["easyconfig"], "Foo-1.0-foss-2025a.eb");
+    assert_eq!(lines[0]["phase"], "sources");
+    assert_eq!(lines[0]["status"], "failed");
+    assert_eq!(lines[0]["exit_code"], 143);
+    assert_eq!(lines[1]["easyconfig"], "Bar-2.0-foss-2025a.eb");
+    assert_eq!(lines[1]["status"], "skipped");
+}
+
+#[test]
 fn sigterm_reaches_descendants_of_the_running_command() {
     let env = setup("");
     write_exec(

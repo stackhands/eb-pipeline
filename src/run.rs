@@ -1383,6 +1383,21 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                     }
                 };
                 if let Some(c) = stop_if_signalled(&mut st, "sources") {
+                    st.res.lines.push(LineResult {
+                        easyconfig: l.easyconfig.clone(),
+                        unit: u.name.clone(),
+                        phase: "sources".into(),
+                        status: "failed".into(),
+                        exit_code: Some(c),
+                        translated_from: None,
+                        log: ex.log.display().to_string(),
+                        note: Some("source fetch interrupted".into()),
+                        duration_seconds: Some(seconds(ex.elapsed)),
+                        outputs: Vec::new(),
+                    });
+                    st.failed = true;
+                    fetch_failed.push(s.clone());
+                    note_skipped(&mut st, &units, &unit_stems, &fetch_failed, 0, 0, p);
                     return finish(st, Some(c));
                 }
                 if ex.code != 0 {
