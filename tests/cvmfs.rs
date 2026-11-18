@@ -1390,6 +1390,27 @@ fn concurrent_fixture_exec_writes_do_not_hit_text_file_busy() {
 }
 
 #[test]
+fn cvmfs_dry_run_succeeds_when_stdout_consumer_closes() {
+    let mut fds = [0; 2];
+    unsafe {
+        assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+        assert_eq!(libc::close(fds[0]), 0);
+    }
+    let closed = unsafe { <std::process::Stdio as std::os::fd::FromRawFd>::from_raw_fd(fds[1]) };
+    let o = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
+        .args(["--dry-run", "repo.example", "--", "sync"])
+        .stdout(closed)
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+}
+
+#[test]
 fn archive_manifest_accepts_equals_form_and_rejects_empty_or_duplicate() {
     let fixture = Fixture::new();
     let tree = fixture.dir.path().join("tree");

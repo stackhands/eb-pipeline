@@ -574,3 +574,34 @@ fn duplicate_single_value_flags_are_refused() {
         );
     }
 }
+
+#[test]
+fn test_map_succeeds_when_stdout_consumer_closes() {
+    let dir = tempfile::tempdir().unwrap();
+    let map = dir.path().join("map.tsv");
+    std::fs::write(&map, "G g\n").unwrap();
+    let list = dir.path().join("l.txt");
+    std::fs::write(&list, "G-1.0.eb\n").unwrap();
+
+    for format in ["text", "eessi-modules"] {
+        let mut fds = [0; 2];
+        unsafe {
+            assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+            assert_eq!(libc::close(fds[0]), 0);
+        }
+        let closed =
+            unsafe { <std::process::Stdio as std::os::fd::FromRawFd>::from_raw_fd(fds[1]) };
+        let mut cmd = bin();
+        cmd.args(["--list"]).arg(&list).args(["--format", format]);
+        if format != "eessi-modules" {
+            cmd.args(["--map"]).arg(&map);
+        }
+        let o = cmd.stdout(closed).output().unwrap();
+        assert_eq!(
+            o.status.code(),
+            Some(0),
+            "{format}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    }
+}

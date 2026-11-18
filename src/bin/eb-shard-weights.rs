@@ -11,7 +11,6 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::io::{self, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -124,8 +123,7 @@ fn run() -> Result<ExitCode, String> {
                 .map_err(|e| format!("cannot write {path}: {e}"))?;
         }
         _ => {
-            let mut out = io::stdout().lock();
-            out.write_all(text.as_bytes())
+            util::write_stdout(text.as_bytes())
                 .map_err(|e| format!("cannot write weights: {e}"))?;
         }
     }
