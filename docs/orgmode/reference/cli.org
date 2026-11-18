@@ -296,7 +296,7 @@ Exit 2 means the file is missing, is not JSON, or its =kind= is not =result=.
 | Option                 | Meaning                                                                                                                                                                                                                         |
 |------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | =--result FILE=        | Atomically replace =FILE= with the complete result when the run ends. Without it, no result file is written. An input error leaves an existing =FILE= as it was. It must differ from =--metrics-file=.                              |
-| =--plan-out FILE=      | Atomically replace =FILE= with the plan computed by this invocation before any phase command starts. A dry run writes it too. =FILE= must differ from every result and metrics path.                                               |
+| =--plan-out FILE=      | Atomically replace =FILE= with the plan computed by this invocation before any phase command starts. A dry run writes it too. =FILE= must differ from the site, list, result, metrics and resume-result paths.                           |
 | =--metrics-file FILE=  | Atomically replace =FILE= with Prometheus text when the run ends. Without it, no metrics file is written. A dry run does not write it. It must differ from =--result= and =--resume-result=.                                             |
 | =--resume-result FILE= | Continue from =FILE= when =[resume] enabled= is true and the input digest still matches. Conflicts with =--dry-run=. Without that, exit 2 and no result file. A mismatch, a missing =input_digest=, or an incomplete identity exits 78 and writes the result. |
 | =--shard-plan DIR=     | Read the units from a plan previously written by =eb-stack stack shard=. The run does not call the shard planner or require its installed-module-directory environment variables.                                             |
@@ -433,7 +433,7 @@ eb-retry-list (--result FILE | --summary FILE --target NAME)
 | =--summary FILE= | Run summary file (=summary.json=). Requires =--target=. |
 | =--target NAME= | Target entry to read from =--summary=. |
 | =--list FILE= | Build list or easystack (=.yml= or =.yaml=) passed to the run. Mutually exclusive with =--recorded-list=. |
-| =--recorded-list= | Read the build-list path from the result or selected summary target and use it as written. Mutually exclusive with =--list=. |
+| =--recorded-list= | Read the build-list path from the result or selected summary target and use it as written, relative to the current working directory when it is relative. Mutually exclusive with =--list=. |
 | =--status STATUS,...= | Comma-separated statuses to keep: =failed=, =refused=, =pending=, =skipped=, =unreached=. Default: all non-=success= lines and unreached lines on a non-zero exit. |
 | =--classify= | Pass each selected line's recorded log to =eb-stack stack bot-classify --json=. Without =--class=, keep the =interrupted=, =resource= and =timeout= sub-classes. |
 | =--class CLASS,...= | Classes to keep instead of that default. A line stays when the JSON =class= or =sub_class= is one of these names. Repeatable. Requires =--classify=. |
@@ -468,7 +468,7 @@ eb-shard-weights (--result FILE... | --summary FILE... | --log-root DIR [--last 
 | =--last N= | How many newest run directories under =--log-root= to read (1 to 65535; default 10). |
 | =--target NAME= | Keep observations from this target only. |
 | =--existing FILE= | Seed weights TSV (=MODULE<TAB>SECONDS=) to merge with new observations. |
-| =--min-samples N= | Update a module only after N selected observations, from 1 to 65535; 1 when absent. Under-sampled existing weights remain unchanged. |
+| =--min-samples N= | Update a module only after N selected observations, from 1 to 65535; 1 when absent. Under-sampled existing weights remain unchanged, and an under-sampled module without an existing weight is omitted. |
 | =--mode MODE= | Combine durations with =max= (default), =latest= or =mean=. |
 | =--out FILE= | Atomically replace =FILE= with the complete table; =-= or absent prints to stdout. =FILE= must differ from every result, summary and existing weights file. |
 
@@ -490,7 +490,7 @@ eb-junit [--result FILE]... [--reframe-report FILE]... [--out FILE]
 | =--result FILE= | A result file written by =eb-pipeline run --result=. Repeat for each file. |
 | =--reframe-report FILE= | A ReFrame report JSON written by =reframe --report-file=. Repeat for each file. |
 | =--out FILE= | Atomically replace =FILE= with the complete report. =-= or absent prints it on stdout. =FILE= must differ from every result and ReFrame report file. |
-| =--property NAME=VALUE= | Add the property to every suite. Repeat for more properties; the last value for a name wins. |
+| =--property NAME=VALUE= | Add the property to every suite. NAME must not be empty; VALUE may be empty. Repeat for more properties; the last value for a name wins and replaces a recorded property of that name. |
 | =--fail-on-failure= | Write the complete report, then exit 1 when it contains at least one failure. |
 
 At least one of =--result= or =--reframe-report= is required.
