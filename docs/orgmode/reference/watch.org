@@ -198,6 +198,8 @@ kept:
 
 =--plan-out FILE= writes the plan in JSON, with the keys of every object in sorted order.
 A rebuild writes it to =LOG_DIR/watch-plan.json= too, and adds it to the run summary as the =watch= entry of the target.
+When =watch= identifies rebuilds but cannot run eb-stack or find an easyconfig tree for a vanished dependency, =--plan-out= still writes the assessment before the command exits.
+That file has =outcome= set to =rebuild=, the assessed actions in =installs=, and an empty =rebuild= list because no order was computed.
 
 #+begin_src bash
 cat plan.json

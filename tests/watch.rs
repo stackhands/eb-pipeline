@@ -624,22 +624,88 @@ fn without_eb_stack_watch_says_what_to_rebuild_and_refuses_to_guess_the_rest() {
     std::fs::remove_file(t.stubs.join("eb-stack")).unwrap();
     let builds = t.calls("eb");
     let o = watch(&t, LATER, &["--dry-run"], &with(&vars));
-    let err = stderr(&o);
-    assert_eq!(code(&o), 78, "{err}");
+    let default_code = code(&o);
+    let default_out = stdout(&o);
+    let default_err = stderr(&o);
+    assert_eq!(default_code, 78, "{default_err}");
     assert_eq!(
-        stdout(&o),
+        default_out,
         "EESSI 2023.06 x86_64/generic: 4 recorded installs, 1 to rebuild, 0 kept, 3 unaffected, 0 gone\nrebuild, in an order not known without eb-stack:\n      Foo/1.0-GCCcore-13.2.0  CMake/3.27.6-GCCcore-13.2.0 changed (review, builddependency)\nunaffected:\n      Bar/2.0-GCCcore-13.2.0\n      Baz/3.0-GCCcore-13.2.0\n      Qux/4.0-GCCcore-13.2.0\n"
     );
     assert!(
-        err.contains(
+        default_err.contains(
             "eb-stack tells what an install depends on, and cannot run `eb-stack --version`"
         ),
-        "{err}"
+        "{default_err}"
     );
     assert!(
-        err.contains("without it neither the order of the rebuild nor the installs that depend on it are known, and nothing is rebuilt"),
-        "{err}"
+        default_err.contains("without it neither the order of the rebuild nor the installs that depend on it are known, and nothing is rebuilt"),
+        "{default_err}"
     );
+
+    let plan = t.root().join("refused-plan.json");
+    let plan_arg = plan.display().to_string();
+    let with_plan = watch(
+        &t,
+        LATER,
+        &["--dry-run", "--plan-out", &plan_arg],
+        &with(&vars),
+    );
+    assert_eq!(code(&with_plan), default_code);
+    assert_eq!(stdout(&with_plan), default_out);
+    assert_eq!(stderr(&with_plan), default_err);
+    let p: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&plan).unwrap()).unwrap();
+    assert_eq!(p["kind"], "watch-plan");
+    assert_eq!(p["outcome"], "rebuild");
+    assert_eq!(p["rebuild"], serde_json::json!([]));
+    let foo = p["installs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["module"] == "Foo/1.0-GCCcore-13.2.0")
+        .unwrap();
+    assert_eq!(foo["action"], "rebuild");
+    assert_eq!(t.calls("eb"), builds);
+}
+
+#[test]
+fn a_vanished_dependency_without_a_robot_tree_writes_the_assessment_plan() {
+    let t = setup("[watch]\n");
+    stack(&t);
+    let vars = eessi_vars(&t, "2023.06");
+    let o = run(&t, "cpu", STAMP, LIST, &with(&vars));
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    change(&t);
+
+    let plan = t.root().join("vanished-plan.json");
+    let plan_arg = plan.display().to_string();
+    let builds = t.calls("eb");
+    let o = watch(
+        &t,
+        LATER,
+        &["--dry-run", "--plan-out", &plan_arg],
+        &with(&vars),
+    );
+    assert_eq!(code(&o), 78, "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("eb-stack has no easyconfig tree to plan its local build from"),
+        "{}",
+        stderr(&o)
+    );
+    let p: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&plan).unwrap()).unwrap();
+    assert_eq!(p["kind"], "watch-plan");
+    assert_eq!(p["outcome"], "rebuild");
+    assert_eq!(p["rebuild"], serde_json::json!([]));
+    let baz = p["installs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["module"] == "Baz/3.0-GCCcore-13.2.0")
+        .unwrap();
+    assert_eq!(baz["action"], "rebuild");
+    assert_eq!(baz["changes"][0]["change"], "vanished");
     assert_eq!(t.calls("eb"), builds);
 }
 

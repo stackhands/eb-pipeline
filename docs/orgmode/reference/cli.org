@@ -344,7 +344,7 @@ Without =[attest] enabled=, =verify= exits 2.
 | =--log-stamp STAMP= | =EB_PIPELINE_LOG_STAMP=  | The run directory of the rebuild under the log root, as for =run=; the UTC time at which =watch= starts when absent. Any other value is refused, with exit 2. |
 | =--dry-run=         |                          | Print the plan on stdout, and rebuild and record nothing.                                                                                                     |
 | =--adopt=           |                          | Record each install in the module tree of the target against the EESSI loaded now, in place of the record, and rebuild nothing.                               |
-| =--plan-out FILE=   |                          | Write the plan to =FILE= in JSON.                                                                                                                             |
+| =--plan-out FILE=   |                          | Write the plan to =FILE= in JSON, including the assessed actions when rebuild ordering stops before an order is computed.                                     |
 | =--result FILE=     |                          | Write the result file of the rebuild to =FILE=. Without it, or without a rebuild, no result file is written.                                                  |
 
 Without =--dry-run=, =watch= prints the plan to stderr, then runs the rebuild list through the phases of the site file, as =run= runs a build list.

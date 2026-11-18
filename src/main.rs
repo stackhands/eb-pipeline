@@ -1319,12 +1319,14 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     let abi_needs_update = abi_now
         .as_ref()
         .is_some_and(|a| state.abi_baseline.as_ref() != Some(a));
+    let write_plan = |doc: &watch::PlanDoc| match w.plan_out {
+        Some(path) => write_json(&to_sorted(doc), Some(path)),
+        None => Ok(()),
+    };
     if watch::unchanged_at(&state, &probe, revision) && abi_fields.is_empty() && !abi_needs_update {
         drop_work();
         let doc = watch::PlanDoc::unchanged(name, &probe, revision, &state);
-        if let Some(p) = w.plan_out {
-            write_json(&to_sorted(&doc), Some(p))?;
-        }
+        write_plan(&doc)?;
         print(&doc);
         return Ok(exit::OK);
     }
@@ -1360,7 +1362,9 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     let mut doc;
     if verdicts.iter().any(|v| v.action == "rebuild") {
         if let Err(f) = watch::need_eb_stack(&s) {
-            print(&watch::PlanDoc::new(name, &probe, revision, verdicts));
+            let doc = watch::PlanDoc::new(name, &probe, revision, verdicts);
+            write_plan(&doc)?;
+            print(&doc);
             return Err(Fail::new(
                 f.code,
                 format!(
@@ -1391,7 +1395,9 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             Vec::new()
         };
         if vanished && robot.is_empty() {
-            print(&watch::PlanDoc::new(name, &probe, revision, verdicts));
+            let doc = watch::PlanDoc::new(name, &probe, revision, verdicts);
+            write_plan(&doc)?;
+            print(&doc);
             return Err(Fail::new(
                 exit::REFUSED,
                 "a dependency vanished from EESSI, and eb-stack has no easyconfig tree to plan its local build from: set [watch] easyconfigs, or load EasyBuild in [modules] init",
@@ -1403,9 +1409,7 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     } else {
         doc = watch::PlanDoc::new(name, &probe, revision, verdicts);
     }
-    if let Some(p) = w.plan_out {
-        write_json(&to_sorted(&doc), Some(p))?;
-    }
+    write_plan(&doc)?;
     if !conf.rebuild_review {
         for v in doc.installs.iter().filter(|v| v.action == "keep") {
             if let Some(c) = v.changes.iter().find(|c| c.class == "review") {
