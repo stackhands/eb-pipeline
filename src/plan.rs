@@ -180,16 +180,22 @@ fn push_eb_line(argv: &mut Vec<String>, easyconfig: &str, options: Vec<String>) 
 }
 
 /// Line options for a fetch with the robot disabled: a bare `--robot` goes,
-/// and the last `--robot=P` stays at the front of the search path so the
-/// line's easyconfig is still found. EasyBuild searches `P` then
+/// and the last `--robot P` or `--robot=P` path stays at the front of the
+/// search path so the line's easyconfig is still found. EasyBuild searches `P` then
 /// `--robot-paths`, which `--robot-paths=P:X` keeps; `P:` is `P` followed by
 /// the default paths.
 pub fn without_robot<'a>(args: impl Iterator<Item = &'a String>) -> Vec<String> {
     let mut robot: Option<&str> = None;
     let mut out: Vec<String> = Vec::new();
-    for a in args {
+    let mut args = args.peekable();
+    while let Some(a) = args.next() {
         if a == "--robot" {
-            robot = Some("");
+            robot = match args.peek() {
+                Some(path) if !path.starts_with('-') => {
+                    Some(args.next().expect("peeked at the path").as_str())
+                }
+                _ => Some(""),
+            };
         } else if let Some(p) = a.strip_prefix("--robot=") {
             robot = Some(p);
         } else {
