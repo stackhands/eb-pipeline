@@ -350,3 +350,104 @@ fn docs_name_eb_shard_weights() {
         assert!(page.contains("--min-samples"), "{rel}");
     }
 }
+
+#[test]
+fn duplicate_single_value_flags_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let result = dir.path().join("result.json");
+    std::fs::write(
+        &result,
+        r#"{"kind":"result","target":"cpu","lines":[{"easyconfig":"A-1.0.eb","phase":"build","status":"success","duration_seconds":1.0}]}"#,
+    )
+    .unwrap();
+    let existing = dir.path().join("existing.tsv");
+    std::fs::write(&existing, "A\t1\n").unwrap();
+
+    for (flag, args) in [
+        (
+            "--out",
+            vec![
+                "--result".to_string(),
+                result.display().to_string(),
+                "--out".to_string(),
+                dir.path().join("a.tsv").display().to_string(),
+                "--out".to_string(),
+                dir.path().join("b.tsv").display().to_string(),
+            ],
+        ),
+        (
+            "--target",
+            vec![
+                "--result".to_string(),
+                result.display().to_string(),
+                "--target".to_string(),
+                "cpu".to_string(),
+                "--target=gpu".to_string(),
+            ],
+        ),
+        (
+            "--mode",
+            vec![
+                "--result".to_string(),
+                result.display().to_string(),
+                "--mode".to_string(),
+                "max".to_string(),
+                "--mode".to_string(),
+                "mean".to_string(),
+            ],
+        ),
+        (
+            "--min-samples",
+            vec![
+                "--result".to_string(),
+                result.display().to_string(),
+                "--min-samples".to_string(),
+                "1".to_string(),
+                "--min-samples=2".to_string(),
+            ],
+        ),
+        (
+            "--existing",
+            vec![
+                "--result".to_string(),
+                result.display().to_string(),
+                "--existing".to_string(),
+                existing.display().to_string(),
+                "--existing".to_string(),
+                existing.display().to_string(),
+            ],
+        ),
+        (
+            "--log-root",
+            vec![
+                "--log-root".to_string(),
+                dir.path().display().to_string(),
+                "--log-root".to_string(),
+                dir.path().display().to_string(),
+            ],
+        ),
+        (
+            "--last",
+            vec![
+                "--log-root".to_string(),
+                dir.path().display().to_string(),
+                "--last".to_string(),
+                "1".to_string(),
+                "--last=2".to_string(),
+            ],
+        ),
+    ] {
+        let o = bin().args(&args).output().unwrap();
+        assert_eq!(
+            o.status.code(),
+            Some(2),
+            "{flag}: stderr={}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&o.stderr).contains("was given twice"),
+            "{flag}: stderr={}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    }
+}
