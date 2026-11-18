@@ -154,6 +154,11 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
         }
     }
     if results.is_empty() && reframe_reports.is_empty() {
+        if let Some(result) = util::env_value("EB_PIPELINE_RESULT") {
+            results.push(result);
+        }
+    }
+    if results.is_empty() && reframe_reports.is_empty() {
         return Err("--result or --reframe-report is required".into());
     }
     Ok(Args {

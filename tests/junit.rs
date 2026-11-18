@@ -4,7 +4,9 @@ use std::os::unix::fs::MetadataExt;
 use std::process::Command;
 
 fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_eb-junit"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_eb-junit"));
+    command.env_remove("EB_PIPELINE_RESULT");
+    command
 }
 
 fn result(exit_code: i32, lines: &str) -> String {
@@ -80,6 +82,25 @@ fn default_stdout_and_status_remain_byte_for_byte_unchanged() {
 }
 
 #[test]
+fn result_environment_falls_back_and_the_flag_wins() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("result.json");
+    std::fs::write(&path, result(0, "")).unwrap();
+    let from_env = bin().env("EB_PIPELINE_RESULT", &path).output().unwrap();
+    let from_flag = bin()
+        .args(["--result"])
+        .arg(&path)
+        .env("EB_PIPELINE_RESULT", dir.path().join("wrong.json"))
+        .output()
+        .unwrap();
+    assert_eq!(from_env.status.code(), Some(0));
+    assert_eq!(from_flag.status.code(), Some(0));
+    assert_eq!(from_env.stdout, from_flag.stdout);
+    assert!(from_env.stderr.is_empty());
+    assert!(from_flag.stderr.is_empty());
+}
+
+#[test]
 fn default_reframe_output_and_status_remain_byte_for_byte_unchanged() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -100,6 +121,7 @@ fn default_reframe_output_and_status_remain_byte_for_byte_unchanged() {
     let output = bin()
         .current_dir(dir.path())
         .args(["--reframe-report", "reframe.json"])
+        .env("EB_PIPELINE_RESULT", "wrong.json")
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(0));

@@ -458,6 +458,11 @@ eb-retry-list (--result FILE | --summary FILE --target NAME)
 | =--out FILE= | Atomically replace =FILE= with the complete retry list; =-= or absent prints to stdout. It must differ from the result or summary and from the explicit or recorded build list, including through symbolic and hard links. |
 | =--require-lines= | Exit 1 after writing an empty retry list. Without it, an empty retry list exits 0. |
 
+=--result=, =--list= and =--target= fall back to =EB_PIPELINE_RESULT=,
+=EB_PIPELINE_LIST= and =EB_PIPELINE_TARGET=. A command-line option wins.
+=--summary= selects the summary instead of =EB_PIPELINE_RESULT=, and
+=--recorded-list= selects the recorded path instead of =EB_PIPELINE_LIST=.
+
 Exit 0 means the retry list was written (empty when every line succeeded, was deselected, was not in a selected class, or was dropped by =--drop-oom=).
 With =--require-lines=, exit 1 means the retry list was written but is empty.
 Exit 2 is a missing or invalid input, an output path that aliases an input, an absent or unreadable recorded list, a selected line without a recorded log, an =eb-stack= that cannot start or fails, invalid classifier output, or =stack oom= output that has no single =oom=N= line matching its warnings.
@@ -487,6 +492,9 @@ eb-shard-weights (--result FILE... | --summary FILE... | --log-root DIR [--last 
 | =--mode MODE= | Combine durations with =max= (default), =latest= or =mean=. |
 | =--out FILE= | Atomically replace =FILE= with the complete table; =-= or absent prints to stdout. =FILE= must differ from every result, summary and existing weights file. |
 
+With no input option, =EB_PIPELINE_RESULT= supplies one result file.
+=EB_PIPELINE_TARGET= supplies =--target=. A command-line option wins.
+
 Exit 0 means the table was written. Exit 2 is a missing or invalid input.
 
 *** eb-junit
@@ -508,7 +516,9 @@ eb-junit [--result FILE]... [--reframe-report FILE]... [--out FILE]
 | =--property NAME=VALUE= | Add the property to every suite. Repeat for more properties; the last value for a name wins. |
 | =--fail-on-failure= | Write the complete report, then exit 1 when it contains at least one failure. |
 
-At least one of =--result= or =--reframe-report= is required.
+With no input option, =EB_PIPELINE_RESULT= supplies one result file.
+A command-line input wins. Otherwise at least one of =--result= or
+=--reframe-report= is required.
 
 Exit 0 means the report was written, including when a run's own exit code is not 0.
 With =--fail-on-failure=, exit 1 means the report was written and contains a failure.
