@@ -817,13 +817,21 @@ fn easystack_entry(name: &str, args: &[String]) -> Result<serde_yaml::Value, Str
         if key.is_empty() {
             return Err("cannot represent an empty eb option in the generated easystack".into());
         }
-        if options
-            .insert(serde_yaml::Value::String(key.to_string()), value)
-            .is_some()
-        {
-            return Err(format!(
-                "cannot represent repeated eb option `--{key}` in the generated easystack"
-            ));
+        let option_key = serde_yaml::Value::String(key.to_string());
+        if let Some(previous) = options.remove(&option_key) {
+            if key != "amend" && key != "try-amend" {
+                return Err(format!(
+                    "cannot represent repeated eb option `--{key}` in the generated easystack"
+                ));
+            }
+            let mut values = match previous {
+                serde_yaml::Value::Sequence(values) => values,
+                previous => vec![previous],
+            };
+            values.push(value);
+            options.insert(option_key, serde_yaml::Value::Sequence(values));
+        } else {
+            options.insert(option_key, value);
         }
         index += consumed;
     }
@@ -1018,6 +1026,32 @@ oom=2 fits=1 builds=3 nodes=1
         let text = serde_yaml::to_string(&document).unwrap();
         let lines = easystack::parse(&text).unwrap();
         assert_eq!(lines[0].args, ["-f"]);
+    }
+
+    #[test]
+    fn generated_easystacks_keep_repeated_amend_options() {
+        let entry = easystack_entry(
+            "Big-1.0.eb",
+            &[
+                "--try-amend=versionsuffix=-a".into(),
+                "--try-amend".into(),
+                "toolchain=foss,2025a".into(),
+            ],
+        )
+        .unwrap();
+        let document = serde_yaml::Value::Mapping(serde_yaml::Mapping::from_iter([(
+            serde_yaml::Value::String("easyconfigs".into()),
+            serde_yaml::Value::Sequence(vec![entry]),
+        )]));
+        let text = serde_yaml::to_string(&document).unwrap();
+        let lines = easystack::parse(&text).unwrap();
+        assert_eq!(
+            lines[0].args,
+            [
+                "--try-amend=versionsuffix=-a",
+                "--try-amend=toolchain=foss,2025a"
+            ]
+        );
     }
 
     fn outcome(status: &str) -> Outcome {
