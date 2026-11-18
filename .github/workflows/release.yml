@@ -169,7 +169,9 @@ jobs:
           test "$(wc -l < sha256.sum)" -eq 3
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: artifacts/*.tar.xz
+          subject-path: |
+            artifacts/*.tar.xz
+            artifacts/source.tar.gz
       # A draft: release assets cannot change once a release is published,
       # so every asset is attached before a person publishes it.
       - name: draft release
