@@ -16,7 +16,8 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use eb_pipeline::easystack;
-use serde_json::{Map, Value};
+use eb_pipeline::util::{json_object as object, json_req_str as req_str};
+use serde_json::Value;
 
 /// Toolchains a build list carries that are not applications.
 const TOOLCHAINS: &[&str] = &[
@@ -333,20 +334,6 @@ fn easyconfigs_from_result(path: &str, include_resumed: bool) -> Result<Vec<Stri
         }
     }
     Ok(names)
-}
-
-fn object<'a>(value: &'a Value, what: &str) -> Result<&'a Map<String, Value>, String> {
-    value
-        .as_object()
-        .ok_or_else(|| format!("{what} must be a JSON object"))
-}
-
-fn req_str<'a>(obj: &'a Map<String, Value>, key: &str, what: &str) -> Result<&'a str, String> {
-    match obj.get(key) {
-        Some(Value::String(s)) => Ok(s),
-        Some(_) => Err(format!("{what}.{key} must be a string")),
-        None => Err(format!("{what} is missing `{key}`")),
-    }
 }
 
 fn escape_regex_literal(s: &str) -> String {

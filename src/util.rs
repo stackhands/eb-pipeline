@@ -333,6 +333,73 @@ pub fn package_of(easyconfig: &str) -> (String, Option<String>) {
     (name.join("-"), parts.get(i).map(|s| s.to_string()))
 }
 
+/// Borrow `value` as a JSON object, naming `what` on mismatch.
+pub fn json_object<'a>(
+    value: &'a serde_json::Value,
+    what: &str,
+) -> Result<&'a serde_json::Map<String, serde_json::Value>, String> {
+    value
+        .as_object()
+        .ok_or_else(|| format!("{what} must be a JSON object"))
+}
+
+/// Read a required string field `key` from `obj`, naming `what` on error.
+pub fn json_req_str<'a>(
+    obj: &'a serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    what: &str,
+) -> Result<&'a str, String> {
+    match obj.get(key) {
+        Some(serde_json::Value::String(s)) => Ok(s),
+        Some(_) => Err(format!("{what}.{key} must be a string")),
+        None => Err(format!("{what} is missing `{key}`")),
+    }
+}
+
+/// Read an optional string field `key` from `obj`, naming `what` on error.
+pub fn json_opt_str<'a>(
+    obj: &'a serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    what: &str,
+) -> Result<Option<&'a str>, String> {
+    match obj.get(key) {
+        None => Ok(None),
+        Some(serde_json::Value::String(s)) => Ok(Some(s)),
+        Some(_) => Err(format!("{what}.{key} must be a string")),
+    }
+}
+
+/// Read a required signed 64-bit integer field `key` from `obj`.
+pub fn json_req_i64(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    what: &str,
+) -> Result<i64, String> {
+    match obj.get(key) {
+        Some(serde_json::Value::Number(n)) => n
+            .as_i64()
+            .ok_or_else(|| format!("{what}.{key} must be an integer")),
+        Some(_) => Err(format!("{what}.{key} must be an integer")),
+        None => Err(format!("{what} is missing `{key}`")),
+    }
+}
+
+/// Read an optional signed 64-bit integer field `key` from `obj`.
+pub fn json_opt_i64(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    what: &str,
+) -> Result<Option<i64>, String> {
+    match obj.get(key) {
+        None => Ok(None),
+        Some(serde_json::Value::Number(n)) => n
+            .as_i64()
+            .map(Some)
+            .ok_or_else(|| format!("{what}.{key} must be an integer")),
+        Some(_) => Err(format!("{what}.{key} must be an integer")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -520,5 +587,30 @@ mod tests {
         ] {
             assert!(!is_log_stamp(bad), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn json_field_helpers_check_types_and_presence() {
+        let v: serde_json::Value =
+            serde_json::from_str(r#"{"s": "ok", "n": 42, "f": 1.5}"#).unwrap();
+        let obj = json_object(&v, "doc").unwrap();
+        assert_eq!(json_req_str(obj, "s", "doc").unwrap(), "ok");
+        assert_eq!(json_opt_str(obj, "s", "doc").unwrap(), Some("ok"));
+        assert_eq!(json_opt_str(obj, "missing", "doc").unwrap(), None);
+        assert_eq!(json_req_i64(obj, "n", "doc").unwrap(), 42);
+        assert_eq!(json_opt_i64(obj, "n", "doc").unwrap(), Some(42));
+        assert_eq!(json_opt_i64(obj, "missing", "doc").unwrap(), None);
+        assert!(json_object(&serde_json::json!([]), "doc")
+            .unwrap_err()
+            .contains("must be a JSON object"));
+        assert!(json_req_str(obj, "missing", "doc")
+            .unwrap_err()
+            .contains("is missing `missing`"));
+        assert!(json_opt_str(obj, "n", "doc")
+            .unwrap_err()
+            .contains("must be a string"));
+        assert!(json_req_i64(obj, "f", "doc")
+            .unwrap_err()
+            .contains("must be an integer"));
     }
 }
