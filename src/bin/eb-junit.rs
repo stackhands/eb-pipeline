@@ -14,6 +14,7 @@ struct Args {
     results: Vec<String>,
     reframe_reports: Vec<String>,
     out: Option<String>,
+    fail_on_failure: bool,
 }
 
 struct Suite {
@@ -65,7 +66,7 @@ fn run() -> Result<ExitCode, String> {
         let value = serde_json::from_str(&text).map_err(|e| format!("cannot parse {path}: {e}"))?;
         reframe.push((path.clone(), value));
     }
-    let report = render_labeled(&labeled, &reframe)?;
+    let (report, failures) = render_labeled_counted(&labeled, &reframe)?;
     match args.out.as_deref() {
         Some(path) if path != "-" => {
             fs::write(path, &report).map_err(|e| format!("cannot write {path}: {e}"))?;
@@ -76,13 +77,18 @@ fn run() -> Result<ExitCode, String> {
                 .map_err(|e| format!("cannot write the report: {e}"))?;
         }
     }
-    Ok(ExitCode::SUCCESS)
+    if args.fail_on_failure && failures > 0 {
+        Ok(ExitCode::from(1))
+    } else {
+        Ok(ExitCode::SUCCESS)
+    }
 }
 
 fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut results = Vec::new();
     let mut reframe_reports = Vec::new();
     let mut out = None;
+    let mut fail_on_failure = false;
     let mut words = words.peekable();
     while let Some(word) = words.next() {
         match word.as_str() {
@@ -94,6 +100,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 println!("eb-junit {}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
             }
+            "--fail-on-failure" => fail_on_failure = true,
             "--result" | "--reframe-report" | "--out" => {
                 let value = words
                     .next()
@@ -128,6 +135,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
         results,
         reframe_reports,
         out,
+        fail_on_failure,
     })
 }
 
@@ -154,10 +162,18 @@ fn assign(
 
 /// Render result objects, in order, as one JUnit document.
 /// `label` is the path named in an error.
+#[cfg(test)]
 fn render_labeled(
     items: &[(String, Value)],
     reframe_reports: &[(String, Value)],
 ) -> Result<String, String> {
+    render_labeled_counted(items, reframe_reports).map(|(report, _)| report)
+}
+
+fn render_labeled_counted(
+    items: &[(String, Value)],
+    reframe_reports: &[(String, Value)],
+) -> Result<(String, usize), String> {
     let mut suites = Vec::with_capacity(items.len() + reframe_reports.len());
     for (label, value) in items {
         suites.push(parse_suite(value).map_err(|e| format!("{label}: {e}"))?);
@@ -166,7 +182,8 @@ fn render_labeled(
         let parsed = parse_reframe_report(value, label).map_err(|e| format!("{label}: {e}"))?;
         suites.extend(parsed);
     }
-    Ok(document(&suites))
+    let failures = failure_count(&suites);
+    Ok((document(&suites), failures))
 }
 
 fn parse_reframe_report(value: &Value, label: &str) -> Result<Vec<Suite>, String> {
@@ -450,16 +467,13 @@ fn parse_suite(value: &Value) -> Result<Suite, String> {
 
 fn document(suites: &[Suite]) -> String {
     let tests: usize = suites.iter().map(|s| s.cases.len()).sum();
-    let failures = suites
-        .iter()
-        .flat_map(|s| &s.cases)
-        .filter(|c| c.body.as_ref().is_some_and(|b| !b.skipped))
-        .count();
+    let failures = failure_count(suites);
     let skipped = suites
         .iter()
         .flat_map(|s| &s.cases)
         .filter(|c| c.body.as_ref().is_some_and(|b| b.skipped))
         .count();
+
     let time_ms = suites
         .iter()
         .fold(0u64, |sum, s| sum.saturating_add(s.time_ms));
@@ -474,6 +488,14 @@ fn document(suites: &[Suite]) -> String {
     }
     out.push_str("</testsuites>\n");
     out
+}
+
+fn failure_count(suites: &[Suite]) -> usize {
+    suites
+        .iter()
+        .flat_map(|suite| &suite.cases)
+        .filter(|case| case.body.as_ref().is_some_and(|body| !body.skipped))
+        .count()
 }
 
 fn write_suite(out: &mut String, suite: &Suite) {

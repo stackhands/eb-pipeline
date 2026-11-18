@@ -10,6 +10,7 @@ It does not decide why a line failed, it does not read a build list, and it does
 
 #+begin_example
 eb-junit [--result FILE]... [--reframe-report FILE]... [--out FILE]
+         [--fail-on-failure]
 #+end_example
 
 | Option | Meaning |
@@ -17,10 +18,12 @@ eb-junit [--result FILE]... [--reframe-report FILE]... [--out FILE]
 | =--result FILE= | One result file. Repeat the option for another file. |
 | =--reframe-report FILE= | One ReFrame report JSON from =reframe --report-file=. Repeat the option for another file. |
 | =--out FILE= | Write the document to =FILE=. =-= or absent prints it on stdout. An existing file is overwritten. |
+| =--fail-on-failure= | After writing the complete document, exit 1 when it contains at least one =failure= case. |
 
 At least one of =--result= or =--reframe-report= is required.
 
 Exit 0 means the document was written, including when =exit_code= in a result is not 0.
+With =--fail-on-failure=, exit 1 means the document was written and contains at least one failure.
 Exit 2 means an argument is missing, a file cannot be read or parsed, a result is not schema version 1, a required field has the wrong type, or the document cannot be written.
 
 [[file:../howto/publish-a-junit-report.org][Publish a JUnit report of a pipeline run]] puts the document in a CI job.

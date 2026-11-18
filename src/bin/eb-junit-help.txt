@@ -1,6 +1,7 @@
 eb-junit: write a JUnit XML report from eb-pipeline result files.
 
   eb-junit [--result FILE]... [--reframe-report FILE]... [--out FILE]
+           [--fail-on-failure]
 
 Each --result is a file written by `eb-pipeline run --result`. The report has
 one test suite per result file, in the order given, and one test case per
@@ -18,5 +19,7 @@ A run whose exit code is not 0, and whose lines include no failure, adds one
 case named run so the report shows that the run stopped.
 
 Stdout is the report when --out is absent or `-`. Exit 0 means the report was
-written, including when a run failed. Exit 2 is a missing or invalid file, or
-a report that could not be written.
+written, including when a run failed. With --fail-on-failure, the complete
+report is still written, then the command exits 1 when it contains one or more
+failure cases. Exit 2 is a missing or invalid file, or a report that could not
+be written.

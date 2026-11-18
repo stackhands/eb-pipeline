@@ -48,7 +48,18 @@ GitLab shows a test report from JUnit XML, and a Jacamar runner starts ordinary 
    eb-junit --result result-cpu.json --reframe-report reframe-report.json --out junit-cpu.xml
    #+end_src
 
-4. On GitHub Actions, add the report next to the result upload.
+4. To make the report itself gate a job, add =--fail-on-failure=:
+
+   #+begin_src bash
+   eb-junit --reframe-report reframe-report.json --out reframe-junit.xml \
+     --fail-on-failure
+   #+end_src
+
+   The complete XML file is written first.
+   The command then exits 1 when any result became a =failure= case.
+   Without this option, report generation exits 0 after writing valid XML, as in the pipeline-result examples above.
+
+5. On GitHub Actions, add the report next to the result upload.
    =if: always()= runs it when the build step failed.
    This is the same upload action as =examples/ci/github-actions.yml=:
 
@@ -62,7 +73,7 @@ GitLab shows a test report from JUnit XML, and a Jacamar runner starts ordinary 
        path: junit-${{ matrix.target }}.xml
    #+end_src
 
-5. On GitLab, including a job a Jacamar runner starts, publish the XML as a JUnit report and keep the job's exit status as the run's.
+6. On GitLab, including a job a Jacamar runner starts, publish the XML as a JUnit report and keep the job's exit status as the run's.
    =artifacts:when: always= uploads it when the run failed.
 
    #+begin_src yaml
@@ -89,6 +100,7 @@ GitLab shows a test report from JUnit XML, and a Jacamar runner starts ordinary 
 * Check that it worked
 
 =eb-junit --result result-cpu.json= prints the report on stdout and exits 0.
+With =--fail-on-failure=, the same bytes are written before a failing report exits 1.
 The case of a success names the target and the easyconfig, and does not repeat that line's log path.
 A line recorded as =failed=, =refused=, =pending=, or any other status except =success= and =skipped=, is a failure whose =type= is that status.
 A line recorded as =skipped= is a skipped case.
