@@ -290,6 +290,40 @@ glibc = ["CMake-3.27.6-GCCcore-13.2.0.eb"]
 }
 
 #[test]
+fn abi_drift_does_not_hide_a_gone_install() {
+    let t = built(
+        r#"
+[watch.abi_drift]
+enabled = true
+[watch.abi_drift.probe]
+glibc = "printf '%s' \"${GLIBC_ABI:-}\""
+[watch.abi_drift.providers]
+glibc = ["CMake-3.27.6-GCCcore-13.2.0.eb"]
+"#,
+    );
+    let mut vars = eessi_vars(&t, "2023.06");
+    vars.push(("GLIBC_ABI", "2.39".to_string()));
+    let o = watch(&t, LATER, &[], &with(&vars));
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+
+    std::fs::remove_file(
+        t.root()
+            .join("install/modules/all/Bar/2.0-GCCcore-13.2.0.lua"),
+    )
+    .unwrap();
+    vars.retain(|(k, _)| *k != "GLIBC_ABI");
+    vars.push(("GLIBC_ABI", "2.40".to_string()));
+    let o = watch(&t, "20260103_000002", &["--dry-run"], &with(&vars));
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    let out = stdout(&o);
+    assert!(out.contains("1 gone"), "{out}");
+    assert!(
+        out.contains("gone, dropped from the record:\n      Bar/2.0-GCCcore-13.2.0"),
+        "{out}"
+    );
+}
+
+#[test]
 fn abi_drift_refuses_changed_fields_without_providers() {
     let t = built(
         r#"

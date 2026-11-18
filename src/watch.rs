@@ -1052,7 +1052,7 @@ pub fn apply_abi_changes(
         .chain(u.local_files.iter())
         .map(|(f, m)| (f.as_str(), m.as_str()))
         .collect();
-    for v in verdicts.iter_mut() {
+    for v in verdicts.iter_mut().filter(|v| v.action != "gone") {
         for r in rows.iter().filter(|r| r.dependent == v.module) {
             for f in r.changed.split(", ") {
                 let mapped = by_file.get(f).copied().unwrap_or(f);
