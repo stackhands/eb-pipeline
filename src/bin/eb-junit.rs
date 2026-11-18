@@ -154,6 +154,11 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
         }
     }
     if results.is_empty() && reframe_reports.is_empty() {
+        if let Some(result) = util::env_value("EB_PIPELINE_RESULT") {
+            results.push(result);
+        }
+    }
+    if results.is_empty() && reframe_reports.is_empty() {
         return Err("--result or --reframe-report is required".into());
     }
     Ok(Args {
@@ -641,7 +646,7 @@ fn disambiguate(names: &[String]) -> Vec<String> {
     let mut seen = BTreeMap::<String, usize>::new();
     let mut out = Vec::with_capacity(names.len());
     for name in names {
-        let n = seen.entry(name.clone()).or_insert(0);
+        let n = seen.entry(escape_attr(name)).or_insert(0);
         *n += 1;
         if *n == 1 {
             out.push(name.clone());

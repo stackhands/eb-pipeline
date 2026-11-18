@@ -18,8 +18,9 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 
 /// The `kind` of a canonical input record.
 pub const KIND: &str = "eb-pipeline-input-attestation-v1";
@@ -442,10 +443,12 @@ fn resolved_easyconfigs(req: &Request<'_>) -> Result<Vec<PathBuf>, Fail> {
         .output()
         .map_err(|e| Fail::new(exit::FAILED, format!("cannot run `{bin}`: {e}")))?;
     if !out.status.success() {
-        let code = out.status.code().unwrap_or(1);
+        let code = subprocess_code(&out.status);
         let err = stderr_text(&out.stderr);
         let exit_code = if code == 2 {
             exit::USAGE
+        } else if out.status.code().is_none() {
+            code
         } else {
             exit::REFUSED
         };
@@ -548,14 +551,22 @@ fn patch_literals(text: &str) -> Vec<String> {
 fn easyblock_literal(text: &str) -> Option<String> {
     for line in text.lines() {
         let code = line.split('#').next().unwrap_or(line).trim();
-        let rest = code.strip_prefix("easyblock")?.trim();
-        let rest = rest.strip_prefix('=')?.trim();
-        let quote = rest.chars().next()?;
+        let Some(rest) = code.strip_prefix("easyblock") else {
+            continue;
+        };
+        let Some(rest) = rest.trim().strip_prefix('=') else {
+            continue;
+        };
+        let Some(quote) = rest.trim().chars().next() else {
+            continue;
+        };
         if quote != '\'' && quote != '"' {
             continue;
         }
-        let body = &rest[quote.len_utf8()..];
-        let end = body.find(quote)?;
+        let body = &rest.trim()[quote.len_utf8()..];
+        let Some(end) = body.find(quote) else {
+            continue;
+        };
         let name = &body[..end];
         if is_ident(name) {
             return Some(name.to_string());
@@ -746,15 +757,28 @@ fn run(argv: &[String], on_error: i32) -> Result<String, Fail> {
         .output()
         .map_err(|e| Fail::new(exit::FAILED, format!("cannot run `{bin}`: {e}")))?;
     if !out.status.success() {
-        let code = out.status.code().unwrap_or(1);
+        let code = subprocess_code(&out.status);
         let err = stderr_text(&out.stderr);
-        let exit_code = if code == 2 { exit::USAGE } else { on_error };
+        let exit_code = if code == 2 {
+            exit::USAGE
+        } else if out.status.code().is_none() {
+            code
+        } else {
+            on_error
+        };
         return Err(Fail::new(
             exit_code,
             format!("`{}` exited {code}: {err}", argv.join(" ")),
         ));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+fn subprocess_code(status: &ExitStatus) -> i32 {
+    status
+        .code()
+        .or_else(|| status.signal().map(|signal| 128 + signal))
+        .unwrap_or(exit::FAILED)
 }
 
 fn stderr_text(bytes: &[u8]) -> String {

@@ -166,6 +166,8 @@ fi
 #+end_src
 
 Lines recorded as =success= and lines deselected by =[targets.select]= are left out, so =--rebuild= lines that already succeeded are not rebuilt.
+A line skipped by =--resume-result= because its outputs were already checked is also left out.
+Pass =--status skipped= when you explicitly want that line together with other skipped lines.
 Keep =retry.list= separate from the result, summary and build list.
 =eb-retry-list= refuses an =--out= path that aliases one of those inputs through a symbolic or hard link, before it writes the output.
 Use =--result result.json= in place of =--summary= and =--target=, and =--status failed= to narrow to specific line statuses.
