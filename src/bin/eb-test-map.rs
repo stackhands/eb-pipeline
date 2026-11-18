@@ -3,6 +3,10 @@
 //! A toolchain easyconfig has no test of its own. An application with no
 //! row in the map is a refusal, unless `--allow-unmapped` is set. The
 //! names on stdout are what a site's test command, such as ReFrame, runs.
+//!
+//! `--format eessi-modules` does not read a map. It prints one
+//! `--setvar modules=Name/Version,...` argument for the applications in
+//! the list.
 
 use std::collections::BTreeSet;
 use std::env;
@@ -28,7 +32,7 @@ const TOOLCHAINS: &[&str] = &[
 ];
 
 struct Args {
-    map: String,
+    map: Option<String>,
     list: Option<String>,
     result: Option<String>,
     extra_toolchains: BTreeSet<String>,
@@ -36,9 +40,18 @@ struct Args {
     format: OutputFormat,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum OutputFormat {
     Plain,
     Reframe,
+    EessiModules,
+}
+
+struct Stem {
+    file: String,
+    name: String,
+    /// The easyconfig version, including the toolchain and any suffix.
+    version: String,
 }
 
 fn main() -> ExitCode {
@@ -53,10 +66,20 @@ fn main() -> ExitCode {
 
 fn run() -> Result<ExitCode, String> {
     let args = parse(env::args().skip(1))?;
-    let map =
-        fs::read_to_string(&args.map).map_err(|e| format!("cannot read {}: {e}", args.map))?;
+    match args.format {
+        OutputFormat::EessiModules => eessi_modules(&args),
+        OutputFormat::Plain | OutputFormat::Reframe => text_names(&args),
+    }
+}
+
+fn text_names(args: &Args) -> Result<ExitCode, String> {
+    let map_path = args
+        .map
+        .as_deref()
+        .ok_or_else(|| "--map is required".to_string())?;
+    let map = fs::read_to_string(map_path).map_err(|e| format!("cannot read {map_path}: {e}"))?;
     let rows = parse_map(&map)?;
-    let packages = package_names(&args)?;
+    let packages = package_names(args)?;
     let mut tests = BTreeSet::new();
     let mut missing = Vec::new();
     for name in packages {
@@ -76,13 +99,13 @@ fn run() -> Result<ExitCode, String> {
     }
     if !missing.is_empty() && !args.allow_unmapped {
         for name in &missing {
-            eprintln!("eb-test-map: {name} has no test in {}", args.map);
+            eprintln!("eb-test-map: {name} has no test in {map_path}");
         }
         return Ok(ExitCode::from(2));
     }
     if args.allow_unmapped {
         for name in &missing {
-            eprintln!("eb-test-map: {name} has no test in {}; allowed", args.map);
+            eprintln!("eb-test-map: {name} has no test in {map_path}; allowed");
         }
     }
     let mut out = io::stdout().lock();
@@ -90,9 +113,33 @@ fn run() -> Result<ExitCode, String> {
         let line = match args.format {
             OutputFormat::Plain => test.clone(),
             OutputFormat::Reframe => format!("-n ^{}$", escape_regex_literal(test)),
+            OutputFormat::EessiModules => unreachable!(),
         };
         writeln!(out, "{line}").map_err(|e| format!("cannot write the test names: {e}"))?;
     }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// One ReFrame argument. `hooks.set_modules` keeps a test when each of its
+/// module names is in the list ReFrame built from this value.
+fn eessi_modules(args: &Args) -> Result<ExitCode, String> {
+    let paths = easyconfig_paths(args)?;
+    let mut modules = BTreeSet::new();
+    for (line_no, line) in paths.iter().enumerate() {
+        let name = package_name(line).map_err(|e| format!("list line {}: {e}", line_no + 1))?;
+        if is_toolchain(&name, &args.extra_toolchains) {
+            continue;
+        }
+        let coord = module_coord(line).map_err(|e| format!("list line {}: {e}", line_no + 1))?;
+        modules.insert(coord);
+    }
+    if modules.is_empty() {
+        return Ok(ExitCode::SUCCESS);
+    }
+    let joined = modules.into_iter().collect::<Vec<_>>().join(",");
+    let mut out = io::stdout().lock();
+    writeln!(out, "--setvar modules={joined}")
+        .map_err(|e| format!("cannot write the module list: {e}"))?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -151,8 +198,11 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     if list.is_none() && result.is_none() {
         return Err("--list or --result is required".into());
     }
+    if format != OutputFormat::EessiModules && map.is_none() {
+        return Err("--map is required".to_string());
+    }
     Ok(Args {
-        map: map.ok_or_else(|| "--map is required".to_string())?,
+        map,
         list,
         result,
         extra_toolchains,
@@ -182,8 +232,9 @@ fn parse_format(value: &str) -> Result<OutputFormat, String> {
     match value {
         "text" => Ok(OutputFormat::Plain),
         "reframe" => Ok(OutputFormat::Reframe),
+        "eessi-modules" => Ok(OutputFormat::EessiModules),
         _ => Err(format!(
-            "unknown --format `{value}`; expected `text` or `reframe`"
+            "unknown --format `{value}`; expected `text`, `reframe`, or `eessi-modules`"
         )),
     }
 }
@@ -198,32 +249,49 @@ fn package_names(args: &Args) -> Result<Vec<String>, String> {
     }
 }
 
+fn easyconfig_paths(args: &Args) -> Result<Vec<String>, String> {
+    if let Some(path) = &args.list {
+        easyconfigs_from_list(path)
+    } else if let Some(path) = &args.result {
+        easyconfigs_from_result(path)
+    } else {
+        unreachable!("validated in parse")
+    }
+}
+
 fn package_names_from_list(path: &str) -> Result<Vec<String>, String> {
+    easyconfigs_from_list(path)?
+        .into_iter()
+        .map(|line| package_name(&line))
+        .collect()
+}
+
+fn easyconfigs_from_list(path: &str) -> Result<Vec<String>, String> {
     let list_text = fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
     if easystack::is_easystack(Path::new(path)) {
         let lines = easystack::parse(&list_text).map_err(|e| format!("easystack {path}: {e}"))?;
-        lines
-            .into_iter()
-            .enumerate()
-            .map(|(i, line)| {
-                package_name(&line.easyconfig)
-                    .map_err(|e| format!("easystack entry {}: {e}", i + 1))
-            })
-            .collect()
+        Ok(lines.into_iter().map(|line| line.easyconfig).collect())
     } else {
         let mut out = Vec::new();
-        for (line_no, line) in list_text.lines().enumerate() {
+        for line in list_text.lines() {
             let line = strip_comment(line);
             if line.is_empty() {
                 continue;
             }
-            out.push(package_name(line).map_err(|e| format!("list line {}: {e}", line_no + 1))?);
+            out.push(line.to_string());
         }
         Ok(out)
     }
 }
 
 fn package_names_from_result(path: &str) -> Result<Vec<String>, String> {
+    easyconfigs_from_result(path)?
+        .into_iter()
+        .map(|line| package_name(&line))
+        .collect()
+}
+
+fn easyconfigs_from_result(path: &str) -> Result<Vec<String>, String> {
     let text = fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
     let value: Value =
         serde_json::from_str(&text).map_err(|e| format!("cannot parse {path}: {e}"))?;
@@ -248,8 +316,7 @@ fn package_names_from_result(path: &str) -> Result<Vec<String>, String> {
         let status = req_str(line, "status", &format!("lines[{i}]"))?;
         if status == "success" {
             let easyconfig = req_str(line, "easyconfig", &format!("lines[{i}]"))?;
-            names
-                .push(package_name(easyconfig).map_err(|e| format!("lines[{i}].easyconfig: {e}"))?);
+            names.push(easyconfig.to_string());
         }
     }
     Ok(names)
@@ -312,8 +379,9 @@ fn parse_map(text: &str) -> Result<Vec<(String, String)>, String> {
     Ok(rows)
 }
 
-/// The package of an easyconfig path: the part of the file name before the version.
-pub fn package_name(line: &str) -> Result<String, String> {
+/// Split an easyconfig path the way `package_name` always has: the name is
+/// every `-` component before the first one that starts with a digit.
+fn split_stem(line: &str) -> Result<Stem, String> {
     let file = Path::new(line.trim())
         .file_name()
         .and_then(|n| n.to_str())
@@ -325,25 +393,66 @@ pub fn package_name(line: &str) -> Result<String, String> {
         return Err(format!("`{file}` is not an easyconfig"));
     }
     let mut name = String::new();
+    let mut version = String::new();
+    let mut seen_version = false;
     for (i, part) in stem.split('-').enumerate() {
         if part.is_empty() {
             return Err(format!("`{file}` is not an easyconfig"));
         }
-        if part.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        if !seen_version && part.chars().next().is_some_and(|c| c.is_ascii_digit()) {
             if i == 0 {
                 return Err(format!("`{file}` is not an easyconfig"));
             }
-            break;
+            seen_version = true;
         }
-        if i > 0 {
-            name.push('-');
+        if seen_version {
+            if !version.is_empty() {
+                version.push('-');
+            }
+            version.push_str(part);
+        } else {
+            if i > 0 {
+                name.push('-');
+            }
+            name.push_str(part);
         }
-        name.push_str(part);
     }
     if name.is_empty() {
         return Err(format!("`{file}` is not an easyconfig"));
     }
-    Ok(name)
+    Ok(Stem {
+        file: file.to_string(),
+        name,
+        version,
+    })
+}
+
+/// The package of an easyconfig path: the part of the file name before the version.
+pub fn package_name(line: &str) -> Result<String, String> {
+    Ok(split_stem(line)?.name)
+}
+
+/// `Name/VersionFull` for one easyconfig. ReFrame splits the `--setvar`
+/// value on commas and does not trim, so a comma or a space cannot be one
+/// entry of that list.
+fn module_coord(line: &str) -> Result<String, String> {
+    let stem = split_stem(line)?;
+    if stem.version.is_empty() {
+        return Err(format!("`{}` has no version", stem.file));
+    }
+    if stem.name.contains(',')
+        || stem.version.contains(',')
+        || stem.name.chars().any(char::is_whitespace)
+        || stem.version.chars().any(char::is_whitespace)
+    {
+        return Err(format!(
+            "`{}` has a comma or a space in its module name",
+            stem.file
+        ));
+    }
+    let name = stem.name;
+    let version = stem.version;
+    Ok(format!("{name}/{version}"))
 }
 
 fn is_toolchain(name: &str, extra: &BTreeSet<String>) -> bool {
@@ -367,6 +476,30 @@ mod tests {
         assert_eq!(package_name("libfoo-bar-1.2.eb").unwrap(), "libfoo-bar");
         assert_eq!(package_name("GCCcore-13.2.0.eb").unwrap(), "GCCcore");
         assert!(package_name("notes.txt").is_err());
+    }
+
+    #[test]
+    fn a_module_name_keeps_the_version_toolchain_and_suffix() {
+        assert_eq!(
+            module_coord("GROMACS-2024.1-foss-2023b.eb").unwrap(),
+            "GROMACS/2024.1-foss-2023b"
+        );
+        assert_eq!(
+            module_coord("/lists/Python-3.11.5-GCCcore-12.3.0.eb").unwrap(),
+            "Python/3.11.5-GCCcore-12.3.0"
+        );
+        assert_eq!(module_coord("zlib-1.3.1.eb").unwrap(), "zlib/1.3.1");
+        assert_eq!(module_coord("libfoo-bar-1.2.eb").unwrap(), "libfoo-bar/1.2");
+        assert_eq!(
+            module_coord("GROMACS-2024.1-foss-2023b-CUDA-12.1.0.eb").unwrap(),
+            "GROMACS/2024.1-foss-2023b-CUDA-12.1.0"
+        );
+        assert!(module_coord("Foo-bar.eb")
+            .unwrap_err()
+            .contains("no version"));
+        assert!(module_coord("Foo-1,2.eb")
+            .unwrap_err()
+            .contains("comma or a space"));
     }
 
     #[test]
