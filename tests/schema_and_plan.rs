@@ -658,6 +658,35 @@ fn plan_of(site_text: &str, list: &str, target: &str) -> serde_json::Value {
     serde_json::from_slice(&o.stdout).unwrap()
 }
 
+#[cfg(unix)]
+#[test]
+fn plan_refuses_a_list_path_that_json_cannot_represent() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let d = tempfile::tempdir().unwrap();
+    let site = d.path().join("site.toml");
+    let list = d
+        .path()
+        .join(std::ffi::OsString::from_vec(b"list-\xff.txt".to_vec()));
+    std::fs::write(&site, MINIMAL).unwrap();
+    std::fs::write(&list, "Foo-1.0.eb\n").unwrap();
+    let output = bin()
+        .args(["plan", "--site"])
+        .arg(site)
+        .arg("--list")
+        .arg(list)
+        .args(["--target", "other", "--build-type", "production"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        output.stderr,
+        b"ERROR [main] -: --list path is not valid UTF-8 and cannot be represented in JSON\n"
+    );
+    assert_eq!(output.stdout, b"");
+}
+
 fn phase(v: &serde_json::Value, name: &str) -> serde_json::Value {
     v["phases"]
         .as_array()
