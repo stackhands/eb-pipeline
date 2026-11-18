@@ -1388,3 +1388,53 @@ fn concurrent_fixture_exec_writes_do_not_hit_text_file_busy() {
         worker.join().unwrap();
     }
 }
+
+#[test]
+fn archive_manifest_accepts_equals_form_and_rejects_empty_or_duplicate() {
+    let fixture = Fixture::new();
+    let tree = fixture.dir.path().join("tree");
+    std::fs::create_dir_all(tree.join("pkg")).unwrap();
+    std::fs::write(tree.join("pkg/file"), b"hi\n").unwrap();
+    let ingest = fixture.dir.path().join("ingest");
+    std::fs::create_dir(&ingest).unwrap();
+    let archive = ingest.join("cache.tar");
+    let status = Command::new("tar")
+        .args(["--format=ustar", "-cf"])
+        .arg(&archive)
+        .arg("-C")
+        .arg(&tree)
+        .arg("pkg")
+        .sync_status();
+    assert!(status.success());
+    let manifest = manifest_for(&fixture, "cache.tar", "i32");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
+        .env("PATH", &fixture.bin)
+        .arg(format!("--archive-manifest={}", manifest.display()))
+        .args(["--dry-run", "repo.example", "--"])
+        .arg(&fixture.sync)
+        .sync_output();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let empty = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
+        .env("PATH", &fixture.bin)
+        .args(["--archive-manifest=", "--dry-run", "repo.example", "--"])
+        .arg(&fixture.sync)
+        .sync_output();
+    assert_eq!(code(&empty), 2);
+    assert!(stderr(&empty).contains("`--archive-manifest` needs a path"));
+
+    let dup = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
+        .env("PATH", &fixture.bin)
+        .args([
+            &format!("--archive-manifest={}", manifest.display()),
+            "--archive-manifest",
+            "other.json",
+            "repo.example",
+            "--",
+        ])
+        .arg(&fixture.sync)
+        .sync_output();
+    assert_eq!(code(&dup), 2);
+    assert!(stderr(&dup).contains("`--archive-manifest` was given twice"));
+}

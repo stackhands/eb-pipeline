@@ -200,6 +200,16 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 }
                 metrics_file = Some(PathBuf::from(path));
             }
+            _ if word.starts_with("--archive-manifest=") => {
+                if archive_manifest.is_some() {
+                    return Err("`--archive-manifest` was given twice".into());
+                }
+                let path = &word["--archive-manifest=".len()..];
+                if path.is_empty() || path == "--" {
+                    return Err("`--archive-manifest` needs a path".into());
+                }
+                archive_manifest = Some(PathBuf::from(path));
+            }
             _ if word.starts_with("--tag=") => {
                 if tag.is_some() {
                     return Err("`--tag` may be given only once".into());
