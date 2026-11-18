@@ -1263,8 +1263,7 @@ fn only_prefetch_and_build_commands_carry_the_hardware_class() {
             "fetch",
             "keep-failed",
             "probe",
-            "rotate",
-            "shard"
+            "rotate"
         ]
     );
     let model = |n: &str| models.get(n).map(String::as_str);

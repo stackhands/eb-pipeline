@@ -2467,6 +2467,59 @@ fn run_can_reuse_a_saved_shard_plan() {
 }
 
 #[test]
+fn dry_run_and_plan_out_use_the_saved_shard_units() {
+    let env = setup("[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n");
+    let saved = env.dir.path().join("saved-shards");
+    std::fs::create_dir(&saved).unwrap();
+    std::fs::write(
+        saved.join("plan.json"),
+        r#"{"shards":[{"name":"saved-01","file":"saved-01.list","inode_footprint":111}]}"#,
+    )
+    .unwrap();
+    std::fs::write(saved.join("saved-01.list"), "Foo-1.0-foss-2025a.eb\n").unwrap();
+    let plan_out = env.dir.path().join("run-plan.json");
+
+    let output = finish(
+        &env,
+        driver(
+            &env,
+            LIST,
+            &[],
+            &[
+                "--shard-plan",
+                saved.to_str().unwrap(),
+                "--plan-out",
+                plan_out.to_str().unwrap(),
+                "--dry-run",
+            ],
+        ),
+    );
+    assert_eq!(output.code, 0, "{}", output.stderr);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Foo-1.0-foss-2025a.eb"), "{stdout}");
+    assert!(!stdout.contains("Bar-2.0-foss-2025a.eb"), "{stdout}");
+    assert!(!stdout.contains("stack shard"), "{stdout}");
+    let plan: Value = serde_json::from_str(&std::fs::read_to_string(plan_out).unwrap()).unwrap();
+    let build = plan["phases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|phase| phase["name"] == "build")
+        .unwrap();
+    let builds = build["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|command| {
+            command["name"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("build:"))
+        })
+        .count();
+    assert_eq!(builds, 1, "{build}");
+}
+
+#[test]
 fn selected_list_keeps_the_option_without_strip() {
     let env = setup("[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n");
     with_cpu_target(
