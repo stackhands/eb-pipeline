@@ -295,19 +295,22 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     })
 }
 
+fn assign_once(slot: &mut Option<String>, flag: &str, value: String) -> Result<(), String> {
+    if slot.is_some() {
+        return Err(format!("{flag} was given twice"));
+    }
+    *slot = Some(value);
+    Ok(())
+}
+
 fn assign_flag(flag: &str, value: String, parsed: &mut Parsed) -> Result<(), String> {
     match flag {
-        "--result" => parsed.result = Some(value),
-        "--summary" => parsed.summary = Some(value),
-        "--target" => parsed.target = Some(value),
-        "--list" => parsed.list = Some(value),
-        "--out" => parsed.out = Some(value),
-        "--node" => {
-            if parsed.node.is_some() {
-                return Err("--node was given twice".into());
-            }
-            parsed.node = Some(value);
-        }
+        "--result" => assign_once(&mut parsed.result, flag, value)?,
+        "--summary" => assign_once(&mut parsed.summary, flag, value)?,
+        "--target" => assign_once(&mut parsed.target, flag, value)?,
+        "--list" => assign_once(&mut parsed.list, flag, value)?,
+        "--out" => assign_once(&mut parsed.out, flag, value)?,
+        "--node" => assign_once(&mut parsed.node, flag, value)?,
         "--easyconfigs" => parsed.easyconfigs.push(value),
         "--arch" => parsed.arches.push(value),
         "--class" => {
