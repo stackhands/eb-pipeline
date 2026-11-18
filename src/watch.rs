@@ -158,9 +158,7 @@ pub fn update(dir: &str, target: &str, f: impl FnOnce(&mut State)) -> Result<Sta
         .expect("serializable")
         + "\n";
     let p = state_path(dir, target);
-    let tmp = Path::new(dir).join(format!(".{target}.json.tmp"));
-    std::fs::write(&tmp, text)
-        .and_then(|_| std::fs::rename(&tmp, &p))
+    crate::util::write_atomic(&p, text.as_bytes())
         .map_err(|e| format!("cannot write {}: {e}", p.display()))?;
     Ok(s)
 }

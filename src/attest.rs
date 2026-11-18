@@ -90,13 +90,10 @@ pub fn append(req: &Request<'_>) -> Result<InputAttestation, Fail> {
             ));
         }
     } else {
-        let tmp = dest.with_extension("json.tmp");
-        fs::write(&tmp, &bytes)
-            .map_err(|e| Fail::new(exit::FAILED, format!("cannot write {}: {e}", tmp.display())))?;
-        fs::rename(&tmp, &dest).map_err(|e| {
+        crate::util::write_atomic(&dest, &bytes).map_err(|e| {
             Fail::new(
                 exit::FAILED,
-                format!("cannot rename {} to {}: {e}", tmp.display(), dest.display()),
+                format!("cannot write {}: {e}", dest.display()),
             )
         })?;
     }

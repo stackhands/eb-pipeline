@@ -291,18 +291,12 @@ pub fn record(site: &str, entry: TargetSummary, run_dir: &Path) -> Result<Summar
     };
     let json = serde_json::to_value(&s).map_err(|e| e.to_string())?;
     let text = serde_json::to_string_pretty(&json).map_err(|e| e.to_string())? + "\n";
-    write_new(&path, &text)?;
-    write_new(&run_dir.join(HTML), &html(&s, run_dir))?;
+    crate::util::write_atomic(&path, text.as_bytes())
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let html_path = run_dir.join(HTML);
+    crate::util::write_atomic(&html_path, html(&s, run_dir).as_bytes())
+        .map_err(|e| format!("{}: {e}", html_path.display()))?;
     Ok(s)
-}
-
-/// Write through a temporary file and a rename, so a reader never sees half.
-fn write_new(path: &Path, text: &str) -> Result<(), String> {
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let tmp = path.with_file_name(format!(".{name}.tmp"));
-    std::fs::write(&tmp, text)
-        .and_then(|()| std::fs::rename(&tmp, path))
-        .map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// Read a run directory's summary.
