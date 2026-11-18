@@ -526,30 +526,100 @@ fn route_receipt(req: &Request<'_>) -> Value {
 /// A quoted literal that ends in `.patch`.
 fn patch_literals(text: &str) -> Vec<String> {
     let mut out = Vec::new();
-    let mut rest = text;
-    while let Some(start) = rest.find(['\'', '"']) {
-        let quote = rest[start..].chars().next().unwrap_or('"');
-        let body = &rest[start + quote.len_utf8()..];
-        match body.find(quote) {
-            Some(end) => {
-                let lit = &body[..end];
-                if lit.ends_with(".patch") && lit != ".patch" && !lit.contains('\\') {
-                    out.push(lit.to_string());
+    for statement in python_statements(text) {
+        let Some(rest) = statement.trim().strip_prefix("patches") else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let Some(rhs) = rest.strip_prefix("+=").or_else(|| rest.strip_prefix('=')) else {
+            continue;
+        };
+        let mut rest = rhs;
+        while let Some(start) = rest.find(['\'', '"']) {
+            let quote = rest[start..].chars().next().unwrap_or('"');
+            let body = &rest[start + quote.len_utf8()..];
+            match body.find(quote) {
+                Some(end) => {
+                    let lit = &body[..end];
+                    if lit.ends_with(".patch") && lit != ".patch" && !lit.contains('\\') {
+                        out.push(lit.to_string());
+                    }
+                    rest = &body[end + quote.len_utf8()..];
                 }
-                rest = &body[end + quote.len_utf8()..];
+                None => break,
             }
-            None => break,
         }
     }
     out
 }
 
+fn python_statements(text: &str) -> Vec<String> {
+    fn finish(statements: &mut Vec<String>, statement: &mut String) {
+        if !statement.trim().is_empty() {
+            statements.push(std::mem::take(statement));
+        } else {
+            statement.clear();
+        }
+    }
+
+    let mut statements = Vec::new();
+    let mut statement = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut comment = false;
+    let mut depth = 0_u32;
+    for character in text.chars() {
+        if comment {
+            if character == '\n' {
+                comment = false;
+                if depth == 0 {
+                    finish(&mut statements, &mut statement);
+                } else {
+                    statement.push(' ');
+                }
+            }
+            continue;
+        }
+        if let Some(delimiter) = quote {
+            statement.push(character);
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == delimiter {
+                quote = None;
+            }
+            continue;
+        }
+        match character {
+            '\'' | '"' => {
+                quote = Some(character);
+                statement.push(character);
+            }
+            '#' => comment = true,
+            '[' | '(' | '{' => {
+                depth += 1;
+                statement.push(character);
+            }
+            ']' | ')' | '}' => {
+                depth = depth.saturating_sub(1);
+                statement.push(character);
+            }
+            '\n' if depth == 0 => finish(&mut statements, &mut statement),
+            ';' if depth == 0 => finish(&mut statements, &mut statement),
+            '\n' => statement.push(' '),
+            _ => statement.push(character),
+        }
+    }
+    finish(&mut statements, &mut statement);
+    statements
+}
+
 /// `easyblock = 'Class'` on its own, ignoring a trailing `#` comment.
 fn easyblock_literal(text: &str) -> Option<String> {
     let mut literal = None;
-    for line in text.lines() {
-        let code = line.split('#').next().unwrap_or(line).trim();
-        let Some(rest) = code.strip_prefix("easyblock") else {
+    for statement in python_statements(text) {
+        let Some(rest) = statement.trim().strip_prefix("easyblock") else {
             continue;
         };
         let Some(rest) = rest.trim().strip_prefix('=') else {
@@ -828,6 +898,19 @@ mod tests {
             easyblock_literal("easyblock = 'EB_Old'\neasyblock = selected_easyblock\n"),
             None
         );
+    }
+
+    #[test]
+    fn only_patch_assignments_contribute_uncommented_literals() {
+        let text = "\
+patches_extra = ['prefix.patch']
+description = 'unrelated.patch'
+patches = [
+    'real.patch',
+    # 'comment.patch'
+]
+";
+        assert_eq!(patch_literals(text), ["real.patch"]);
     }
 
     #[test]
