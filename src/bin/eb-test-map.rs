@@ -274,11 +274,11 @@ fn package_names_from_list(path: &str) -> Result<Vec<String>, String> {
 }
 
 fn easyconfigs_from_list(path: &str) -> Result<Vec<String>, String> {
-    let list_text = fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
     if easystack::is_easystack(Path::new(path)) {
-        let lines = easystack::parse(&list_text).map_err(|e| format!("easystack {path}: {e}"))?;
+        let lines = easystack::read(Path::new(path))?;
         Ok(lines.into_iter().map(|line| line.easyconfig).collect())
     } else {
+        let list_text = fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
         let mut out = Vec::new();
         for line in list_text.lines() {
             let line = strip_comment(line);

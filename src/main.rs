@@ -903,12 +903,11 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         (input.bundle.display().to_string(), input.lines.clone())
     } else {
         let list = c.list.as_deref().expect("clap requires one input");
-        let list_text = std::fs::read_to_string(list)
-            .map_err(|e| Fail::usage(format!("cannot read list {}: {e}", list.display())))?;
         let lines = if easystack::is_easystack(list) {
-            easystack::parse(&list_text)
-                .map_err(|e| Fail::usage(format!("easystack {}: {e}", list.display())))?
+            easystack::read(list).map_err(Fail::usage)?
         } else {
+            let list_text = std::fs::read_to_string(list)
+                .map_err(|e| Fail::usage(format!("cannot read list {}: {e}", list.display())))?;
             util::parse_list(&list_text)?
         };
         (list.display().to_string(), lines)
@@ -1556,12 +1555,11 @@ fn cmd_verify(
     } else {
         list_path.expect("clap requires --list or --recorded-list")
     };
-    let list_text = std::fs::read_to_string(list)
-        .map_err(|e| Fail::usage(format!("cannot read list {}: {e}", list.display())))?;
     let lines = if easystack::is_easystack(list) {
-        easystack::parse(&list_text)
-            .map_err(|e| Fail::usage(format!("easystack {}: {e}", list.display())))?
+        easystack::read(list).map_err(Fail::usage)?
     } else {
+        let list_text = std::fs::read_to_string(list)
+            .map_err(|e| Fail::usage(format!("cannot read list {}: {e}", list.display())))?;
         util::parse_list(&list_text)?
     };
     if lines.is_empty() {
