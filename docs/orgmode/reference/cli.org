@@ -293,6 +293,8 @@ Exit 2 means the file is missing, is not JSON, or its =kind= is not =result=.
 | =--offline-bundle DIR= |                       | Add the opt-in offline planner calls to the sources phase and name the bundle that =run= writes. Needs an active =[sources]= table, a source path and configured easyconfig trees. |
 | =--require-offline= |                          | Place =sources.offline_wrapper= before admission, build, check, cache, log and notification commands. Requires =--offline-bundle= and a non-empty wrapper.                       |
 
+The =--list= or =--package-plan= path must be valid UTF-8 because the plan and result record it as a JSON string.
+
 An easystack uses the same YAML anchors, aliases and =<<= merge keys as EasyBuild.
 Comments do not become data, an empty =options= mapping adds no arguments, duplicate entries stay in file order, and top-level keys other than =easyconfigs= are ignored.
 Each easyconfig entry may contain only its =options= mapping after YAML merges are applied.
