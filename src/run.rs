@@ -193,6 +193,10 @@ pub struct RunResult {
     /// SHA-256 of the eb-stack `package.plan.json`, for a package-plan input.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub package_plan_digest: Option<String>,
+    /// Checkpoint and inclusion proof of the input record, when `[attest]` is
+    /// enabled. Absent, the result JSON is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_attestation: Option<crate::attest::InputAttestation>,
     /// How many lines came to each status.
     pub counts: BTreeMap<String, usize>,
     /// The phases the site file leaves out.
@@ -661,6 +665,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
             sharded: false,
             input_digest: None,
             package_plan_digest: p.package_plan.as_ref().map(|input| input.digest.clone()),
+            input_attestation: None,
             counts: BTreeMap::new(),
             not_configured: vec![],
             admission: vec![],
@@ -711,6 +716,31 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
         }
         log("INFO", "run", &target, "dry run: nothing executed");
         return finish(st, None);
+    }
+
+    if let Some(conf) = site.attest_on() {
+        if p.package_plan.is_some() {
+            st.res.message = Some("attest needs --list".into());
+            return finish(st, Some(exit::USAGE));
+        }
+        let Some(site_path) = p.scope.site_file.as_deref() else {
+            st.res.message = Some("attest needs the site file path".into());
+            return finish(st, Some(exit::USAGE));
+        };
+        match crate::attest::append(&crate::attest::Request {
+            site,
+            attest: conf,
+            site_path: Path::new(site_path),
+            list_path: Path::new(&p.list_path),
+            lines,
+            target: &target,
+        }) {
+            Ok(att) => st.res.input_attestation = Some(att),
+            Err(f) => {
+                st.res.message = Some(f.msg);
+                return finish(st, Some(f.code));
+            }
+        }
     }
 
     // Phases that are not configured are recorded, not failed.

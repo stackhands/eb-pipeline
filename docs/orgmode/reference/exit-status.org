@@ -44,6 +44,8 @@ An error that ends a command is written to stderr as =ERROR [main] -: MESSAGE=.
 - =run=: =eb-keep-logs rotate= exited with a status other than 0 and 75.
 - =run=: a log file, a log directory, the list of selected lines or the result file could not be written.
 - =plan=: the shard plan given to =--shard-plan= could not be read, or the plan could not be written to =--out=.
+- =plan= or =run=: =[attest]= is enabled and =rfc9162-sidecar= could not be started or exited with a status other than 0.
+- =verify=: the inclusion proof does not meet its checkpoint, or the blob file does not match the proof.
 - =status=: the log root could not be read.
 - =watch=: the rebuild exited 1; an eb-stack call failed, or what it wrote could not be read; or the record, the state file, the plan or the rebuild list could not be read or written.
 
@@ -61,6 +63,9 @@ So does a run summary that cannot be written, or sent to the webhook of =[notify
   =check --probe-tools= also checks the tools without a =min_version=.
 - =init=: the template is unknown, or the =--out= file cannot be created, as when it exists.
 - =run=: =eb-stack stack order=, =eb-stack stack shard= or =eb-stack stack admit= exited 2.
+- =plan=, =run= or =verify=: =[attest]= is enabled and =eb-stack stack order= or =eb-stack recipe easyblock= exited 2.
+- =verify=: =[attest]= is absent or =enabled= is false.
+- =plan=, =run= or =verify=: =[attest]= is enabled and the command was given =--package-plan= instead of =--list=.
 - =watch=: eb-stack prints a version below its =min_version=.
 
 *** 75
@@ -82,6 +87,9 @@ So does a run summary that cannot be written, or sent to the webhook of =[notify
 - =run=: =eb-staged-rebuild run= exited 2 for a line, such as when the lock of its state root was still held after =[rebuild] lock_timeout= seconds; the line is =refused=.
 - =run --resume-result=: the prior result has no =input_digest=, the digest of =eb-stack stack order --hashes-out= differs from it, =stack order= reports =incomplete= other than 0, or the hash file is empty.
   No line is built.
+- =plan= or =run=: =[attest]= is enabled and the image digest variable is empty, a named patch or easyconfig cannot be read, or two files for one patch or easyblock differ.
+  =run= writes the result and builds nothing.
+- =verify=: the plan or result has no =input_attestation=, or the recomputed record does not match the one the file stores.
 
 The refusals before the first build leave every line unbuilt.
 

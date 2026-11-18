@@ -15,4 +15,5 @@ Nothing here is a step to follow.
    phases
    log-rotation
    shared-paths
+   why-attest-inputs
 #+end_export

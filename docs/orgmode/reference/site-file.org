@@ -92,6 +92,7 @@ So every job that a run or =watch= starts needs the directory, whatever its phas
 | =admission=      | table          | none     | Admission of each build unit under an inode quota, with =eb-stack stack admit=. |
 | =shards=         | table          | none     | Splitting a list into shards, with =eb-stack stack shard=.                      |
 | =resume=         | table          | none     | Recording an input identity and resuming a run from a prior result.             |
+| =attest=         | table          | none     | Attesting the exact inputs of a finalized plan in an RFC 9162 sidecar log.      |
 | =sources=        | table          | none     | Fetching the sources of every line before the first build.                      |
 | =modules=        | table          | required | The environment modules each command loads.                                     |
 | =caches=         | table          | none     | The command that writes module caches after a clean build.                      |
@@ -118,7 +119,7 @@ So every job that a run or =watch= starts needs the directory, whatever its phas
 
 | Key                 | Type  | Default                   | Meaning                                                                      |
 |---------------------+-------+---------------------------+------------------------------------------------------------------------------|
-| =eb_stack=          | table | =bin= =eb-stack=          | eb-stack, which plans shards, admission and offline bundles. With =[resume]= enabled, =run= also calls =stack order --hashes-out=. |
+| =eb_stack=          | table | =bin= =eb-stack=          | eb-stack, which plans shards, admission and offline bundles. With =[resume]= enabled, =run= also calls =stack order --hashes-out=. With =[attest]= enabled, =plan= and =run= call =stack order= and may call =recipe easyblock=. |
 | =eb_keep_logs=      | table | =bin= =eb-keep-logs=      | eb-keep-logs, which runs =failed= and =rotate=.                              |
 | =eb_staged_rebuild= | table | =bin= =eb-staged-rebuild= | eb-staged-rebuild, which runs =run= for a line that rebuilds a live install. |
 
@@ -340,6 +341,44 @@ A count of 0 keeps the directory =filesystems.job_dir= names.
 | =enabled=     | boolean         | =false= | =true= records the input identity and each successful line's module files, and allows =run --resume-result=. =false= records neither.                                                                                             |
 | =easyconfigs= | array of string | =[]=    | Easyconfig trees for =eb-stack stack order --easyconfigs= and, when =shards= is at least 2 and =[shards]= is not planning, for =eb-stack stack shard --easyconfigs=. At least one when enabled, unless =shards.easyconfigs= names one. =resume.easyconfigs= wins when it is not empty. |
 | =shards=      | integer         | =1=     | When =[shards]= is not planning, =stack shard --shards= for the prelude and shard restart boundaries. Below 2, the list stays one unit.                                                                                          |
+
+** =[attest]=
+
+Set =enabled= to hash the exact inputs of a finalized plan and append that record to an RFC 9162 sidecar log.
+=plan= does this when it writes the plan.
+=run= does it when the run starts, and not for =--dry-run=.
+The record covers the build list, every easyconfig =eb-stack stack order --out= resolves, the easyblock class and patches those files name, the site file, the container image digest and the route receipt.
+=verify= recomputes the record and checks the inclusion proof stored on the plan or the result.
+Without the table, or with =enabled= false, a plan and a result are unchanged and =verify= is a usage error.
+
+=log_dir= is a directory kept for this log.
+=rfc9162-sidecar sync= records every file in it, so other files placed there become part of the log.
+=key= is a PKCS#8 PEM file and =origin= is the checkpoint origin.
+Each =trusted= line is =name+keyid+base64= for that origin, the text =rfc9162-sidecar verify-proof --trusted= takes.
+=bin= is the =rfc9162-sidecar= program.
+It is started as a subprocess and is not probed with =--version=.
+
+=easyconfigs= are the trees given to =eb-stack stack order --easyconfigs=.
+When that list is empty, =resume.easyconfigs= is used, then =shards.easyconfigs=.
+=easyblocks= are directories searched for the Python file that defines each class.
+A class with no file is recorded with an empty path.
+=patches= are extra directories searched, together with the easyconfig's own directory and the easyconfig trees, for a quoted name that ends in =.patch=.
+Two files of the same name with different contents refuse the attestation.
+=image_digest_env=, when set, must hold the container image digest or the attestation is refused.
+The route receipt is the value of the target's =receipt_digest_env= when that variable is set, and otherwise empty; an empty receipt does not by itself refuse the attestation.
+
+| Key                | Type            | Default           | Meaning                                                                                                                                                          |
+|--------------------+-----------------+-------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =enabled=          | boolean         | =false=           | =true= appends an input record on =plan= and on =run=. =false= records nothing, and =verify= is refused.                                                         |
+| =log_dir=          | string          | none              | Directory of the sidecar log. Required when enabled. A directory kept for this log: =rfc9162-sidecar sync= records every file in it.                            |
+| =key=              | string          | none              | PKCS#8 PEM file passed to =rfc9162-sidecar snapshot --key=. Required when enabled.                                                                               |
+| =origin=           | string          | none              | Checkpoint origin passed to =rfc9162-sidecar snapshot --origin=. Required when enabled. A trusted line names this origin.                                       |
+| =trusted=          | array of string | =[]=              | Verifier lines =name+keyid+base64= passed to =rfc9162-sidecar verify-proof --trusted=. At least one when enabled.                                                |
+| =bin=              | string          | =rfc9162-sidecar= | The =rfc9162-sidecar= program. It is not probed with =--version=.                                                                                                |
+| =image_digest_env= | string          | none              | Environment variable that holds the container image digest. When set, an empty value refuses the attestation.                                                   |
+| =easyconfigs=      | array of string | =[]=              | Easyconfig trees for =eb-stack stack order --easyconfigs=. When empty, =resume.easyconfigs= is used, then =shards.easyconfigs=.                                  |
+| =easyblocks=       | array of string | =[]=              | Directories searched for the Python file that defines each resolved easyblock class. A class with no file is recorded with an empty path.                       |
+| =patches=          | array of string | =[]=              | Extra directories searched, with the easyconfig's directory and the easyconfig trees, for a patch a resolved easyconfig names.                                  |
 
 ** =[sources]=
 

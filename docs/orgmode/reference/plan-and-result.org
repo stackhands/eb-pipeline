@@ -97,6 +97,7 @@ cat plan.json
 |------------------+---------+--------------------------------------------------------------------------------------------------------------------------|
 | =build_type=     | string  | The build type.                                                                                                          |
 | =deselected=     | array   | The lines that the target's =[targets.select]= leaves out; only when there are some.                                     |
+| =input_attestation= | object | The record hash and the RFC 9162 inclusion proof, when =[attest]= is enabled. Absent otherwise. =record_sha256= is the SHA-256 of the canonical input record. =proof= is the JSON object =rfc9162-sidecar prove= wrote. |
 | =kind=           | string  | =plan=.                                                                                                                  |
 | =lines=          | integer | The number of lines of the list, without blank lines and comments.                                                       |
 | =list=           | string  | The build list as =--list= names it, or the absolute package-plan bundle directory.                                     |
@@ -252,6 +253,7 @@ cat result.json
 | =duration_seconds= | number  | How long the run took, from its start to the writing of the result file, in seconds to the millisecond.                |
 | =ended_at=         | string  | When the run ended, in Coordinated Universal Time (UTC): the date, the time to the nanosecond and the offset =+00:00=. |
 | =exit_code=        | integer | The exit status of the run.                                                                                            |
+| =input_attestation= | object | The record hash and the RFC 9162 inclusion proof, when =[attest]= is enabled. Absent otherwise. Same object as on the plan. |
 | =input_digest=     | string  | The SHA-256 of the file =eb-stack stack order --hashes-out= wrote, when =[resume]= is enabled. Absent otherwise.        |
 | =interrupted_by=   | string  | =SIGINT= or =SIGTERM=, when a signal stopped the run.                                                                  |
 | =kind=             | string  | =result=.                                                                                                              |

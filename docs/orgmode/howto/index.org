@@ -28,6 +28,7 @@ The title names the task.
    check-a-list-with-eb-stack
    check-oom-before-building
    resume-a-run
+   attest-build-inputs
    follow-runs
    run-tests-for-what-you-built
    rebuild-when-eessi-changes

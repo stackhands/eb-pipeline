@@ -109,6 +109,9 @@ fn d_cpu_var() -> String {
 fn d_accel_var() -> String {
     "EESSI_ACCELERATOR_TARGET_OVERRIDE".into()
 }
+fn d_sidecar() -> String {
+    "rfc9162-sidecar".into()
+}
 
 doc_struct! {
     /// A sibling tool: binary and minimum version.
@@ -124,7 +127,7 @@ doc_struct! {
     /// Sibling tool table.
     Tools {
         eb_stack: Option<ToolSpec> => ("table", "bin eb-stack", false,
-            "eb-stack, called for `stack shard`, `stack admit`, `stack sbom` and offline-bundle planning. With `[resume]` enabled, `run` also calls `stack order --hashes-out` and may call `stack shard` for restart boundaries."),
+            "eb-stack, called for `stack shard`, `stack admit`, `stack sbom` and offline-bundle planning. With `[resume]` enabled, `run` also calls `stack order --hashes-out` and may call `stack shard` for restart boundaries. With `[attest]` enabled, `plan` and `run` call `stack order` and may call `recipe easyblock`."),
         eb_keep_logs: Option<ToolSpec> => ("table", "bin eb-keep-logs", false,
             "eb-keep-logs, called for `failed` and `rotate`."),
         eb_staged_rebuild: Option<ToolSpec> => ("table", "bin eb-staged-rebuild", false,
@@ -701,6 +704,38 @@ doc_struct! {
 }
 
 doc_struct! {
+    /// Hash the exact inputs of a finalized plan into an RFC 9162 sidecar log.
+    Attest {
+        #[serde(default)]
+        enabled: bool => ("boolean", "false", false,
+            "Set true to append an input record on `plan` and on `run`. False or absent, neither command records one, and `verify` is refused."),
+        log_dir: Option<String> => ("string", "none", false,
+            "Directory of the sidecar log. Required when enabled, and kept for this log alone: `rfc9162-sidecar sync` records every file in it."),
+        key: Option<String> => ("string", "none", false,
+            "PKCS#8 PEM file passed to `rfc9162-sidecar snapshot --key`. Required when enabled."),
+        origin: Option<String> => ("string", "none", false,
+            "Checkpoint origin passed to `rfc9162-sidecar snapshot --origin`. Required when enabled. A trusted line names this origin."),
+        #[serde(default)]
+        trusted: Vec<String> => ("array of string", "[]", false,
+            "Verifier lines `name+keyid+base64` passed to `rfc9162-sidecar verify-proof --trusted`. At least one is required when enabled."),
+        #[serde(default = "d_sidecar")]
+        bin: String => ("string", "rfc9162-sidecar", false,
+            "The `rfc9162-sidecar` program. It is not probed with `--version`."),
+        image_digest_env: Option<String> => ("string", "none", false,
+            "Environment variable that holds the container image digest. When set, an empty value refuses the attestation."),
+        #[serde(default)]
+        easyconfigs: Vec<String> => ("array of string", "[]", false,
+            "Easyconfig trees for `eb-stack stack order --easyconfigs`. When empty, `resume.easyconfigs` is used, then `shards.easyconfigs`."),
+        #[serde(default)]
+        easyblocks: Vec<String> => ("array of string", "[]", false,
+            "Directories searched for the Python file that defines each resolved easyblock class. A class with no file is recorded with an empty path."),
+        #[serde(default)]
+        patches: Vec<String> => ("array of string", "[]", false,
+            "Extra directories searched, with the easyconfig's directory and the easyconfig trees, for a patch a resolved easyconfig names."),
+    }
+}
+
+doc_struct! {
     /// A site file.
     Site {
         schema_version: u32 => ("integer", "", true, "Schema version; 1."),
@@ -714,6 +749,8 @@ doc_struct! {
         shards: Option<Shards> => ("table", "none", false, "Shard planning."),
         resume: Option<Resume> => ("table", "none", false,
             "When enabled, `run` records the `eb-stack stack order --hashes-out` identity and can resume from it with `--resume-result`. Absent, a run does not record an identity."),
+        attest: Option<Attest> => ("table", "none", false,
+            "When enabled, `plan` and `run` append a hash of the exact inputs to an RFC 9162 sidecar log. Absent, they record nothing."),
         sources: Option<Sources> => ("table", "none", false, "Source prefetch."),
         modules: Modules => ("table", "", true, "Environment modules."),
         caches: Option<Caches> => ("table", "none", false, "Module caches."),
@@ -748,6 +785,7 @@ pub const SECTIONS: &[(&str, &[FieldDoc])] = &[
     ("admission", Admission::FIELDS),
     ("shards", Shards::FIELDS),
     ("resume", Resume::FIELDS),
+    ("attest", Attest::FIELDS),
     ("sources", Sources::FIELDS),
     ("sources.assets[]", OfflineAsset::FIELDS),
     ("sources.foreign[]", ForeignInput::FIELDS),
@@ -861,6 +899,7 @@ mod tests {
             Admission,
             Shards,
             Resume,
+            Attest,
             Sources,
             OfflineAsset,
             ForeignInput,

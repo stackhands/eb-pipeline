@@ -20,6 +20,7 @@ eb-pipeline status [OPTIONS] --site <SITE>
 eb-pipeline metrics [OPTIONS] --result <RESULT>
 eb-pipeline plan [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>
 eb-pipeline run [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>
+eb-pipeline verify [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE> --from <FROM>
 eb-pipeline watch [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>
 #+end_example
 
@@ -40,6 +41,7 @@ Commands:
   metrics  Print Prometheus text, or a short JSON status, for one result file
   plan     Compute phases, launch lines, environments and tool calls without executing
   run      Execute the plan's phases as subprocesses
+  verify   Recompute the input record and check its inclusion proof
   watch    Rebuild the recorded installs an EESSI change reaches, in dependency order
   help     Print this message or the help of the given subcommand(s)
 
@@ -69,7 +71,7 @@ EB_PIPELINE__FILESYSTEMS__SCRATCH=/scratch/eb; the result is validated like the
 file.
 
 Output streams: stdout carries plan, explain, schema, init, status, targets and
-metrics, and run --dry-run or watch --dry-run output only. Events go to stderr
+metrics, and verify, and run --dry-run or watch --dry-run output only. Events go to stderr
 as `LEVEL [phase] target: message`. The result JSON goes to --result, and each
 run's summary to summary.json and summary.html in its run directory,
 <log_root>/<log-stamp>/. Run --metrics-file atomically replaces a Prometheus
@@ -120,6 +122,7 @@ No command takes an argument other than its options.
 | =status=  | Print the last runs under the log root, newest first, from the summary of each run directory.                                                                                                                       |
 | =plan=    | Print the plan of a run as JavaScript Object Notation (JSON): its phases and every command with its launch line and environment. It starts nothing.                                                                 |
 | =run=     | Run the phases of the plan, one command at a time, write the result file, and add the run to the summary of its run directory.                                                                                      |
+| =verify=  | Recompute the input record of a plan or a result and check its RFC 9162 inclusion proof. Needs =[attest] enabled=.                                                                                                  |
 | =watch=   | Compare what each recorded install of a target was built against in EESSI with the EESSI that its module environment loads now, and rebuild the installs that a change reaches, in the order of their dependencies. |
 | =help=    | Print the help of the program, or of the command it names.                                                                                                                                                          |
 
@@ -277,6 +280,20 @@ When the OOM count is greater than zero, the preflight is refused, every planned
 The command reads only the =oom=N= summary line from eb-stack; eb-pipeline does not estimate memory itself.
 
 With =--dry-run=, a planned command prints as =[PHASE] COMMAND= and a phase that starts nothing as =# [PHASE] STATUS=.
+
+*** verify
+
+=verify= takes the first four options of =plan=, and this:
+
+| Option       | Meaning                                                                                          |
+|--------------+--------------------------------------------------------------------------------------------------|
+| =--from FILE= | The plan or result JSON that holds =input_attestation=. Required. Needs =[attest] enabled=.     |
+
+=verify= recomputes the input record and checks the inclusion proof in =FILE=.
+A record that no longer matches the inputs exits 78.
+A proof that =rfc9162-sidecar verify-proof= rejects exits 1.
+Without =[attest] enabled=, =verify= exits 2.
+[[file:../howto/attest-build-inputs.org][Attest the inputs of a plan]] is the task.
 
 *** watch
 

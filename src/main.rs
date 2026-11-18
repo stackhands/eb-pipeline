@@ -34,7 +34,7 @@ EB_PIPELINE__FILESYSTEMS__SCRATCH=/scratch/eb; the result is validated like the
 file.
 
 Output streams: stdout carries plan, explain, schema, init, status, targets and
-metrics, and run --dry-run or watch --dry-run output only. Events go to stderr
+metrics, and verify, and run --dry-run or watch --dry-run output only. Events go to stderr
 as `LEVEL [phase] target: message`. The result JSON goes to --result, and each
 run's summary to summary.json and summary.html in its run directory,
 <log_root>/<log-stamp>/. Run --metrics-file atomically replaces a Prometheus
@@ -201,6 +201,14 @@ enum Cmd {
         /// Needs `[resume] enabled`.
         #[arg(long, value_name = "FILE")]
         resume_result: Option<PathBuf>,
+    },
+    /// Recompute the input record and check its inclusion proof.
+    Verify {
+        #[command(flatten)]
+        common: Common,
+        /// Plan or result JSON that holds `input_attestation`.
+        #[arg(long)]
+        from: PathBuf,
     },
     /// Rebuild the recorded installs an EESSI change reaches, in dependency order.
     #[command(after_long_help = WATCH_EXIT)]
@@ -826,7 +834,22 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
             Some(d) => Some(read_units(d)?),
             None => None,
         };
-        let plan = build_plan(&planner, &lines, units.as_deref())?;
+        let mut plan = build_plan(&planner, &lines, units.as_deref())?;
+        if let Some(conf) = s.attest_on() {
+            let Some(list_path) = c.list.as_deref() else {
+                return Err(Fail::usage("attest needs --list"));
+            };
+            plan.input_attestation = Some(eb_pipeline::attest::append(
+                &eb_pipeline::attest::Request {
+                    site: &s,
+                    attest: conf,
+                    site_path: &c.site,
+                    list_path,
+                    lines: &lines,
+                    target: &c.target,
+                },
+            )?);
+        }
         write_json(&to_sorted(&plan), out)?;
         return Ok(exit::OK);
     }
@@ -1345,6 +1368,77 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     Ok(res.exit_code)
 }
 
+fn cmd_verify(c: &Common, from: &Path) -> Result<i32, Fail> {
+    let (s, errs) = {
+        let s = site::load(&c.site)?;
+        let e = site::validate(&s, None);
+        (s, e)
+    };
+    if !errs.is_empty() {
+        for e in &errs {
+            log("ERROR", "check", &s.site.name, e);
+        }
+        return Err(Fail::usage(format!(
+            "{} problem(s) in the site file",
+            errs.len()
+        )));
+    }
+    let Some(conf) = s.attest_on() else {
+        return Err(Fail::usage("verify needs [attest] enabled = true"));
+    };
+    let text = std::fs::read_to_string(from)
+        .map_err(|e| Fail::usage(format!("cannot read {}: {e}", from.display())))?;
+    let doc: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| Fail::usage(format!("{} is not JSON: {e}", from.display())))?;
+    let stored = match doc.get("input_attestation") {
+        Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
+            Fail::usage(format!(
+                "{} input_attestation is not a record and a proof: {e}",
+                from.display()
+            ))
+        })?,
+        None => {
+            return Err(Fail::new(
+                exit::REFUSED,
+                format!("{} has no input_attestation", from.display()),
+            ))
+        }
+    };
+    let Some(list) = c.list.as_deref() else {
+        return Err(Fail::usage("verify needs --list"));
+    };
+    let list_text = std::fs::read_to_string(list)
+        .map_err(|e| Fail::usage(format!("cannot read list {}: {e}", list.display())))?;
+    let lines = if easystack::is_easystack(list) {
+        easystack::parse(&list_text)
+            .map_err(|e| Fail::usage(format!("easystack {}: {e}", list.display())))?
+    } else {
+        util::parse_list(&list_text)?
+    };
+    if lines.is_empty() {
+        return Err(Fail::usage(format!(
+            "list {} holds no lines",
+            list.display()
+        )));
+    }
+    if s.target(&c.target).is_err() {
+        return Err(Fail::usage(format!("no target {}", c.target)));
+    }
+    eb_pipeline::attest::verify(
+        &eb_pipeline::attest::Request {
+            site: &s,
+            attest: conf,
+            site_path: &c.site,
+            list_path: list,
+            lines: &lines,
+            target: &c.target,
+        },
+        &stored,
+    )?;
+    println!("verified input record {}", stored.record_sha256);
+    Ok(exit::OK)
+}
+
 fn main() {
     let cli = Cli::parse();
     let r = match &cli.command {
@@ -1426,6 +1520,7 @@ fn main() {
                 resume_result: resume_result.as_deref(),
             },
         ),
+        Cmd::Verify { common, from } => cmd_verify(common, from),
         Cmd::Watch {
             site,
             target,

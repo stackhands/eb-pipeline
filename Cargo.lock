@@ -224,6 +224,7 @@ dependencies = [
  "clap_complete",
  "clap_mangen",
  "libc",
+ "rfc9162",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -449,6 +450,15 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+
+[[package]]
+name = "rfc9162"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84a4b78bd666ed4d04d4d74b4645c370196b4c699317e0ae446317b809cbdd02"
+dependencies = [
+ "sha2",
+]
 
 [[package]]
 name = "roff"
