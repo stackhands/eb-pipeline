@@ -66,6 +66,31 @@ fn an_sbom_command_that_fails_fails_the_run_and_leaves_no_document() {
 }
 
 #[test]
+fn a_signalled_sbom_command_preserves_the_signal_exit_code() {
+    let t = setup("[sbom]\nlock = \"@ROOT@/stack.lock.json\"\n");
+    std::fs::write(t.root().join("stack.lock.json"), "{}\n").unwrap();
+    let metrics = t.root().join("pipeline.prom");
+    let o = run_extra(
+        &t,
+        "cpu",
+        STAMP,
+        LIST,
+        &["--metrics-file", metrics.to_str().unwrap()],
+        &[("STUB_SBOM_SIGNAL", "TERM")],
+    );
+
+    assert_eq!(code(&o), 143, "{}", stderr(&o));
+    assert!(stderr(&o).contains("exited 143"), "{}", stderr(&o));
+    let result: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(t.root().join("result-cpu.json")).unwrap())
+            .unwrap();
+    assert_eq!(result["exit_code"], 143);
+    assert_eq!(t.summary(STAMP)["exit_code"], 143);
+    let text = std::fs::read_to_string(metrics).unwrap();
+    assert_eq!(sample(&text, "eb_pipeline_exit_code"), 143.0, "{text}");
+}
+
+#[test]
 fn final_times_and_metrics_include_an_sbom_failure() {
     let t = setup("[sbom]\nlock = \"@ROOT@/stack.lock.json\"\n");
     std::fs::write(t.root().join("stack.lock.json"), "{}\n").unwrap();

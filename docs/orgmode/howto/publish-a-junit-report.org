@@ -121,7 +121,7 @@ A line recorded as =skipped= is a skipped case.
 
 | Message | Cause | What to do |
 |---------+-------+------------|
-| =eb-junit: --result is required= | No result file was given. | Pass each =run --result= file. |
+| =eb-junit: --result or --reframe-report is required= | Neither =--result= nor =--reframe-report= was given. | Pass at least one =run --result= or =reframe --report-file= JSON file. |
 | =eb-junit: PATH: expected kind `result`, found `plan`= | The file is a plan, a summary, or another JSON document. | Pass the file =run --result= wrote. =summary.json= is not a result file; =metrics= and =status= read the other views. |
 | =eb-junit: cannot read PATH: No such file or directory= | The run stopped before it wrote a result, or the path is wrong. | An input error exits 2 and leaves no result file. Read the run's =ERROR= lines. |
 | =eb-junit: PATH: schema_version must be 1= | The file is a newer or older result than this =eb-junit=. | Use the =eb-junit= from the same release as the =eb-pipeline= that wrote the file. |

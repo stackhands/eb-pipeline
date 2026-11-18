@@ -77,6 +77,14 @@ fn plan_of(site: &Path, list: &Path) -> Value {
     serde_json::from_slice(&o.stdout).unwrap()
 }
 
+fn plan_error(site: &Path, list: &Path, bytes: &[u8]) -> String {
+    std::fs::write(list, bytes).unwrap();
+    let output = plan(site, list);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stdout, b"");
+    String::from_utf8(output.stderr).unwrap()
+}
+
 fn phase<'a>(v: &'a Value, name: &str) -> &'a Value {
     v["phases"]
         .as_array()
@@ -303,4 +311,69 @@ fn an_easystack_that_cannot_be_read_names_the_file_and_the_entry() {
         )),
         "{err}"
     );
+}
+
+#[test]
+fn easystack_parse_errors_name_the_source_line_and_column() {
+    let dir = tempfile::tempdir().unwrap();
+    let site = site(dir.path(), "");
+    let list = dir.path().join("input.yml");
+    let prefix = format!("ERROR [main] -: easystack {}:", list.display());
+
+    let malformed = plan_error(
+        &site,
+        &list,
+        b"easyconfigs:\n  - x.eb:\n      options:\n        rebuild: [\n",
+    );
+    assert!(
+        malformed.starts_with(&format!("{prefix}5:1:")),
+        "{malformed}"
+    );
+
+    let tab = plan_error(&site, &list, b"easyconfigs:\n\t- x.eb\n");
+    assert!(tab.starts_with(&format!("{prefix}2:1:")), "{tab}");
+
+    let duplicate = plan_error(
+        &site,
+        &list,
+        b"easyconfigs:\n  - x.eb\neasyconfigs:\n  - y.eb\n",
+    );
+    assert!(
+        duplicate.starts_with(&format!("{prefix}3:1: duplicate entry")),
+        "{duplicate}"
+    );
+
+    let malformed_crlf = plan_error(
+        &site,
+        &list,
+        b"easyconfigs:\r\n  - x.eb:\r\n      options:\r\n        rebuild: [\r\n",
+    );
+    assert!(
+        malformed_crlf.starts_with(&format!("{prefix}5:1:")),
+        "{malformed_crlf}"
+    );
+
+    let non_utf8 = plan_error(&site, &list, b"easyconfigs:\n  - bad-\xff.eb\n");
+    assert_eq!(non_utf8, format!("{prefix}2:9: input is not valid UTF-8\n"));
+}
+
+#[test]
+fn valid_easystack_encoding_and_newline_variants_keep_plan_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let site = site(dir.path(), "");
+    let list = dir.path().join("input.yml");
+    let mut outputs = Vec::new();
+    for bytes in [
+        b"easyconfigs:\n  - x.eb\n".as_slice(),
+        b"easyconfigs:\r\n  - x.eb\r\n".as_slice(),
+        b"\xef\xbb\xbfeasyconfigs:\n  - x.eb\n".as_slice(),
+    ] {
+        std::fs::write(&list, bytes).unwrap();
+        let output = plan(&site, &list);
+        assert_eq!(output.status.code(), Some(0));
+        assert_eq!(output.stderr, b"");
+        outputs.push(output.stdout);
+    }
+    assert_eq!(outputs[1], outputs[0]);
+    assert_eq!(outputs[2], outputs[0]);
 }

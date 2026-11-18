@@ -37,17 +37,11 @@ expect_line "$archive: OK"
 run "tar -xJf $archive
 ls ${archive%.tar.xz}"
 expect_status 0
-for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cvmfs; do
-    expect_line "$cmd"
-done
+expect_line 'eb-pipeline'
 
-run "for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cvmfs; do
-install -D -m 755 ${archive%.tar.xz}/\$cmd ~/.local/bin/\$cmd
-done
-for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cvmfs; do
-command -v \$cmd
-\$cmd --help >/dev/null
-done
+run "install -D -m 755 ${archive%.tar.xz}/eb-pipeline ~/.local/bin/eb-pipeline
+command -v eb-pipeline
+eb-pipeline --help >/dev/null
 eb-pipeline --version"
 expect_status 0
 expect_line 'eb-pipeline 0.3.0'
@@ -68,7 +62,10 @@ run "cargo +$old_toolchain install --locked --path . --root ~/.local"
 expect_status 101
 
 run 'cargo install --locked --quiet --path . --root ~/.local
-command -v eb-pipeline
+for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cvmfs; do
+    command -v "$cmd"
+    "$cmd" --help >/dev/null
+done
 eb-pipeline --version'
 expect_status 0
 expect_line "eb-pipeline $(crate_version)"

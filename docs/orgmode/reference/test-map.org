@@ -5,6 +5,7 @@
 * The test map
 
 =eb-test-map= reads a build list and prints the tests that cover the applications in it.
+For a plain build list, each line's easyconfig selects the application and its following =eb= options do not become part of the name.
 The default uses a map of software name to test name.
 =--format eessi-modules= does not read a map. It prints the module names the European Environment for Scientific Software Installations (EESSI) test suite selects with ReFrame.
 
@@ -26,6 +27,8 @@ eb-test-map (--list FILE | --result FILE) --format eessi-modules [--toolchain NA
 The built-in toolchains are =GCC=, =GCCcore=, =foss=, =gfbf=, =gomkl=, =gompi=, =iimpi=, =intel= and =intel-compilers=.
 
 Pass one of =--list= or =--result=.
+When neither is present, =EB_PIPELINE_LIST= and =EB_PIPELINE_RESULT= supply
+their corresponding options. A command-line input wins.
 Without =--include-resumed=, result input keeps only successful lines, as before.
 With it, result input also keeps lines that a resumed run skipped because their prior successful outputs still exist.
 Other skipped lines and failed lines remain excluded.
