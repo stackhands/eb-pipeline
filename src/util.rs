@@ -21,6 +21,18 @@ pub fn env_value(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
+/// The next non-empty command-line value, without consuming another long
+/// option as that value.
+pub fn separate_value(
+    words: &mut impl Iterator<Item = String>,
+    missing: &str,
+) -> Result<String, String> {
+    words
+        .next()
+        .filter(|value| !value.is_empty() && !value.starts_with("--"))
+        .ok_or_else(|| missing.to_string())
+}
+
 /// Whether two paths name the same file, including through a symbolic or
 /// hard link. A path that does not exist is resolved through its parent.
 pub fn paths_alias(path_a: &Path, path_b: &Path) -> bool {

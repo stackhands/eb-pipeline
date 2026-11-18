@@ -53,6 +53,38 @@ fn result_file(dir: &std::path::Path, name: &str, body: &str) -> std::path::Path
 }
 
 #[test]
+fn result_environment_wins_when_both_input_variables_are_set() {
+    let dir = tempfile::tempdir().unwrap();
+    files(
+        dir.path(),
+        "GROMACS gromacs\nFFTW fftw\n",
+        "FFTW-3.3.10-GCC-13.2.0.eb\n",
+    );
+    let result = result_file(
+        dir.path(),
+        "result.json",
+        r#"{
+  "schema_version": 1,
+  "kind": "result",
+  "lines": [
+    {"easyconfig": "GROMACS-2024.1-foss-2023b.eb", "status": "success", "phase": "build"}
+  ]
+}"#,
+    );
+    let output = bin()
+        .arg("--map")
+        .arg(dir.path().join("map.tsv"))
+        .env("EB_PIPELINE_LIST", dir.path().join("build.list"))
+        .env("EB_PIPELINE_RESULT", result)
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"gromacs\n");
+    assert_eq!(output.stderr, b"");
+}
+
+#[test]
 fn an_application_with_no_test_is_refused_and_a_toolchain_is_not() {
     let dir = tempfile::tempdir().unwrap();
     files(

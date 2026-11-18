@@ -207,8 +207,10 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
         }
     }
     if list.is_none() && result.is_none() {
-        list = eb_pipeline::util::env_value("EB_PIPELINE_LIST");
         result = eb_pipeline::util::env_value("EB_PIPELINE_RESULT");
+        if result.is_none() {
+            list = eb_pipeline::util::env_value("EB_PIPELINE_LIST");
+        }
     }
     let format = format.unwrap_or(OutputFormat::Plain);
     if list.is_some() && result.is_some() {

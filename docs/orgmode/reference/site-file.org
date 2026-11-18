@@ -317,8 +317,8 @@ A record that another writer has replaced since, such as a =forecast= or =waitin
 | =lift_cpu_prerequisites=          | boolean         | =false= | =true= passes =--lift-cpu-prerequisites=, which makes the CPU-only prerequisites a unit of their own.                                                                                           |
 | =easyconfigs=                     | array of string | =[]=    | The easyconfig trees to resolve the list in: =stack shard --easyconfigs=, once each; at least one when =count= is 2 or more.                                                                    |
 | =weights=                         | string          | none    | A table of build times: =stack shard --weights=.                                                                                                                                                |
-| =installed_modules_dirs=          | array of string | =[]=    | Module trees whose modules count as installed: =stack shard --installed-modules-dir=, once each. =run= leaves out a tree that does not exist yet, with a =WARN= line.                           |
-| =installed_modules_dirs_from_env= | array of string | =[]=    | Names of variables whose values, separated by =:=, =run= adds to =installed_modules_dirs=. =run= refuses with exit 78 when one is unset, an empty one adds nothing, and =plan= shows =${NAME}=. |
+| =installed_modules_dirs=          | array of string | =[]=    | Unique module trees whose modules count as installed: =stack shard --installed-modules-dir=, once each. =run= leaves out a tree that does not exist yet, with a =WARN= line.                    |
+| =installed_modules_dirs_from_env= | array of string | =[]=    | Unique variable names whose values, separated by =:=, =run= adds to =installed_modules_dirs=. =run= refuses with exit 78 when one is unset, an empty one adds nothing, and =plan= shows =${NAME}=. |
 
 =stack shard= runs inside the module wrapper, so what the modules of =[modules] init= set reaches it, such as the =EASYBUILD_FILTER_DEPS= of EESSI-extend.
 It writes its plan to =SHARD_DIR/RUN_ID/plan.json=, and =plan --shard-plan DIR= reads such a plan.

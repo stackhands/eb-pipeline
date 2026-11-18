@@ -918,7 +918,10 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         .map(package_plan::load)
         .transpose()?;
     let (input_name, lines) = if let Some(input) = &package_input {
-        (input.bundle.display().to_string(), input.lines.clone())
+        let name = input.bundle.to_str().ok_or_else(|| {
+            Fail::usage("--package-plan path is not valid UTF-8 and cannot be represented in JSON")
+        })?;
+        (name.to_string(), input.lines.clone())
     } else {
         let list = c.list.as_deref().expect("clap requires one input");
         let lines = if easystack::is_easystack(list) {
@@ -928,7 +931,10 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
                 .map_err(|e| Fail::usage(format!("cannot read list {}: {e}", list.display())))?;
             util::parse_list(&list_text)?
         };
-        (list.display().to_string(), lines)
+        let name = list.to_str().ok_or_else(|| {
+            Fail::usage("--list path is not valid UTF-8 and cannot be represented in JSON")
+        })?;
+        (name.to_string(), lines)
     };
     if lines.is_empty() {
         return Err(Fail::usage(format!("input {input_name} holds no lines")));
