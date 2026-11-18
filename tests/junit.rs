@@ -29,6 +29,7 @@ fn help_and_version_exit_zero() {
     let text = String::from_utf8(help.stdout).unwrap();
     assert!(text.contains("eb-junit [--result FILE]... [--reframe-report FILE]... [--out FILE]"));
     assert!(text.contains("--reframe-report FILE"));
+    assert!(text.contains("--property NAME=VALUE"));
     assert!(text.contains("--fail-on-failure"));
     assert!(text.contains("Exit 0 means the report was"));
     assert!(help.stderr.is_empty());
@@ -75,6 +76,119 @@ fn default_stdout_and_status_remain_byte_for_byte_unchanged() {
     assert_eq!(gated.status.code(), Some(0));
     assert_eq!(gated.stdout, output.stdout);
     assert!(gated.stderr.is_empty());
+}
+
+#[test]
+fn default_reframe_output_and_status_remain_byte_for_byte_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("reframe.json"),
+        r#"{
+  "report_version": "4.8",
+  "runs": [
+    {
+      "system": "cluster",
+      "partition": "cpu",
+      "environ": "foss",
+      "testcases": []
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+    let output = bin()
+        .current_dir(dir.path())
+        .args(["--reframe-report", "reframe.json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stderr, b"");
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+            "<testsuites name=\"eb-pipeline\" tests=\"0\" failures=\"0\" errors=\"0\" skipped=\"0\" time=\"0.000\">\n",
+            "  <testsuite name=\"reframe/cluster/cpu/foss\" tests=\"0\" failures=\"0\" errors=\"0\" skipped=\"0\" time=\"0.000\" hostname=\"cpu\">\n",
+            "    <properties>\n",
+            "      <property name=\"source\" value=\"reframe-report\"/>\n",
+            "      <property name=\"report\" value=\"reframe.json\"/>\n",
+            "      <property name=\"run_index\" value=\"1\"/>\n",
+            "      <property name=\"system\" value=\"cluster\"/>\n",
+            "      <property name=\"partition\" value=\"cpu\"/>\n",
+            "      <property name=\"environ\" value=\"foss\"/>\n",
+            "      <property name=\"report_version\" value=\"4.8\"/>\n",
+            "    </properties>\n",
+            "  </testsuite>\n",
+            "</testsuites>\n",
+        )
+        .as_bytes()
+    );
+}
+
+#[test]
+fn custom_properties_apply_to_every_suite() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("result.json"), result(0, "")).unwrap();
+    std::fs::write(
+        dir.path().join("reframe.json"),
+        r#"{"runs":[{"system":"cluster","partition":"cpu","environ":"foss","testcases":[]}]}"#,
+    )
+    .unwrap();
+    let output = bin()
+        .current_dir(dir.path())
+        .args([
+            "--result",
+            "result.json",
+            "--reframe-report",
+            "reframe.json",
+            "--property",
+            "pipeline=first",
+            "--property",
+            "site=nightly & smoke",
+            "--property=pipeline=42",
+            "--property",
+            "empty=",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    let xml = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        xml.matches("<property name=\"pipeline\" value=\"42\"/>")
+            .count(),
+        2,
+        "{xml}"
+    );
+    assert_eq!(
+        xml.matches("<property name=\"site\" value=\"nightly &amp; smoke\"/>")
+            .count(),
+        2,
+        "{xml}"
+    );
+    assert_eq!(
+        xml.matches("<property name=\"empty\" value=\"\"/>").count(),
+        2,
+        "{xml}"
+    );
+    assert!(!xml.contains("value=\"first\""), "{xml}");
+    assert!(!xml.contains("value=\"example\""), "{xml}");
+}
+
+#[test]
+fn a_property_requires_a_name_and_value_separator() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("result.json");
+    std::fs::write(&path, result(0, "")).unwrap();
+    let output = bin()
+        .arg("--result")
+        .arg(&path)
+        .args(["--property", "pipeline"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(output.stderr, b"eb-junit: --property expects NAME=VALUE\n");
 }
 
 #[test]
@@ -238,6 +352,7 @@ fn the_pages_name_eb_junit() {
         let page = std::fs::read_to_string(root.join(rel)).unwrap();
         assert!(page.contains("eb-junit"), "{rel}");
         assert!(page.contains("--reframe-report"), "{rel}");
+        assert!(page.contains("--property"), "{rel}");
     }
     let howto = std::fs::read_to_string(root.join("howto/index.org")).unwrap();
     assert!(howto.contains("publish-a-junit-report"), "{howto}");

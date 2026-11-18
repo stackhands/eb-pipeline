@@ -1,7 +1,7 @@
 eb-junit: write a JUnit XML report from eb-pipeline result files.
 
   eb-junit [--result FILE]... [--reframe-report FILE]... [--out FILE]
-           [--fail-on-failure]
+           [--property NAME=VALUE]... [--fail-on-failure]
 
 Each --result is a file written by `eb-pipeline run --result`. The report has
 one test suite per result file, in the order given, and one test case per
@@ -14,6 +14,9 @@ Each --reframe-report is a JSON file written by ReFrame's `--report-file`.
 Each run in that file becomes one extra suite, and each testcase becomes one
 case in that suite. Successful testcases have no child element, skipped cases
 stay skipped, and any other result is a failure with that result as its type.
+
+Each --property adds the named value to every suite. A later option with the
+same name replaces the earlier value and any recorded property with that name.
 
 A run whose exit code is not 0, and whose lines include no failure, adds one
 case named run so the report shows that the run stopped.

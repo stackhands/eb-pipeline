@@ -469,7 +469,7 @@ Exit 0 means the table was written. Exit 2 is a missing or invalid input.
 
 #+begin_example
 eb-junit [--result FILE]... [--reframe-report FILE]... [--out FILE]
-         [--fail-on-failure]
+         [--property NAME=VALUE]... [--fail-on-failure]
 #+end_example
 
 | Option | Meaning |
@@ -477,6 +477,7 @@ eb-junit [--result FILE]... [--reframe-report FILE]... [--out FILE]
 | =--result FILE= | A result file written by =eb-pipeline run --result=. Repeat for each file. |
 | =--reframe-report FILE= | A ReFrame report JSON written by =reframe --report-file=. Repeat for each file. |
 | =--out FILE= | Write the report to =FILE=. =-= or absent prints it on stdout. |
+| =--property NAME=VALUE= | Add the property to every suite. Repeat for more properties; the last value for a name wins. |
 | =--fail-on-failure= | Write the complete report, then exit 1 when it contains at least one failure. |
 
 At least one of =--result= or =--reframe-report= is required.
