@@ -183,7 +183,8 @@ With it, =check= runs every selected command directly, without =scheduler.launch
 Repeated path and architecture values are passed once.
 The configured =[site.tools.eb_stack].bin= is used, or =eb-stack= on the executable search path (=PATH=).
 All requested subprocesses run even after one fails.
-If one or more exit nonzero or cannot start, =check= reports each failure and exits 1.
+If one or more exit nonzero or cannot start, =check= reports each failure and combines their statuses with the same signal, usage, failure, refusal and temporary-failure priority as a run summary.
+A command that cannot start contributes exit 1.
 
 With =--gap-out=, =check= passes every target's resolved =modules_root/all= as =stack gap --site=.
 It takes European Environment for Scientific Software Installations (EESSI) base module trees from =shards.installed_modules_dirs=, the variables named by =shards.installed_modules_dirs_from_env=, and =watch.modules_dirs=.

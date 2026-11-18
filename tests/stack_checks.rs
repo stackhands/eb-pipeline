@@ -121,6 +121,32 @@ fn no_stack_checks_preserves_plain_check_and_a_failure_fails_check() {
 }
 
 #[test]
+fn a_stack_check_usage_exit_is_preserved() {
+    let t = configured();
+    let list = t.root().join("stack.yml");
+    std::fs::write(&list, "easyconfigs: []\n").unwrap();
+    let output = eb_pipeline(
+        &t,
+        &[
+            "check",
+            "--site",
+            &t.site.display().to_string(),
+            "--list",
+            &list.display().to_string(),
+            "--stack-checks",
+            "files",
+        ],
+        &[("STUB_EB_STACK_FAIL", "2")],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("files failed with status 2"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
 fn stack_checks_require_a_list_and_validate_the_target_before_starting() {
     let t = configured();
     let site = t.site.display().to_string();
