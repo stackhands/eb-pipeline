@@ -723,7 +723,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
         return finish(st, Some(exit::REFUSED));
     }
 
-    let mut plan = match build_plan(p, lines, None) {
+    let mut plan = match build_plan(p, lines, opts.shard_units) {
         Ok(pl) => pl,
         Err(f) => {
             st.res.message = Some(f.msg.clone());
