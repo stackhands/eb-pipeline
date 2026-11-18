@@ -151,7 +151,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut extra_toolchains = BTreeSet::new();
     let mut allow_unmapped = false;
     let mut include_resumed = false;
-    let mut format = OutputFormat::Plain;
+    let mut format: Option<OutputFormat> = None;
     let mut words = words.peekable();
     while let Some(word) = words.next() {
         match word.as_str() {
@@ -171,34 +171,39 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                     .filter(|v| !v.is_empty())
                     .ok_or_else(|| format!("{word} needs a value"))?;
                 match word.as_str() {
-                    "--map" => map = Some(value),
-                    "--list" => list = Some(value),
-                    "--result" => result = Some(value),
+                    "--map" => assign_once(&mut map, "--map", value)?,
+                    "--list" => assign_once(&mut list, "--list", value)?,
+                    "--result" => assign_once(&mut result, "--result", value)?,
                     "--toolchain" => {
                         extra_toolchains.insert(value);
                     }
-                    "--format" => format = parse_format(&value)?,
+                    "--format" => assign_once(&mut format, "--format", parse_format(&value)?)?,
                     _ => unreachable!(),
                 }
             }
             _ if word.starts_with("--map=") => {
-                map = Some(need_value("--map", &word["--map=".len()..])?)
+                let value = need_value("--map", &word["--map=".len()..])?;
+                assign_once(&mut map, "--map", value)?;
             }
             _ if word.starts_with("--list=") => {
-                list = Some(need_value("--list", &word["--list=".len()..])?)
+                let value = need_value("--list", &word["--list=".len()..])?;
+                assign_once(&mut list, "--list", value)?;
             }
             _ if word.starts_with("--result=") => {
-                result = Some(need_value("--result", &word["--result=".len()..])?)
+                let value = need_value("--result", &word["--result=".len()..])?;
+                assign_once(&mut result, "--result", value)?;
             }
             _ if word.starts_with("--toolchain=") => {
                 extra_toolchains.insert(need_value("--toolchain", &word["--toolchain=".len()..])?);
             }
             _ if word.starts_with("--format=") => {
-                format = parse_format(need_value("--format", &word["--format=".len()..])?.as_str())?
+                let value = need_value("--format", &word["--format=".len()..])?;
+                assign_once(&mut format, "--format", parse_format(&value)?)?;
             }
             _ => return Err(format!("does not know `{word}`")),
         }
     }
+    let format = format.unwrap_or(OutputFormat::Plain);
     if list.is_some() && result.is_some() {
         return Err("pass either --list or --result, not both".into());
     }
@@ -220,6 +225,14 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
         include_resumed,
         format,
     })
+}
+
+fn assign_once<T>(slot: &mut Option<T>, flag: &str, value: T) -> Result<(), String> {
+    if slot.is_some() {
+        return Err(format!("{flag} was given twice"));
+    }
+    *slot = Some(value);
+    Ok(())
 }
 
 fn need_value(flag: &str, value: &str) -> Result<String, String> {
