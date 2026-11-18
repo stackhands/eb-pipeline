@@ -24,6 +24,7 @@ recipes into a build list. The pipeline reads the bundle but never changes it.
    #+end_src
 
    The build phase follows =build-order.json= when the bundle has one.
+   Each recipe must appear there once.
    Otherwise it builds every =.eb= file under =bundle/easyconfigs= in sorted
    order. Each line uses that directory as its first EasyBuild robot overlay.
    Included easyblocks under =bundle/easyblocks= are passed to EasyBuild too.
