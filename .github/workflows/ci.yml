@@ -14,6 +14,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  large-file-audit:
+    uses: stackhands/.github/.github/workflows/changed-file-size.yml@main
+
   quality:
     name: fmt, clippy, tests, example lint
     runs-on: ubuntu-latest
