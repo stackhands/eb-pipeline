@@ -1,3 +1,5 @@
+mod common;
+
 use eb_pipeline::{plan, resolve, schema::Site, site, util};
 use std::path::PathBuf;
 use std::process::Command;
@@ -218,13 +220,15 @@ fn plan_is_deterministic_and_sorted() {
             .output()
             .unwrap();
         assert_eq!(o.status.code(), Some(0));
-        String::from_utf8(o.stdout).unwrap()
+        assert!(o.stderr.is_empty());
+        o.stdout
     };
     let (a, b) = (run(), run());
     assert_eq!(a, b);
-    let v: serde_json::Value = serde_json::from_str(&a).unwrap();
-    // serde_json maps are sorted; the text must already be in that order
-    assert_eq!(serde_json::to_string_pretty(&v).unwrap() + "\n", a);
+    let v: serde_json::Value = serde_json::from_slice(&a).unwrap();
+    // serde_json maps are sorted; the raw bytes must already be in that order.
+    let canonical = serde_json::to_string_pretty(&v).unwrap() + "\n";
+    assert_eq!(canonical.as_bytes(), a);
     let names: Vec<&str> = v["phases"]
         .as_array()
         .unwrap()
@@ -296,6 +300,35 @@ fn plan_and_run_outputs_refuse_input_aliases_before_writing() {
         assert_eq!(std::fs::read(&site).unwrap(), site_bytes);
         assert_eq!(std::fs::read(&list).unwrap(), list_bytes);
     }
+}
+
+#[test]
+fn plan_succeeds_when_its_output_consumer_closes() {
+    let d = tempfile::tempdir().unwrap();
+    let list = d.path().join("l.txt");
+    std::fs::write(&list, "Foo-1.0-foss-2025a.eb\n").unwrap();
+    let o = bin()
+        .args(["plan", "--site"])
+        .arg(example("eessi-site.toml"))
+        .arg("--list")
+        .arg(&list)
+        .args([
+            "--target",
+            "gpu-a",
+            "--build-type",
+            "production",
+            "--run-id",
+            "r1",
+        ])
+        .stdout(common::closed_stdout())
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
 }
 
 #[test]

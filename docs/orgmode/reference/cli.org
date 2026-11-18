@@ -375,6 +375,11 @@ Each option in the tables above that names a variable reads it when the option i
 =EB_PIPELINE__SECTION__KEY=VALUE= sets one value of the site file, and a run sets variables of its own for the commands it starts.
 [[file:environment.org][Environment variables]] lists all of them.
 
+** Output pipelines
+
+=plan= and =run --dry-run= exit successfully when a pipeline consumer closes standard output after reading enough data.
+Another standard-output write error exits 1.
+
 ** Exit status
 
 | Status | Meaning                                                                                                                                                                                                                                                      |

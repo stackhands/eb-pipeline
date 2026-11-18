@@ -413,10 +413,8 @@ fn write_json(v: &serde_json::Value, path: Option<&Path>) -> Result<(), Fail> {
     match path {
         Some(p) if p != Path::new("-") => util::write_atomic(p, text.as_bytes())
             .map_err(|e| Fail::new(exit::FAILED, format!("cannot write {}: {e}", p.display()))),
-        _ => {
-            print!("{text}");
-            Ok(())
-        }
+        _ => util::write_stdout(text.as_bytes())
+            .map_err(|e| Fail::new(exit::FAILED, format!("cannot write stdout: {e}"))),
     }
 }
 
