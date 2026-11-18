@@ -158,7 +158,7 @@ fn status_of_one_target_shows_only_its_runs_and_entries() {
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines.len(), 2, "{out}");
     assert!(
-        lines[0].starts_with(&format!("{B}  failed (exit 1)  ")),
+        lines[0].starts_with(&format!("{B}  success (exit 0)  ")),
         "{out}"
     );
     assert!(

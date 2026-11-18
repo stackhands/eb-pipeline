@@ -386,6 +386,9 @@ fn selected_runs(
                     if s.targets.is_empty() {
                         return Err(format!("{} has no target `{t}`", dir.join(JSON).display()));
                     }
+                    let codes: Vec<i32> = s.targets.iter().map(|entry| entry.exit_code).collect();
+                    s.exit_code = combined_code(&codes);
+                    s.status = status_of(s.exit_code).into();
                 }
                 Ok(s)
             })
