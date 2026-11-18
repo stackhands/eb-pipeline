@@ -5,6 +5,7 @@ use crate::plan::module_rel;
 use crate::util::{list_word, ListLine};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
 /// One ecosystem-native check associated with an emitted recipe.
@@ -89,14 +90,34 @@ fn safe_relative(bundle: &Path, raw: &str, what: &str) -> Result<PathBuf, Fail> 
             "{what} must be a non-empty bundle-relative path: {raw}"
         )));
     }
-    Ok(bundle.join(relative))
+    let path = bundle.join(relative.components().collect::<PathBuf>());
+    if path.exists() {
+        ensure_contained(bundle, &path, what)?;
+    }
+    Ok(path)
 }
 
-fn discover(root: &Path, extension: &str) -> Result<Vec<PathBuf>, Fail> {
+fn ensure_contained(bundle: &Path, path: &Path, what: &str) -> Result<PathBuf, Fail> {
+    let canonical_bundle = std::fs::canonicalize(bundle)
+        .map_err(|e| Fail::usage(format!("cannot resolve {}: {e}", bundle.display())))?;
+    let canonical = std::fs::canonicalize(path)
+        .map_err(|e| Fail::usage(format!("cannot resolve {}: {e}", path.display())))?;
+    if !canonical.starts_with(&canonical_bundle) {
+        return Err(Fail::usage(format!(
+            "{what} escapes the package-plan bundle: {}",
+            path.display()
+        )));
+    }
+    Ok(canonical)
+}
+
+fn discover(bundle: &Path, root: &Path, extension: &str) -> Result<Vec<PathBuf>, Fail> {
     if !root.is_dir() {
         return Ok(Vec::new());
     }
+    let canonical_root = ensure_contained(bundle, root, "package-plan directory")?;
     let mut directories = vec![root.to_path_buf()];
+    let mut seen_directories = BTreeSet::from([canonical_root]);
     let mut files = Vec::new();
     while let Some(directory) = directories.pop() {
         let entries = std::fs::read_dir(&directory)
@@ -106,8 +127,12 @@ fn discover(root: &Path, extension: &str) -> Result<Vec<PathBuf>, Fail> {
                 .map_err(|e| Fail::usage(format!("cannot read {}: {e}", directory.display())))?
                 .path();
             if path.is_dir() {
-                directories.push(path);
+                let canonical = ensure_contained(bundle, &path, "package-plan directory")?;
+                if seen_directories.insert(canonical) {
+                    directories.push(path);
+                }
             } else if path.extension().and_then(|value| value.to_str()) == Some(extension) {
+                ensure_contained(bundle, &path, "package-plan file")?;
                 files.push(path);
             }
         }
@@ -119,7 +144,7 @@ fn discover(root: &Path, extension: &str) -> Result<Vec<PathBuf>, Fail> {
 fn declared_recipes(bundle: &Path) -> Result<Vec<PathBuf>, Fail> {
     let order = bundle.join("build-order.json");
     if !order.is_file() {
-        return discover(&bundle.join("easyconfigs"), "eb");
+        return discover(bundle, &bundle.join("easyconfigs"), "eb");
     }
     let (_, value) = read_json(&order)?;
     schema_one(&order, &value)?;
@@ -127,22 +152,28 @@ fn declared_recipes(bundle: &Path) -> Result<Vec<PathBuf>, Fail> {
         .get("recipes")
         .and_then(Value::as_array)
         .ok_or_else(|| Fail::usage(format!("{} has no recipes array", order.display())))?;
-    recipes
-        .iter()
-        .map(|entry| {
-            let raw = entry.as_str().ok_or_else(|| {
-                Fail::usage(format!("{} recipes must be strings", order.display()))
-            })?;
-            let path = safe_relative(bundle, raw, "build-order recipe")?;
-            if !path.is_file() {
-                return Err(Fail::usage(format!(
-                    "build-order recipe does not exist: {}",
-                    path.display()
-                )));
-            }
-            Ok(path)
-        })
-        .collect()
+    let mut seen = BTreeSet::new();
+    let mut declared = Vec::with_capacity(recipes.len());
+    for entry in recipes {
+        let raw = entry
+            .as_str()
+            .ok_or_else(|| Fail::usage(format!("{} recipes must be strings", order.display())))?;
+        let path = safe_relative(bundle, raw, "build-order recipe")?;
+        if !path.is_file() {
+            return Err(Fail::usage(format!(
+                "build-order recipe does not exist: {}",
+                path.display()
+            )));
+        }
+        if !seen.insert(path.clone()) {
+            return Err(Fail::usage(format!(
+                "{} lists recipe more than once: {raw}",
+                order.display()
+            )));
+        }
+        declared.push(path);
+    }
+    Ok(declared)
 }
 
 fn plan_identity(path: &Path) -> Result<(String, String), Fail> {
@@ -205,11 +236,18 @@ fn verification(bundle: &Path, recipes: &[PathBuf]) -> Result<Vec<Verification>,
             })?
             .iter()
             .map(|recipe| {
-                recipe.as_str().ok_or_else(|| {
+                let raw = recipe.as_str().ok_or_else(|| {
                     Fail::usage(format!("{} recipes must be strings", closure.display()))
-                })
+                })?;
+                let path = safe_relative(bundle, raw, "closure recipe")?;
+                if !recipes.contains(&path) {
+                    return Err(Fail::usage(format!(
+                        "{} recipe is absent from build-order.json: {raw}",
+                        closure.display()
+                    )));
+                }
+                Ok(path)
             })
-            .map(|recipe| recipe.and_then(|raw| safe_relative(bundle, raw, "closure recipe")))
             .collect::<Result<Vec<_>, _>>()?;
         out.extend(for_recipes(&origin, &package, &paths));
     }
@@ -254,7 +292,7 @@ pub fn load(path: &Path) -> Result<Input, Fail> {
         )));
     }
     let robot = format!("--robot={}", bundle.join("easyconfigs").display());
-    let easyblocks = discover(&bundle.join("easyblocks"), "py")?;
+    let easyblocks = discover(&bundle, &bundle.join("easyblocks"), "py")?;
     let include = (!easyblocks.is_empty()).then(|| {
         format!(
             "--include-easyblocks={}",
@@ -299,6 +337,38 @@ mod tests {
     use super::load;
 
     #[test]
+    fn closure_recipes_must_appear_in_the_build_order() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("easyconfigs")).unwrap();
+        std::fs::write(
+            root.path().join("package.plan.json"),
+            r#"{"schema_version":1,"origin":"pypi","package":{"name":"demo"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join("build-order.json"),
+            r#"{"schema_version":1,"recipes":["easyconfigs/A-1.0.eb"]}"#,
+        )
+        .unwrap();
+        std::fs::write(root.path().join("easyconfigs/A-1.0.eb"), "").unwrap();
+        std::fs::write(root.path().join("easyconfigs/B-1.0.eb"), "").unwrap();
+        std::fs::write(
+            root.path().join("closure.plan.json"),
+            r#"{"schema_version":1,"root":{"manifest":"package.plan.json","recipes":["easyconfigs/B-1.0.eb"]},"companions":[]}"#,
+        )
+        .unwrap();
+
+        let error = load(root.path()).unwrap_err();
+        assert_eq!(
+            error.msg,
+            format!(
+                "{} recipe is absent from build-order.json: easyconfigs/B-1.0.eb",
+                root.path().join("closure.plan.json").display()
+            )
+        );
+    }
+
+    #[test]
     fn build_order_cannot_escape_the_bundle() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -313,5 +383,79 @@ mod tests {
         .unwrap();
         let error = load(root.path()).unwrap_err();
         assert!(error.msg.contains("bundle-relative"), "{}", error.msg);
+    }
+
+    #[test]
+    fn build_order_cannot_repeat_a_recipe() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("easyconfigs")).unwrap();
+        std::fs::write(
+            root.path().join("package.plan.json"),
+            r#"{"schema_version":1,"origin":"pypi","package":{"name":"demo"}}"#,
+        )
+        .unwrap();
+        std::fs::write(root.path().join("easyconfigs/demo.eb"), "name = 'demo'\n").unwrap();
+        std::fs::write(
+            root.path().join("build-order.json"),
+            r#"{"schema_version":1,"recipes":["easyconfigs/demo.eb","easyconfigs/demo.eb"]}"#,
+        )
+        .unwrap();
+
+        let error = load(root.path()).unwrap_err();
+        assert!(
+            error.msg.contains("lists recipe more than once"),
+            "{}",
+            error.msg
+        );
+    }
+
+    #[test]
+    fn build_order_recipe_cannot_escape_through_a_symbolic_link() {
+        let root = tempfile::tempdir().unwrap();
+        let bundle = root.path().join("bundle");
+        std::fs::create_dir_all(bundle.join("easyconfigs")).unwrap();
+        std::fs::write(
+            bundle.join("package.plan.json"),
+            r#"{"schema_version":1,"origin":"pypi","package":{"name":"demo"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            bundle.join("build-order.json"),
+            r#"{"schema_version":1,"recipes":["easyconfigs/demo.eb"]}"#,
+        )
+        .unwrap();
+        let outside = root.path().join("outside.eb");
+        std::fs::write(&outside, "name = 'outside'\n").unwrap();
+        std::os::unix::fs::symlink(&outside, bundle.join("easyconfigs/demo.eb")).unwrap();
+
+        let error = load(&bundle).unwrap_err();
+        assert!(
+            error.msg.contains("escapes the package-plan bundle"),
+            "{}",
+            error.msg
+        );
+    }
+
+    #[test]
+    fn discovered_recipe_tree_cannot_escape_through_a_symbolic_link() {
+        let root = tempfile::tempdir().unwrap();
+        let bundle = root.path().join("bundle");
+        let outside = root.path().join("outside");
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(
+            bundle.join("package.plan.json"),
+            r#"{"schema_version":1,"origin":"pypi","package":{"name":"demo"}}"#,
+        )
+        .unwrap();
+        std::fs::write(outside.join("demo.eb"), "name = 'outside'\n").unwrap();
+        std::os::unix::fs::symlink(&outside, bundle.join("easyconfigs")).unwrap();
+
+        let error = load(&bundle).unwrap_err();
+        assert!(
+            error.msg.contains("escapes the package-plan bundle"),
+            "{}",
+            error.msg
+        );
     }
 }

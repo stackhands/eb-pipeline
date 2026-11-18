@@ -48,7 +48,9 @@ case "$sub" in
       fi
       echo "{\"admitted\":true,\"attempt\":$n}"; exit 0
     fi
-    echo "{\"admitted\":false,\"attempt\":$n}"; exit 78;;
+    echo "{\"admitted\":false,\"attempt\":$n}"
+    [ -n "${STUB_ADMIT_TRAILER:-}" ] && printf '%s\n' "$STUB_ADMIT_TRAILER"
+    exit 78;;
   shard)
     echo "${EASYBUILD_FILTER_DEPS:-}" > "$D/shard.filterdeps"
     case "${STUB_SHARD:-ok}" in unsharded) exit 3;; fail) exit 1;; esac
@@ -664,6 +666,144 @@ fn the_result_records_how_long_each_line_phase_and_run_took() {
 }
 
 #[test]
+fn a_leading_dash_easystack_entry_uses_its_robot_path() {
+    let env = setup("[sources]\n");
+    let root = env.dir.path().join("robot");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("-Robot-1.0.eb"), "# robot-only easyconfig\n").unwrap();
+    write_exec(
+        &env.stubs.join("eb"),
+        r#"#!/bin/sh
+D="${STUB_DIR:?}"
+operand=
+robot=
+separator=
+for arg
+do
+  if [ -n "$separator" ]; then
+    [ -z "$operand" ] || exit 91
+    operand=$arg
+  else
+    case "$arg" in
+      --) separator=1;;
+      --robot=*) robot=${arg#--robot=};;
+    esac
+  fi
+done
+[ "$operand" = "-Robot-1.0.eb" ] || exit 92
+[ -n "$robot" ] && [ -f "$robot/$operand" ] || exit 93
+[ ! -e "$operand" ] || exit 94
+printf '%s\n' "$*" >> "$D/eb.calls"
+"#,
+    );
+    let easystack = format!(
+        "easyconfigs:\n  - '-Robot-1.0.eb':\n      options:\n        robot: '{}'\n",
+        root.display()
+    );
+    let plan_path = env.dir.path().join("plan.json");
+    let child = driver_named(
+        &env,
+        "edge.yml",
+        &easystack,
+        &[],
+        &["--plan-out", plan_path.to_str().unwrap()],
+    );
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let called = calls(&env, "eb.calls");
+    assert_eq!(called.len(), 2, "{called:?}");
+    assert_eq!(
+        called[0],
+        format!(
+            "--fetch --robot --robot={} -- -Robot-1.0.eb",
+            root.display()
+        )
+    );
+    assert!(
+        called[1].starts_with(&format!("--robot={} --tmp-logdir=", root.display())),
+        "{called:?}"
+    );
+    assert!(called[1].ends_with(" -- -Robot-1.0.eb"), "{called:?}");
+
+    let result: Value =
+        serde_json::from_slice(&std::fs::read(env.dir.path().join("result.json")).unwrap())
+            .unwrap();
+    assert_eq!(result["lines"][0]["easyconfig"], "-Robot-1.0.eb");
+    let plan: Value = serde_json::from_slice(&std::fs::read(plan_path).unwrap()).unwrap();
+    assert_eq!(
+        plan["phases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|phase| phase["name"] == "build")
+            .unwrap()["commands"][0]["argv"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap(),
+        "-Robot-1.0.eb"
+    );
+}
+
+#[test]
+fn easystack_special_names_stay_single_plan_arguments() {
+    let env = setup("");
+    let root = env.dir.path();
+    let plan_path = root.join("plan with λ.json");
+    let child = driver_named(
+        &env,
+        "stack with λ.yml",
+        "easyconfigs:\n  - space name.eb\n  - λ-name.eb\n",
+        &[],
+        &["--dry-run", "--plan-out", plan_path.to_str().unwrap()],
+    );
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        output.stderr,
+        b"INFO [run] cpu: dry run: nothing executed\n"
+    );
+    let bytes = std::fs::read(&plan_path).unwrap();
+    assert!(bytes.windows("λ".len()).any(|part| part == "λ".as_bytes()));
+    let plan: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        plan["list"],
+        root.join("stack with λ.yml").display().to_string()
+    );
+    let commands = plan["phases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|phase| phase["name"] == "build")
+        .unwrap()["commands"]
+        .as_array()
+        .unwrap();
+    let operands: Vec<&str> = commands
+        .iter()
+        .filter(|command| {
+            command["name"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("build:"))
+        })
+        .map(|command| command["argv"][1].as_str().unwrap())
+        .collect();
+    assert_eq!(operands, ["space name.eb", "λ-name.eb"]);
+    let stdout = output.stdout;
+    assert!(stdout
+        .windows(b"eb 'space name.eb'".len())
+        .any(|part| part == b"eb 'space name.eb'"));
+    assert!(stdout
+        .windows("eb 'λ-name.eb'".len())
+        .any(|part| part == "eb 'λ-name.eb'".as_bytes()));
+    assert!(calls(&env, "eb.calls").is_empty());
+}
+
+#[test]
 fn one_failed_line_exits_one_never_a_sum() {
     let env = setup("");
     let o = go(
@@ -786,6 +926,23 @@ fn admission_refused_after_n_attempts_exits_78() {
     assert_eq!(r["admission"][0]["attempts"], 3);
     assert_eq!(r["admission"][0]["outcome"], "refused");
     assert_eq!(r["counts"]["skipped"], 2);
+}
+
+#[test]
+fn admission_retries_keep_the_last_valid_json_report() {
+    let env = setup(ADMISSION);
+    let o = go(
+        &env,
+        LIST,
+        &[
+            ("STUB_ADMIT_OK_AT", "0"),
+            ("STUB_ADMIT_TRAILER", "{not json}"),
+        ],
+    );
+    assert_eq!(o.code, 78, "{}", o.stderr);
+    let admission = &o.result.unwrap()["admission"][0];
+    assert_eq!(admission["attempts"], 3);
+    assert_eq!(admission["last_json"], r#"{"admitted":false,"attempt":3}"#);
 }
 
 #[test]
@@ -1390,6 +1547,35 @@ fn sigterm_is_forwarded_and_exit_is_143() {
     assert_eq!(lines[0]["easyconfig"], "Foo-1.0-foss-2025a.eb");
     assert_eq!(lines[1]["status"], "skipped");
     assert_eq!(lines[1]["easyconfig"], "Bar-2.0-foss-2025a.eb");
+}
+
+#[test]
+fn sigterm_during_source_prefetch_records_every_line() {
+    let env = setup("[sources]\n");
+    let mut child = driver(&env, LIST, &[("STUB_EB_SLEEP", "1")], &[]);
+    let started = env.dir.path().join("started");
+    let t0 = Instant::now();
+    while !started.exists() {
+        assert!(t0.elapsed() < Duration::from_secs(20), "stub never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // SAFETY: the pid is the driver child this test started.
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+    }
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(143));
+    let result: Value =
+        serde_json::from_str(&std::fs::read_to_string(env.dir.path().join("result.json")).unwrap())
+            .unwrap();
+    let lines = result["lines"].as_array().unwrap();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines[0]["easyconfig"], "Foo-1.0-foss-2025a.eb");
+    assert_eq!(lines[0]["phase"], "sources");
+    assert_eq!(lines[0]["status"], "failed");
+    assert_eq!(lines[0]["exit_code"], 143);
+    assert_eq!(lines[1]["easyconfig"], "Bar-2.0-foss-2025a.eb");
+    assert_eq!(lines[1]["status"], "skipped");
 }
 
 #[test]
@@ -2413,6 +2599,34 @@ fn selected_list_feeds_the_shard_planner() {
 }
 
 #[test]
+fn selected_list_atomically_replaces_prior_materialization() {
+    let env = setup("[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n");
+    with_cpu_target(
+        &env,
+        "[targets.select]\noption = \"--only-targets\"\nvalue = \"cpu\"\nstrip = true\nwhen_absent = \"none\"\n",
+    );
+    let selected = env
+        .dir
+        .path()
+        .join("logs/20260101_000000/cpu/selected-cpu.list");
+    std::fs::create_dir_all(selected.parent().unwrap()).unwrap();
+    std::fs::write(&selected, "stale partial bytes\n").unwrap();
+    let old_inode = std::fs::metadata(&selected).unwrap().ino();
+
+    let output = go(
+        &env,
+        "Foo-1.0-foss-2025a.eb --only-targets=cpu --rebuild\n",
+        &[("STUB_SHARD", "fromlist")],
+    );
+    assert_eq!(output.code, 0, "{}", output.stderr);
+    assert_eq!(
+        std::fs::read_to_string(&selected).unwrap(),
+        "Foo-1.0-foss-2025a.eb --rebuild\n"
+    );
+    assert_ne!(std::fs::metadata(&selected).unwrap().ino(), old_inode);
+}
+
+#[test]
 fn run_can_reuse_a_saved_shard_plan() {
     let env = setup(&format!(
         "[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n{ADMISSION}"
@@ -2464,6 +2678,59 @@ fn run_can_reuse_a_saved_shard_plan() {
         ]
     );
     assert_eq!(o.result.unwrap()["sharded"], true);
+}
+
+#[test]
+fn dry_run_and_plan_out_use_the_saved_shard_units() {
+    let env = setup("[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n");
+    let saved = env.dir.path().join("saved-shards");
+    std::fs::create_dir(&saved).unwrap();
+    std::fs::write(
+        saved.join("plan.json"),
+        r#"{"shards":[{"name":"saved-01","file":"saved-01.list","inode_footprint":111}]}"#,
+    )
+    .unwrap();
+    std::fs::write(saved.join("saved-01.list"), "Foo-1.0-foss-2025a.eb\n").unwrap();
+    let plan_out = env.dir.path().join("run-plan.json");
+
+    let output = finish(
+        &env,
+        driver(
+            &env,
+            LIST,
+            &[],
+            &[
+                "--shard-plan",
+                saved.to_str().unwrap(),
+                "--plan-out",
+                plan_out.to_str().unwrap(),
+                "--dry-run",
+            ],
+        ),
+    );
+    assert_eq!(output.code, 0, "{}", output.stderr);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Foo-1.0-foss-2025a.eb"), "{stdout}");
+    assert!(!stdout.contains("Bar-2.0-foss-2025a.eb"), "{stdout}");
+    assert!(!stdout.contains("stack shard"), "{stdout}");
+    let plan: Value = serde_json::from_str(&std::fs::read_to_string(plan_out).unwrap()).unwrap();
+    let build = plan["phases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|phase| phase["name"] == "build")
+        .unwrap();
+    let builds = build["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|command| {
+            command["name"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("build:"))
+        })
+        .count();
+    assert_eq!(builds, 1, "{build}");
 }
 
 #[test]

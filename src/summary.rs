@@ -263,9 +263,13 @@ pub fn record(site: &str, entry: TargetSummary, run_dir: &Path) -> Result<Summar
     lock.lock().map_err(|e| shown(&lock_path, e))?;
     let path = run_dir.join(JSON);
     let earlier = match std::fs::read_to_string(&path) {
-        Ok(t) => serde_json::from_str::<Summary>(&t)
-            .ok()
-            .filter(|s| s.schema_version == SCHEMA_VERSION),
+        Ok(t) => match serde_json::from_str::<Summary>(&t) {
+            Ok(summary) if summary.schema_version == SCHEMA_VERSION => Some(summary),
+            Ok(_) => None,
+            Err(error) => {
+                return Err(format!("cannot parse {}: {error}", path.display()));
+            }
+        },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(shown(&path, e)),
     };
@@ -376,11 +380,17 @@ fn selected_runs(
             continue;
         }
         let summary = if dir.join(JSON).exists() {
-            read(&dir).map(|mut s| {
+            read(&dir).and_then(|mut s| {
                 if let Some(t) = target {
                     s.targets.retain(|x| x.name == t);
+                    if s.targets.is_empty() {
+                        return Err(format!("{} has no target `{t}`", dir.join(JSON).display()));
+                    }
+                    let codes: Vec<i32> = s.targets.iter().map(|entry| entry.exit_code).collect();
+                    s.exit_code = combined_code(&codes);
+                    s.status = status_of(s.exit_code).into();
                 }
-                s
+                Ok(s)
             })
         } else {
             Err(format!(

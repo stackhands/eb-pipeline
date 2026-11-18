@@ -20,7 +20,7 @@ pub fn check_url(url: &str) -> Result<(), String> {
     {
         return Err("must not hold a space, a quote, a backslash or a control character".into());
     }
-    if host(rest).is_empty() {
+    if host_name(host(rest)).is_empty() {
         return Err("names no host".into());
     }
     Ok(())
@@ -31,6 +31,13 @@ fn host(rest: &str) -> &str {
     let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let authority = &rest[..end];
     authority.rsplit_once('@').map_or(authority, |(_, h)| h)
+}
+
+fn host_name(host: &str) -> &str {
+    if let Some(bracketed) = host.strip_prefix('[') {
+        return bracketed.split_once(']').map_or("", |(name, _)| name);
+    }
+    host.split_once(':').map_or(host, |(name, _)| name)
 }
 
 /// The URL as eb-pipeline prints it: scheme and host only.

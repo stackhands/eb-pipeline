@@ -363,6 +363,7 @@ impl<'a> Scope<'a> {
                     .iter()
                     .chain(&r.shares_ro)
                     .chain(&r.shares_rw)
+                    .chain(r.env.values())
                     .any(|a| a.contains("{phase_dir}")) =>
             {
                 vec![format!("{}/{}", self.log_dir(), phase)]
@@ -650,13 +651,7 @@ pub fn licence_group(l: &Licences, name: &str, version: Option<&str>) -> Option<
     let g = l.groups.get(name)?;
     if let Some(limit) = l.below_version.get(name) {
         let lim = crate::util::parse_version(limit)?;
-        if let Some(v) = version.and_then(|v| {
-            let core: String = v
-                .chars()
-                .take_while(|c| c.is_ascii_digit() || *c == '.')
-                .collect();
-            crate::util::parse_version(core.trim_end_matches('.'))
-        }) {
+        if let Some(v) = version.and_then(crate::util::parse_version) {
             if crate::util::cmp_version(&v, &lim) != std::cmp::Ordering::Less {
                 return None;
             }
@@ -760,6 +755,50 @@ pub fn explain(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unparsed_package_version_keeps_its_licence_group() {
+        let licences: Licences = toml::from_str(
+            r#"
+[groups]
+Foo = "licensed"
+[below_version]
+Foo = "2"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            licence_group(&licences, "Foo", Some("1.9")),
+            Some("licensed".into())
+        );
+        assert_eq!(licence_group(&licences, "Foo", Some("2")), None);
+        assert_eq!(
+            licence_group(&licences, "Foo", Some("2rc1")),
+            Some("licensed".into())
+        );
+    }
+
+    #[test]
+    fn route_environment_phase_directories_are_created() {
+        let text = format!(
+            "{}\n[targets.route]\nkind = \"command\"\ncommand = \"/opt/route\"\n\
+             [targets.route.env]\nWORK = \"{{phase_dir}}\"\n",
+            include_str!("../templates/small-cluster.toml")
+        );
+        let site = crate::site::parse(&text).unwrap();
+        let scope = Scope {
+            site: &site,
+            site_file: None,
+            target: site.target("cpu").unwrap(),
+            build_type: None,
+            run_id: "run".into(),
+            log_stamp: "20261118_190000".into(),
+        };
+        assert_eq!(
+            scope.route_dirs("build"),
+            [format!("{}/build", scope.log_dir())]
+        );
+    }
 
     #[test]
     fn the_first_refusal_of_the_job_directory_wrapper_is_found_trimmed() {

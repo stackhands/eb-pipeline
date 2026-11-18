@@ -5,7 +5,7 @@ use crate::resolve::Scope;
 use crate::schema::OfflineAsset;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -201,6 +201,29 @@ pub fn prepare(root: &Path) -> Result<(), Fail> {
     })
 }
 
+fn validate_locators(entries: &BTreeSet<Entry>) -> Result<(), Fail> {
+    let mut locators = BTreeMap::new();
+    for entry in entries {
+        let key = (
+            entry.url.as_str(),
+            entry.consumer.as_str(),
+            entry.local_name.as_str(),
+        );
+        if let Some(earlier) = locators.insert(key, entry.sha256.as_str()) {
+            if earlier != entry.sha256 {
+                return Err(Fail::new(
+                    exit::FAILED,
+                    format!(
+                        "conflicting offline locator {} for consumer {} and local name {}",
+                        entry.url, entry.consumer, entry.local_name
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Copy prefetched EasyBuild files and configured assets into `root`, then
 /// atomically write their checksum index.
 pub fn write(root: &Path, scope: &Scope<'_>, assets: &[OfflineAsset]) -> Result<Manifest, Fail> {
@@ -307,6 +330,7 @@ pub fn write(root: &Path, scope: &Scope<'_>, assets: &[OfflineAsset]) -> Result<
             object: store(root, path, &digest)?,
         });
     }
+    validate_locators(&entries)?;
     let manifest = Manifest {
         schema_version: 1,
         kind: "offline-bundle",
@@ -333,4 +357,27 @@ pub fn write(root: &Path, scope: &Scope<'_>, assets: &[OfflineAsset]) -> Result<
         )
     })?;
     Ok(manifest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_locators, Entry};
+    use std::collections::BTreeSet;
+
+    fn entry(digest: &str) -> Entry {
+        Entry {
+            url: "easybuild-source:conflict.tar.gz".into(),
+            sha256: digest.into(),
+            local_name: "conflict.tar.gz".into(),
+            consumer: "easybuild".into(),
+            object: format!("objects/sha256/{digest}"),
+        }
+    }
+
+    #[test]
+    fn conflicting_consumer_locators_are_refused() {
+        let entries = BTreeSet::from([entry("first"), entry("second")]);
+        let failure = validate_locators(&entries).unwrap_err();
+        assert!(failure.msg.contains("conflicting offline locator"));
+    }
 }

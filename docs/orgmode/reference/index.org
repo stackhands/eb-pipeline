@@ -12,6 +12,7 @@ Each page states facts in the order the thing itself has them.
    :maxdepth: 1
 
    cli
+   init
    cvmfs
    test-map
    junit
@@ -23,5 +24,6 @@ Each page states facts in the order the thing itself has them.
    templates
    environment
    exit-status
+   from-commit-exit-status
    api
 #+end_export

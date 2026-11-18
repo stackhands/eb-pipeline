@@ -10,7 +10,7 @@ use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::os::fd::AsRawFd;
-use std::os::unix::process::CommandExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitCode, ExitStatus};
 use std::time::{Duration, Instant};
@@ -131,7 +131,8 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 if metrics_file.is_some() {
                     return Err("--metrics-file may be given only once".into());
                 }
-                let path = separate_value(&mut words, "--metrics-file requires PATH")?;
+                let path =
+                    eb_pipeline::util::separate_value(&mut words, "--metrics-file requires PATH")?;
                 if path.is_empty() {
                     return Err("--metrics-file PATH must not be empty".into());
                 }
@@ -141,7 +142,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 if tag.is_some() {
                     return Err("`--tag` may be given only once".into());
                 }
-                let name = separate_value(&mut words, "`--tag` requires NAME")?;
+                let name = eb_pipeline::util::separate_value(&mut words, "`--tag` requires NAME")?;
                 if name.is_empty() {
                     return Err("`--tag` must not be empty".into());
                 }
@@ -151,7 +152,10 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 if tag_description.is_some() {
                     return Err("`--tag-description` may be given only once".into());
                 }
-                let text = separate_value(&mut words, "`--tag-description` requires TEXT")?;
+                let text = eb_pipeline::util::separate_value(
+                    &mut words,
+                    "`--tag-description` requires TEXT",
+                )?;
                 if text.is_empty() {
                     return Err("`--tag-description` must not be empty".into());
                 }
@@ -161,29 +165,45 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 if verify_cmd.is_some() {
                     return Err("`--verify-cmd` may be given only once".into());
                 }
-                verify_cmd = Some(separate_value(&mut words, "`--verify-cmd` requires CMD")?);
+                verify_cmd = Some(eb_pipeline::util::separate_value(
+                    &mut words,
+                    "`--verify-cmd` requires CMD",
+                )?);
             }
             "--sync-timeout" => {
-                let value = separate_value(&mut words, "`--sync-timeout` requires SEC")?;
+                let value =
+                    eb_pipeline::util::separate_value(&mut words, "`--sync-timeout` requires SEC")?;
                 set_timeout(&mut sync_timeout, "--sync-timeout", Some(value))?;
             }
             "--verify-timeout" => {
-                let value = separate_value(&mut words, "`--verify-timeout` requires SEC")?;
+                let value = eb_pipeline::util::separate_value(
+                    &mut words,
+                    "`--verify-timeout` requires SEC",
+                )?;
                 set_timeout(&mut verify_timeout, "--verify-timeout", Some(value))?;
             }
             "--publish-timeout" => {
-                let value = separate_value(&mut words, "`--publish-timeout` requires SEC")?;
+                let value = eb_pipeline::util::separate_value(
+                    &mut words,
+                    "`--publish-timeout` requires SEC",
+                )?;
                 set_timeout(&mut publish_timeout, "--publish-timeout", Some(value))?;
             }
             "--check-timeout" => {
-                let value = separate_value(&mut words, "`--check-timeout` requires SEC")?;
+                let value = eb_pipeline::util::separate_value(
+                    &mut words,
+                    "`--check-timeout` requires SEC",
+                )?;
                 set_timeout(&mut check_timeout, "--check-timeout", Some(value))?;
             }
             "--archive-manifest" => {
                 if archive_manifest.is_some() {
                     return Err("`--archive-manifest` was given twice".into());
                 }
-                let path = separate_value(&mut words, "`--archive-manifest` needs a path")?;
+                let path = eb_pipeline::util::separate_value(
+                    &mut words,
+                    "`--archive-manifest` needs a path",
+                )?;
                 if path.is_empty() || path == "--" {
                     return Err("`--archive-manifest` needs a path".into());
                 }
@@ -301,16 +321,6 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
         check_timeout,
         sync,
     })
-}
-
-fn separate_value(
-    words: &mut impl Iterator<Item = String>,
-    missing: &str,
-) -> Result<String, String> {
-    words
-        .next()
-        .filter(|value| !value.is_empty() && !value.starts_with("--"))
-        .ok_or_else(|| missing.to_string())
 }
 
 fn set_timeout(
@@ -811,6 +821,7 @@ fn command_start_exit(error: &io::Error) -> u8 {
 fn exit_code(status: ExitStatus) -> u8 {
     status
         .code()
+        .or_else(|| status.signal().map(|signal| 128 + signal))
         .and_then(|code| u8::try_from(code).ok())
         .unwrap_or(1)
 }

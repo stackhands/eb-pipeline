@@ -28,6 +28,14 @@ pub fn store(site: &Site, sbom: &Sbom, run_dir: &Path) -> Result<PathBuf, Fail> 
         )
     })?;
     let out = run_dir.join(FILE);
+    if let Err(error) = std::fs::remove_file(&out) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            return Err(Fail::new(
+                exit::FAILED,
+                format!("cannot replace {}: {error}", out.display()),
+            ));
+        }
+    }
     let log_path = run_dir.join("sbom.log");
     let log = std::fs::File::create(&log_path).map_err(|e| {
         Fail::new(
@@ -70,11 +78,14 @@ pub fn store(site: &Site, sbom: &Sbom, run_dir: &Path) -> Result<PathBuf, Fail> 
             ),
         ));
     }
-    if !out.is_file() {
+    let wrote_document =
+        std::fs::metadata(&out).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0);
+    if !wrote_document {
+        let _ = std::fs::remove_file(&out);
         return Err(Fail::new(
             exit::FAILED,
             format!(
-                "eb-stack stack sbom --lock {lock} wrote no {}",
+                "eb-stack stack sbom --lock {lock} wrote no non-empty {}",
                 out.display()
             ),
         ));

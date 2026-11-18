@@ -2,7 +2,9 @@
 
 mod common;
 
-use common::{code, eb_pipeline, setup, stderr};
+use common::{code, eb_pipeline, setup, stderr, write_exec};
+use std::fs::OpenOptions;
+use std::process::{Command, Stdio};
 
 #[test]
 fn ordinary_check_matches_main_and_starts_no_from_commit_process() {
@@ -79,6 +81,52 @@ fn from_commit_propagates_eb_stack_failure() {
 }
 
 #[test]
+fn from_commit_preserves_an_eb_stack_signal_exit_code() {
+    let t = setup("");
+    write_exec(&t.stubs.join("eb-stack"), "#!/bin/sh\nkill -TERM $$\n");
+    let list = t.root().join("stack.yaml");
+    std::fs::write(&list, "easyconfigs: []\n").unwrap();
+    let list = list.display().to_string();
+    let out = eb_pipeline(&t, &["check", "--list", &list, "--check-from-commit"], &[]);
+    assert_eq!(code(&out), 143, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("from-commit failed with status 143"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn a_missing_eb_stack_is_a_usage_error() {
+    let t = setup(
+        r#"
+[site.tools.eb_stack]
+bin = "@ROOT@/missing-eb-stack"
+"#,
+    );
+    let list = t.root().join("stack.yaml");
+    std::fs::write(&list, "easyconfigs: []\n").unwrap();
+    let output = eb_pipeline(
+        &t,
+        &[
+            "check",
+            "--site",
+            &t.site.display().to_string(),
+            "--list",
+            &list.display().to_string(),
+            "--check-from-commit",
+        ],
+        &[],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("cannot run"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
 fn check_from_commit_refuses_a_plain_build_list() {
     let t = setup("");
     let list = t.root().join("site.list");
@@ -97,4 +145,42 @@ fn plain_check_still_requires_a_site() {
     let out = eb_pipeline(&t, &["check"], &[]);
     assert_eq!(code(&out), 2);
     assert!(stderr(&out).contains("--site") || out.status.code() == Some(2));
+}
+
+#[test]
+fn from_commit_reports_a_stdout_write_failure() {
+    let t = setup("");
+    write_exec(
+        &t.stubs.join("eb-stack"),
+        "#!/bin/sh\ndd if=/dev/zero bs=65536 count=2 2>/dev/null | tr '\\0' x\n",
+    );
+    let list = t.root().join("stack.yml");
+    std::fs::write(&list, "easyconfigs: []\n").unwrap();
+    let path = format!(
+        "{}:{}",
+        t.stubs.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let full = OpenOptions::new().write(true).open("/dev/full").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"))
+        .args([
+            "check",
+            "--list",
+            &list.display().to_string(),
+            "--check-from-commit",
+        ])
+        .env("PATH", path)
+        .env("STUB_DIR", t.root())
+        .stdin(Stdio::null())
+        .stdout(full)
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
+
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("cannot print eb-stack output"),
+        "{}",
+        stderr(&output)
+    );
 }

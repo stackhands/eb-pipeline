@@ -69,10 +69,11 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-[ -n "${STUB_EB_STACK_FAIL:-}" ] && { echo "error: stub failure"; exit 1; }
+[ -n "${STUB_EB_STACK_FAIL:-}" ] && { echo "error: stub failure"; exit "$STUB_EB_STACK_FAIL"; }
 [ "$cmd" = stack-sbom ] && [ -n "${STUB_SBOM_DELAY:-}" ] && sleep "$STUB_SBOM_DELAY"
 [ "$cmd" = stack-sbom ] && [ -n "${STUB_SBOM_SIGNAL:-}" ] && kill "-$STUB_SBOM_SIGNAL" "$$"
 [ "$cmd" = stack-sbom ] && [ -n "${STUB_SBOM_FAIL:-}" ] && { echo "error: sbom"; exit 1; }
+[ "$cmd" = stack-sbom ] && [ -n "${STUB_SBOM_SKIP_WRITE:-}" ] && exit 0
 mkdir -p "$out"
 touch "$D/deps.tsv" "$D/order.txt" "$D/missing.txt"
 case "$cmd" in

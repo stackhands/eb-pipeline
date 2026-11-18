@@ -7,6 +7,7 @@ use crate::schema::{Site, Target};
 use crate::tools::Tool;
 use clap::ValueEnum;
 use std::collections::BTreeSet;
+use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -80,6 +81,29 @@ fn source_paths(site: &Site, targets: &[&Target]) -> Vec<String> {
         .collect()
 }
 
+fn validate_list_path(list: &Path, checks: &[StackCheck]) -> Result<(), Fail> {
+    let provided = checks.contains(&StackCheck::Provided);
+    if provided && checks.iter().any(|check| *check != StackCheck::Provided) {
+        return Err(Fail::usage(
+            "--stack-checks cannot combine provided with easystack checks because they require different input formats",
+        ));
+    }
+    if provided {
+        return Ok(());
+    }
+    match list
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+    {
+        Some(extension) if extension == "yml" || extension == "yaml" => Ok(()),
+        _ => Err(Fail::usage(format!(
+            "--stack-checks needs an easystack .yml or .yaml path, not {}",
+            list.display()
+        ))),
+    }
+}
+
 /// Build the real `eb-stack` argv for one requested check.
 pub fn argv(site: &Site, list: &Path, targets: &[&Target], check: StackCheck) -> Vec<String> {
     let mut argv = vec!["stack".into(), check.subcommand().into()];
@@ -137,10 +161,12 @@ pub fn run(
     target: Option<&str>,
     checks: &[StackCheck],
 ) -> Result<(), Fail> {
+    validate_list_path(list, checks)?;
     let targets = selected_targets(site, target)?;
     let bin = Tool::EbStack.bin(site);
     let label = target.unwrap_or("-");
     let mut failed = Vec::new();
+    let mut codes = Vec::new();
     for check in checks {
         let name = check.subcommand();
         log("INFO", "stack-check", label, &format!("running {name}"));
@@ -155,7 +181,8 @@ pub fn run(
             Ok(status) => {
                 let code = status
                     .code()
-                    .map_or_else(|| "signal".into(), |code| code.to_string());
+                    .or_else(|| status.signal().map(|signal| 128 + signal))
+                    .unwrap_or(exit::FAILED);
                 log(
                     "ERROR",
                     "stack-check",
@@ -163,6 +190,7 @@ pub fn run(
                     &format!("{name} failed with status {code}"),
                 );
                 failed.push(name);
+                codes.push(code);
             }
             Err(err) => {
                 log(
@@ -172,6 +200,7 @@ pub fn run(
                     &format!("cannot start {bin} for {name}: {err}"),
                 );
                 failed.push(name);
+                codes.push(exit::FAILED);
             }
         }
     }
@@ -179,7 +208,7 @@ pub fn run(
         Ok(())
     } else {
         Err(Fail::new(
-            exit::FAILED,
+            crate::summary::combined_code(&codes),
             format!("eb-stack checks failed: {}", failed.join(", ")),
         ))
     }

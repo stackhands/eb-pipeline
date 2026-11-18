@@ -1,9 +1,16 @@
 //! After a clean build, `eb-stack stack sbom --lock` writes CycloneDX beside the summary.
 
 mod common;
-use common::{code, run, run_extra, setup, stderr, STAMP};
+use common::{code, run, run_extra, setup, stderr, write_exec, STAMP};
 
 const LIST: &str = "Foo-1.0-foss-2025a.eb\n";
+const EMPTY_SBOM: &str = r#"#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--out" ]; then out=$2; shift; fi
+  shift
+done
+: > "$out"
+"#;
 
 #[test]
 fn a_clean_build_stores_the_cyclonedx_file_beside_the_summary() {
@@ -62,6 +69,36 @@ fn an_sbom_command_that_fails_fails_the_run_and_leaves_no_document() {
     assert_eq!(code(&o), 1, "{}", stderr(&o));
     assert!(stderr(&o).contains("stack sbom"), "{}", stderr(&o));
     assert!(!t.run_dir(STAMP).join("sbom.cdx.json").exists());
+    assert_eq!(t.summary(STAMP)["exit_code"], 1);
+}
+
+#[test]
+fn a_success_without_a_new_document_does_not_accept_a_stale_one() {
+    let t = setup("[sbom]\nlock = \"@ROOT@/stack.lock.json\"\n");
+    let document = t.run_dir(STAMP).join("sbom.cdx.json");
+    std::fs::create_dir_all(document.parent().unwrap()).unwrap();
+    std::fs::write(&document, "stale\n").unwrap();
+    let output = run(&t, "cpu", STAMP, LIST, &[("STUB_SBOM_SKIP_WRITE", "1")]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(stderr(&output).contains("wrote no"), "{}", stderr(&output));
+    assert!(!document.exists());
+    assert_eq!(t.summary(STAMP)["exit_code"], 1);
+}
+
+#[test]
+fn a_success_with_an_empty_document_fails_the_run() {
+    let t = setup("[sbom]\nlock = \"@ROOT@/stack.lock.json\"\n");
+    write_exec(&t.stubs.join("eb-stack"), EMPTY_SBOM);
+    let output = run(&t, "cpu", STAMP, LIST, &[]);
+    let document = t.run_dir(STAMP).join("sbom.cdx.json");
+
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("wrote no non-empty"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!document.exists());
     assert_eq!(t.summary(STAMP)["exit_code"], 1);
 }
 

@@ -116,10 +116,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
             }
             "--fail-on-failure" => fail_on_failure = true,
             "--result" | "--reframe-report" | "--property" | "--out" => {
-                let value = words
-                    .next()
-                    .filter(|v| !v.is_empty())
-                    .ok_or_else(|| format!("{word} needs a value"))?;
+                let value = util::separate_value(&mut words, &format!("{word} needs a value"))?;
                 assign(
                     &word,
                     value,
@@ -646,7 +643,7 @@ fn disambiguate(names: &[String]) -> Vec<String> {
     let mut seen = BTreeMap::<String, usize>::new();
     let mut out = Vec::with_capacity(names.len());
     for name in names {
-        let n = seen.entry(name.clone()).or_insert(0);
+        let n = seen.entry(escape_attr(name)).or_insert(0);
         *n += 1;
         if *n == 1 {
             out.push(name.clone());

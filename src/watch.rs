@@ -1052,7 +1052,7 @@ pub fn apply_abi_changes(
         .chain(u.local_files.iter())
         .map(|(f, m)| (f.as_str(), m.as_str()))
         .collect();
-    for v in verdicts.iter_mut() {
+    for v in verdicts.iter_mut().filter(|v| v.action != "gone") {
         for r in rows.iter().filter(|r| r.dependent == v.module) {
             for f in r.changed.split(", ") {
                 let mapped = by_file.get(f).copied().unwrap_or(f);
@@ -1393,15 +1393,17 @@ pub fn settle(
         recorded = record(p, &work, probe, revision, &rebuilt, false)?;
         let _ = std::fs::remove_dir_all(&work);
     }
+    let local = vec![local_modules_dir(p)];
     update(&dir, target, |s| {
         if let Some(a) = abi {
             s.abi_baseline = Some(a.clone());
         }
         for v in verdicts {
             match v.action.as_str() {
-                "gone" => {
+                "gone" if eessi::find(&local, &v.module).is_none() => {
                     s.installs.remove(&v.module);
                 }
+                "gone" => {}
                 "keep" | "unaffected" => {
                     let Some(i) = s.installs.get_mut(&v.module) else {
                         continue;

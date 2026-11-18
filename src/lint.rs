@@ -67,7 +67,11 @@ fn check_value(key: &str, v: &str, deny: &[String], out: &mut Vec<String>) {
     }
     for word in v.split_whitespace() {
         if let Some((_, rest)) = word.split_once("://") {
-            let host = rest.split(['/', ':']).next().unwrap_or("");
+            let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+            let host_port = authority
+                .rsplit_once('@')
+                .map_or(authority, |(_, host)| host);
+            let host = host_port.split(':').next().unwrap_or("");
             if !host_ok(host) {
                 out.push(format!(
                     "{key}: host `{host}` is not under example.org or .invalid"
@@ -139,6 +143,7 @@ d = "-p batch -N 1 -t 15:00"
 e = "https://example.org/x"
 f = "user@node.example.org"
 g = "foss/2026.1 GCC:-march=x86-64-v3 Foo-1.0-foss-2025a.eb"
+h = "https://user:password@hooks.example.org/x"
 "#;
         assert!(lint_example(t).is_empty(), "{:?}", lint_example(t));
     }

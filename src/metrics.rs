@@ -87,6 +87,11 @@ pub fn from_result(v: &Value) -> Result<Status, Fail> {
             .as_object()
             .ok_or_else(|| Fail::usage("result.counts must be an object"))?;
         for (key, value) in raw {
+            if !LINE_STATUSES.contains(&key.as_str()) {
+                return Err(Fail::usage(format!(
+                    "result.counts has unknown status `{key}`"
+                )));
+            }
             let n = value.as_u64().ok_or_else(|| {
                 Fail::usage(format!(
                     "result.counts.{key} must be a non-negative integer"
@@ -456,6 +461,20 @@ eb_pipeline_phase{{{id},phase=\"checks\",status=\"skipped\"}} 1
         v["counts"]["failed"] = serde_json::json!(1.5);
         let err = from_result(&v).unwrap_err();
         assert!(err.msg.contains("result.counts.failed"), "{}", err.msg);
+    }
+
+    #[test]
+    fn an_unknown_line_status_is_refused() {
+        let mut v = result();
+        v["counts"]["sucess"] = serde_json::json!(1);
+        let err = from_result(&v).unwrap_err();
+        assert_eq!(err.code, 2);
+        assert!(
+            err.msg
+                .contains("result.counts has unknown status `sucess`"),
+            "{}",
+            err.msg
+        );
     }
 
     #[test]

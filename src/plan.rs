@@ -9,7 +9,7 @@ use crate::resolve::{Role, Scope};
 use crate::tools::Tool;
 use crate::util::{list_word, parse_list, quote, ListLine};
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// One subprocess the driver starts.
@@ -164,6 +164,19 @@ pub fn wants_rebuild(line: &ListLine) -> bool {
     line.args
         .iter()
         .any(|a| a == "--rebuild" || a == "-f" || a == "--force")
+}
+
+/// Append EasyBuild's options and one easyconfig operand. A leading-dash
+/// operand follows `--`; ordinary lines retain their historical order.
+fn push_eb_line(argv: &mut Vec<String>, easyconfig: &str, options: Vec<String>) {
+    if easyconfig.starts_with('-') {
+        argv.extend(options);
+        argv.push("--".into());
+        argv.push(easyconfig.into());
+    } else {
+        argv.push(easyconfig.into());
+        argv.extend(options);
+    }
 }
 
 /// Line options for a fetch with the robot disabled: a bare `--robot` goes,
@@ -604,14 +617,16 @@ impl<'a> Planner<'a> {
             .map(|s| s.extra_args.clone())
             .unwrap_or_default();
         let args = line.args.iter().filter(|x| !x.starts_with("--rebuild"));
-        let mut a = vec!["eb".to_string(), line.easyconfig.clone(), "--fetch".into()];
+        let mut options = vec!["--fetch".into()];
         if extra.iter().any(|x| x == "--disable-robot") {
-            a.extend(without_robot(args));
+            options.extend(without_robot(args));
         } else {
-            a.push("--robot".into());
-            a.extend(args.cloned());
+            options.push("--robot".into());
+            options.extend(args.cloned());
         }
-        a.extend(extra);
+        options.extend(extra);
+        let mut a = vec!["eb".to_string()];
+        push_eb_line(&mut a, &line.easyconfig, options);
         let mut env = self.scope.line_env(&line.easyconfig);
         env.extend(self.scope.fetch_env());
         env.extend(self.scope.hardware_env(unit_role));
@@ -885,11 +900,11 @@ impl<'a> Planner<'a> {
             inner = vec!["eb".into()];
             note = self.in_place_reason(line);
         }
-        inner.push(line.easyconfig.clone());
-        inner.extend(line.args.iter().cloned());
+        let mut options = line.args.clone();
         if self.site().logs_on().is_some_and(|l| l.keep_failed) {
-            inner.push(format!("--tmp-logdir={}", self.tmp_logdir(stem)));
+            options.push(format!("--tmp-logdir={}", self.tmp_logdir(stem)));
         }
+        push_eb_line(&mut inner, &line.easyconfig, options);
         let mut env = self.scope.line_env(&line.easyconfig);
         env.extend(self.scope.hardware_env(role));
         env.extend(self.route_env(role, "build"));
@@ -1290,7 +1305,16 @@ pub fn build_plan(
     } else if boundary && !kept.is_empty() {
         shard_cmds.push(p.boundary_shard_cmd()?);
     }
-    phases.push(if shard_cmds.is_empty() {
+    phases.push(if shard_units.is_some() {
+        PlanPhase {
+            name: "shard".into(),
+            status: "reused".into(),
+            reason: Some("using the supplied shard plan".into()),
+            role: None,
+            env: BTreeMap::new(),
+            commands: vec![],
+        }
+    } else if shard_cmds.is_empty() {
         skip("shard", "not configured")
     } else {
         planned("shard", Some(Role::Plan), shard_cmds)
@@ -1489,6 +1513,12 @@ pub fn read_units(dir: &Path) -> Result<Vec<Unit>, Fail> {
     add("prelude".into(), Role::Build, &v["prelude"])?;
     if let Some(shards) = v["shards"].as_array() {
         for (i, s) in shards.iter().enumerate() {
+            if !s["file"].is_string() {
+                return Err(Fail::new(
+                    exit::FAILED,
+                    format!("{}: shards[{i}].file must be a string", plan_path.display()),
+                ));
+            }
             let name = s["name"]
                 .as_str()
                 .map(str::to_string)
@@ -1496,12 +1526,56 @@ pub fn read_units(dir: &Path) -> Result<Vec<Unit>, Fail> {
             add(name, Role::Build, s)?;
         }
     }
+    if units.is_empty() {
+        return Err(Fail::new(
+            exit::FAILED,
+            format!("{} contains no build units", plan_path.display()),
+        ));
+    }
+    let mut names = BTreeSet::new();
+    for unit in &units {
+        if !names.insert(&unit.name) {
+            return Err(Fail::new(
+                exit::FAILED,
+                format!(
+                    "{} contains duplicate unit name `{}`",
+                    plan_path.display(),
+                    unit.name
+                ),
+            ));
+        }
+    }
     Ok(units)
 }
 
 #[cfg(test)]
 mod read_tests {
-    use super::read_units;
+    use super::{push_eb_line, read_units};
+
+    #[test]
+    fn easybuild_operand_order_changes_only_for_a_leading_dash() {
+        let mut ordinary = vec!["eb".to_string()];
+        push_eb_line(&mut ordinary, "Foo-1.0.eb", vec!["--rebuild".into()]);
+        assert_eq!(
+            ordinary,
+            ["eb", "Foo-1.0.eb", "--rebuild"],
+            "ordinary argv bytes and order stay unchanged"
+        );
+
+        let mut staged = vec!["eb-staged-rebuild".into(), "run".into(), "--".into()];
+        push_eb_line(&mut staged, "-Foo-1.0.eb", vec!["--rebuild".into()]);
+        assert_eq!(
+            staged,
+            [
+                "eb-staged-rebuild",
+                "run",
+                "--",
+                "--rebuild",
+                "--",
+                "-Foo-1.0.eb"
+            ]
+        );
+    }
 
     #[test]
     fn a_shard_plan_cannot_name_a_file_outside_its_directory() {
@@ -1539,6 +1613,39 @@ mod read_tests {
         assert_eq!(units.len(), 1);
         assert_eq!(units[0].lines[0].easyconfig, "Foo-1.0.eb");
         assert_eq!(units[0].footprint, Some(3));
+    }
+
+    #[test]
+    fn a_shard_plan_cannot_silently_drop_a_shard_without_a_file() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("one.list"), "Foo-1.0.eb\n").unwrap();
+        std::fs::write(
+            root.path().join("plan.json"),
+            r#"{"shards":[{"name":"one","file":"one.list"},{"name":"two"}]}"#,
+        )
+        .unwrap();
+
+        let error = read_units(root.path()).unwrap_err();
+        assert!(error.msg.contains("shards[1].file"), "{}", error.msg);
+    }
+
+    #[test]
+    fn a_shard_plan_cannot_reuse_a_unit_name() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("one.list"), "Foo-1.0.eb\n").unwrap();
+        std::fs::write(root.path().join("two.list"), "Bar-2.0.eb\n").unwrap();
+        std::fs::write(
+            root.path().join("plan.json"),
+            r#"{"shards":[{"name":"same","file":"one.list"},{"name":"same","file":"two.list"}]}"#,
+        )
+        .unwrap();
+
+        let error = read_units(root.path()).unwrap_err();
+        assert!(
+            error.msg.contains("duplicate unit name `same`"),
+            "{}",
+            error.msg
+        );
     }
 }
 

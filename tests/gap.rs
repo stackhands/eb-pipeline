@@ -2,7 +2,8 @@
 
 mod common;
 
-use common::{code, eb_pipeline, setup, stderr, stdout, write_exec};
+use common::{closed_stdout, code, eb_pipeline, setup, stderr, stdout, write_exec};
+use std::process::{Command, Stdio};
 
 const EB_STACK_GAP: &str = r#"#!/bin/sh
 echo "$*" >> "$STUB_DIR/gap.calls"
@@ -16,6 +17,9 @@ case "$1 $2" in
     printf 'route\tname\nrecipe\tLocal\n' > "$out/gap.tsv"
     printf 'Local-1.0-GCCcore-15.2.0.eb\n' > "$out/roots.txt"
     echo "gap warning" >&2
+    if [ -n "${STUB_GAP_LARGE_OUTPUT:-}" ]; then
+      dd if=/dev/zero bs=65536 count=2 2>/dev/null | tr '\0' x
+    fi
     echo "site=1 in-stack=0 filtered=0 open-layer=0 recipe=1 open-easyconfigs=0 no-recipe=0 excluded=0 out=$out"
     exit "${STUB_GAP_EXIT:-0}"
     ;;
@@ -153,6 +157,37 @@ fn gap_options_require_each_other() {
 }
 
 #[test]
+fn a_missing_eb_stack_is_a_usage_error() {
+    let t = configured();
+    let mut site = std::fs::read_to_string(&t.site).unwrap();
+    site.push_str(&format!(
+        "\n[site.tools.eb_stack]\nbin = \"{}/missing-eb-stack\"\n",
+        t.root().display()
+    ));
+    std::fs::write(&t.site, site).unwrap();
+    let out_dir = t.root().join("gap-report");
+    let output = eb_pipeline(
+        &t,
+        &[
+            "check",
+            "--site",
+            &t.site.display().to_string(),
+            "--gap-out",
+            &out_dir.display().to_string(),
+            "--generation",
+            "2026.1",
+        ],
+        &[("GAP_BASE", "/base/accel")],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("cannot run"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
 fn shadow_failure_is_returned_after_its_json_is_written() {
     let t = configured();
     let out_dir = t.root().join("gap-report");
@@ -222,4 +257,37 @@ fn a_gap_failure_stops_before_shadow() {
     assert_eq!(code(&out), 2, "{}", stderr(&out));
     assert_eq!(t.calls("gap").lines().count(), 1);
     assert!(!out_dir.join("shadow.json").exists());
+}
+
+#[test]
+fn a_closed_gap_output_consumer_does_not_fail_check() {
+    let t = configured();
+    let out_dir = t.root().join("gap-report");
+    let path = format!(
+        "{}:{}",
+        t.stubs.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"))
+        .args([
+            "check",
+            "--site",
+            &t.site.display().to_string(),
+            "--gap-out",
+            &out_dir.display().to_string(),
+            "--generation",
+            "2026.1",
+        ])
+        .env("PATH", path)
+        .env("STUB_DIR", t.root())
+        .env("GAP_BASE", "/base/accel")
+        .env("STUB_GAP_LARGE_OUTPUT", "1")
+        .stdin(Stdio::null())
+        .stdout(closed_stdout())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
+
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(out_dir.join("gap.stdout.log").is_file());
 }

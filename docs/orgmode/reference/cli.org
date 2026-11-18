@@ -183,7 +183,8 @@ With it, =check= runs every selected command directly, without =scheduler.launch
 Repeated path and architecture values are passed once.
 The configured =[site.tools.eb_stack].bin= is used, or =eb-stack= on the executable search path (=PATH=).
 All requested subprocesses run even after one fails.
-If one or more exit nonzero or cannot start, =check= reports each failure and exits 1.
+If one or more exit nonzero or cannot start, =check= reports each failure and combines their statuses with the same signal, usage, failure, refusal and temporary-failure priority as a run summary.
+A command that cannot start contributes exit 1.
 
 With =--gap-out=, =check= passes every target's resolved =modules_root/all= as =stack gap --site=.
 It takes European Environment for Scientific Software Installations (EESSI) base module trees from =shards.installed_modules_dirs=, the variables named by =shards.installed_modules_dirs_from_env=, and =watch.modules_dirs=.
@@ -288,14 +289,17 @@ Exit 2 means the file is missing, is not JSON, or its =kind= is not =result=.
 | =--run-id ID=       | =EB_PIPELINE_RUN_ID=     | The run label passed to the tools; =<run-id>= when absent.                                                                                                                       |
 | =--log-stamp STAMP= | =EB_PIPELINE_LOG_STAMP=  | The name of the run's directory under the log root, a Coordinated Universal Time (UTC) as =YYYYMMDD_HHMMSS=; =<log-stamp>= when absent. Any other value is refused, with exit 2. |
 | =--out FILE=        |                          | Atomically replace =FILE= with the complete plan instead of writing stdout; =-= is stdout. =FILE= must differ from the site and list files.                                        |
-| =--shard-plan DIR=  |                          | Read =DIR/plan.json=, written by =eb-stack stack shard=, and plan its units and their lines instead of the list as one unit.                                                     |
+| =--shard-plan DIR=  |                          | Read the non-empty units from =DIR/plan.json=, written by =eb-stack stack shard=, without planning another shard-planner command.                                                   |
 | =--offline-bundle DIR= |                       | Add the opt-in offline planner calls to the sources phase and name the bundle that =run= writes. Needs an active =[sources]= table, a source path and configured easyconfig trees. |
 | =--require-offline= |                          | Place =sources.offline_wrapper= before admission, build, check, cache, log and notification commands. Requires =--offline-bundle= and a non-empty wrapper.                       |
+
+The =--list= or =--package-plan= path must be valid UTF-8 because the plan and result record it as a JSON string.
 
 An easystack uses the same YAML anchors, aliases and =<<= merge keys as EasyBuild.
 Comments do not become data, an empty =options= mapping adds no arguments, duplicate entries stay in file order, and top-level keys other than =easyconfigs= are ignored.
 Each easyconfig entry may contain only its =options= mapping after YAML merges are applied.
 Syntax, duplicate-key and encoding errors name the input as =FILE:LINE:COLUMN=.
+A duplicate-key error points to the repeated key in its own mapping.
 UTF-8 byte-order marks and CRLF line endings are accepted.
 
 *** run
@@ -308,7 +312,7 @@ UTF-8 byte-order marks and CRLF line endings are accepted.
 | =--plan-out FILE=      | Atomically replace =FILE= with the plan computed by this invocation before any phase command starts. A dry run writes it too. =FILE= must differ from every result and metrics path.                                               |
 | =--metrics-file FILE=  | Atomically replace =FILE= with Prometheus text when the run ends. Without it, no metrics file is written. A dry run does not write it. It must differ from =--result= and =--resume-result=.                                             |
 | =--resume-result FILE= | Continue from =FILE= when =[resume] enabled= is true and the input digest still matches. Conflicts with =--dry-run=. Without that, exit 2 and no result file. A mismatch, a missing =input_digest=, or an incomplete identity exits 78 and writes the result. |
-| =--shard-plan DIR=     | Read the units from a plan previously written by =eb-stack stack shard=. The run does not call the shard planner or require its installed-module-directory environment variables.                                             |
+| =--shard-plan DIR=     | Read the non-empty units from a plan previously written by =eb-stack stack shard=. The run, its =--plan-out= document and its dry-run output use those units without a shard-planner command.                                   |
 | =--dry-run=            | Print each command of a fresh plan on stdout and start nothing. Conflicts with =--resume-result=. No result file, metrics file or summary is written, even with an output option.                                                           |
 | =--oom-preflight=      | Before any package starts, ask =eb-stack stack oom= about the planned packages. Requires =--node=. Without this option no out-of-memory check runs.                                                                             |
 | =--node NODE=          | The node passed to =eb-stack stack oom=, as =CORES:MEMORY_MIB= or =CORES:MEMORY_MIB:TARGET=. Requires =--oom-preflight=.                                                                                                        |
@@ -448,7 +452,7 @@ eb-retry-list (--result FILE | --summary FILE --target NAME)
 | =--target NAME= | Target entry to read from =--summary=. |
 | =--list FILE= | Build list or easystack (=.yml= or =.yaml=) passed to the run. Mutually exclusive with =--recorded-list=. |
 | =--recorded-list= | Read the build-list path from the result or selected summary target and use it as written. Mutually exclusive with =--list=. |
-| =--status STATUS,...= | Comma-separated statuses to keep: =failed=, =refused=, =pending=, =skipped=, =unreached=. Default: all non-=success= lines and unreached lines on a non-zero exit. |
+| =--status STATUS,...= | Comma-separated statuses to keep: =failed=, =refused=, =pending=, =skipped=, =unreached=. Default: all non-=success= lines and unreached lines on a non-zero exit, omitting =skipped= lines whose note starts with =resumed:= unless =--status skipped= is passed. |
 | =--classify= | Pass each selected line's recorded log to =eb-stack stack bot-classify --json=. Without =--class=, keep the =interrupted=, =resource= and =timeout= sub-classes. |
 | =--class CLASS,...= | Classes to keep instead of that default. A line stays when the JSON =class= or =sub_class= is one of these names. Repeatable. Requires =--classify=. |
 | =--node NODE= | =CORES:MEMORY_MIB= or =CORES:MEMORY_MIB:TARGET=, passed to =eb-stack stack oom --node=. The lines that remain are written to a temporary easystack with their =eb= options and passed as =--easystack=. A line the command warns may run out of memory is named on stderr and still written. Requires =--classify=. |
@@ -493,6 +497,8 @@ eb-shard-weights (--result FILE... | --summary FILE... | --log-root DIR [--last 
 | =--min-samples N= | Update a module only after N selected observations, from 1 to 65535; 1 when absent. Under-sampled existing weights remain unchanged. |
 | =--mode MODE= | Combine durations with =max= (default), =latest= or =mean=. |
 | =--out FILE= | Atomically replace =FILE= with the complete table; =-= or absent prints to stdout. =FILE= must differ from every result, summary and existing weights file. |
+
+An existing weights file that sets one module more than once is refused with both line numbers.
 
 With no input option, =EB_PIPELINE_RESULT= supplies one result file.
 =EB_PIPELINE_TARGET= supplies =--target=. A command-line option wins.

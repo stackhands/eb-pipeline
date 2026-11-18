@@ -12,7 +12,7 @@ use crate::exit::{self, Fail};
 use crate::resume;
 use crate::schema::{Attest, Site};
 use crate::tools::Tool;
-use crate::util::{package_of, ListLine};
+use crate::util::{self, package_of, ListLine};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -91,13 +91,10 @@ pub fn append(req: &Request<'_>) -> Result<InputAttestation, Fail> {
             ));
         }
     } else {
-        let tmp = dest.with_extension("json.tmp");
-        fs::write(&tmp, &bytes)
-            .map_err(|e| Fail::new(exit::FAILED, format!("cannot write {}: {e}", tmp.display())))?;
-        fs::rename(&tmp, &dest).map_err(|e| {
+        util::write_atomic(&dest, &bytes).map_err(|e| {
             Fail::new(
                 exit::FAILED,
-                format!("cannot rename {} to {}: {e}", tmp.display(), dest.display()),
+                format!("cannot write {}: {e}", dest.display()),
             )
         })?;
     }
@@ -441,7 +438,7 @@ fn resolved_easyconfigs(req: &Request<'_>) -> Result<Vec<PathBuf>, Fail> {
         .args(&args)
         .stdin(Stdio::null())
         .output()
-        .map_err(|e| Fail::new(exit::FAILED, format!("cannot run `{bin}`: {e}")))?;
+        .map_err(|e| Fail::usage(format!("cannot run `{bin}`: {e}")))?;
     if !out.status.success() {
         let code = subprocess_code(&out.status);
         let err = stderr_text(&out.stderr);
@@ -755,7 +752,7 @@ fn run(argv: &[String], on_error: i32) -> Result<String, Fail> {
         .args(&argv[1..])
         .stdin(Stdio::null())
         .output()
-        .map_err(|e| Fail::new(exit::FAILED, format!("cannot run `{bin}`: {e}")))?;
+        .map_err(|e| Fail::usage(format!("cannot run `{bin}`: {e}")))?;
     if !out.status.success() {
         let code = subprocess_code(&out.status);
         let err = stderr_text(&out.stderr);
@@ -809,7 +806,8 @@ impl Drop for RemoveDir {
 
 #[cfg(test)]
 mod tests {
-    use super::{easyblock_literal, patch_literals};
+    use super::{easyblock_literal, patch_literals, run};
+    use crate::exit;
 
     #[test]
     fn a_quoted_patch_and_an_easyblock_literal_are_read() {
@@ -822,5 +820,14 @@ mod tests {
     fn a_commented_easyblock_is_not_a_literal() {
         let text = "# easyblock = 'No'\nname = 'Foo'\n";
         assert_eq!(easyblock_literal(text), None);
+    }
+
+    #[test]
+    fn a_missing_helper_is_a_usage_error() {
+        let root = tempfile::tempdir().unwrap();
+        let missing = root.path().join("missing-attestation-helper");
+        let failure = run(&[missing.display().to_string()], exit::REFUSED).unwrap_err();
+        assert_eq!(failure.code, exit::USAGE);
+        assert!(failure.msg.contains("cannot run"), "{}", failure.msg);
     }
 }
