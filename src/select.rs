@@ -46,12 +46,19 @@ fn tokens(sel: &Select, line: &ListLine) -> Result<(bool, Vec<String>), Fail> {
             None
         };
         if let Some(v) = value {
-            out.extend(
-                v.split(sel.separator.as_str())
-                    .map(str::trim)
-                    .filter(|t| !t.is_empty())
-                    .map(str::to_string),
-            );
+            let tokens = v
+                .split(sel.separator.as_str())
+                .map(str::trim)
+                .filter(|token| !token.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            if tokens.is_empty() {
+                return Err(Fail::usage(format!(
+                    "selector option `{}` needs a value in `{}`",
+                    sel.option, line.raw
+                )));
+            }
+            out.extend(tokens);
         }
         i += 1;
     }
@@ -160,6 +167,8 @@ mod tests {
             &["--only-targets"][..],
             &["--only-targets", "--rebuild"][..],
             &["--only-targets="][..],
+            &["--only-targets=,"][..],
+            &["--only-targets", ","][..],
         ] {
             let err = select_line(&s, &line(args)).unwrap_err();
             assert_eq!(err.code, 2);
