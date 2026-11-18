@@ -135,11 +135,11 @@ fn check_output_alias(out: Option<&str>, inputs: &[(&str, Option<&str>)]) -> Res
 
 fn read_list(path: &str) -> Result<Vec<ListLine>, String> {
     let list_path = Path::new(path);
-    let list_text =
-        fs::read_to_string(list_path).map_err(|e| format!("cannot read list {path}: {e}"))?;
     let lines = if easystack::is_easystack(list_path) {
-        easystack::parse(&list_text).map_err(|e| format!("easystack {path}: {e}"))?
+        easystack::read(list_path)?
     } else {
+        let list_text =
+            fs::read_to_string(list_path).map_err(|e| format!("cannot read list {path}: {e}"))?;
         util::parse_list(&list_text).map_err(|f| f.msg)?
     };
     if lines.is_empty() {
