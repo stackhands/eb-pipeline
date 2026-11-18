@@ -80,7 +80,7 @@ for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cv
 done
 ```
 
-A release tarball ships six commands:
+Releases after `0.3.0` also ship all six commands (`0.3.0` ships `eb-pipeline` only):
 
 ```bash
 for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cvmfs; do

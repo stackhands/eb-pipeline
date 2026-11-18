@@ -22,7 +22,7 @@ eb-pipeline plan [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_T
 eb-pipeline run [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>
 eb-pipeline verify [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE> --from <FROM>
 eb-pipeline watch [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>
-eb-pipeline audit [OPTIONS] --site <SITE> --target <TARGET> --out-dir <OUT_DIR> (--findings <FINDINGS> | --cve <CVE>)
+eb-pipeline audit [OPTIONS] --site <SITE> --target <TARGET> --out-dir <OUT_DIR>
 #+end_example
 
 =eb-pipeline --help= prints:
@@ -110,7 +110,7 @@ when several apply: 1, then 78, then 75, then 0. Codes are never summed.
 =eb-pipeline --version= prints the version of the crate, the same for a release and for a build from source:
 
 #+begin_example
-eb-pipeline 0.3.0
+eb-pipeline 0.3.1
 #+end_example
 
 ** Arguments
@@ -206,11 +206,12 @@ the key, its type, whether it is required or its default, and what it does.
 
 *** init
 
-| Option            | Meaning                                                                                                                                                                      |
-|-------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| =--template NAME= | The template to print; required unless =--list= is given.                                                                                                                    |
-| =--list=          | Print the name and summary of each template, one per line, and nothing else.                                                                                                 |
-| =--out FILE=      | Write the template to =FILE= instead of stdout, and write =INFO [init] -: wrote template NAME to FILE= to stderr. =-= is stdout. An existing =FILE= is refused, with exit 2. |
+| Option            | Variable                  | Meaning                                                                                                                                                                      |
+|-------------------+---------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =--template NAME= |                           | The template to print; required unless =--list= is given.                                                                                                                    |
+| =--list=          |                           | Print the name and summary of each template, one per line, and nothing else.                                                                                                 |
+| =--out FILE=      |                           | Write the template to =FILE= instead of stdout, and write =INFO [init] -: wrote template NAME to FILE= to stderr. =-= is stdout. An existing =FILE= is refused, with exit 2. |
+| =--hints=         | =EB_PIPELINE_INIT_HINTS=  | After writing a file, print next steps on stderr; also enabled when =EB_PIPELINE_INIT_HINTS=1=.                                                                              |
 
 [[file:templates.org][The site file templates]] shows each template.
 
@@ -510,6 +511,16 @@ At least one of =--result= or =--reframe-report= is required.
 Exit 0 means the report was written, including when a run's own exit code is not 0.
 With =--fail-on-failure=, exit 1 means the report was written and contains a failure.
 Exit 2 is a missing file, a file that is not a result of schema version 1, or a report that could not be written.
+
+*** eb-test-map
+
+=eb-test-map= maps a build list, easystack, or =eb-pipeline run --result= file to test names, ReFrame selectors, or EESSI module arguments (=--format eessi-modules=).
+See [[file:test-map.org][The test map]] for all options and exit statuses.
+
+*** eb-cvmfs
+
+=eb-cvmfs= brackets one cache synchronization command in a CVMFS transaction, with optional archive-manifest checks, verification, timeouts, tagging, integrity checks, and Prometheus metrics.
+See [[file:cvmfs.org][The eb-cvmfs command]] for all options and exit statuses.
 
 ** See also
 
