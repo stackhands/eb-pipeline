@@ -51,7 +51,8 @@ Exit codes of watch:
   0    nothing to rebuild: no install is recorded, EESSI is as recorded, or no
        recorded install needs a rebuild; --dry-run printed the plan; --adopt
        recorded the installs; or the rebuild succeeded
-  1    the rebuild failed, or an eb-stack call, the record or the state file did
+  1    the rebuild failed, an eb-stack call failed, or the record, state
+       file, plan or rebuild list could not be read or written
   2    invalid arguments or site file, or eb-stack below its min_version
   75   another watch of the target holds its lock, the module environment did
        not load, or the EESSI repository or a module tree cannot be read
