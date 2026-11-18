@@ -13,6 +13,10 @@ only lines whose status is `success`.
 --include-resumed also keeps skipped lines whose note starts with `resumed:`,
 which a run writes when prior successful outputs remain. It requires --result.
 
+When neither input option is present, `EB_PIPELINE_LIST` and
+`EB_PIPELINE_RESULT` supply their corresponding options. A command-line input
+wins.
+
 The software name is the part of an easyconfig file name before the version.
 GCC, GCCcore, foss, gfbf, gomkl, gompi, iimpi, intel and intel-compilers
 have no test of their own. --toolchain names another.

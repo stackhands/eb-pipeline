@@ -1,5 +1,7 @@
 //! `run` against stub tool binaries written into a temporary directory.
 
+mod common;
+
 use serde_json::Value;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
@@ -325,6 +327,9 @@ fn driver_named(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if vars.iter().any(|(name, _)| *name == "DRIVER_CLOSED_STDOUT") {
+        c.stdout(common::closed_stdout());
+    }
     if let Some((_, value)) = vars.iter().find(|(name, _)| *name == "DRIVER_UMASK") {
         let mode = u32::from_str_radix(value, 8).unwrap();
         // SAFETY: `umask` is async-signal-safe and the closure allocates nothing.
@@ -336,7 +341,7 @@ fn driver_named(
         }
     }
     for (k, v) in vars {
-        if *k != "DRIVER_UMASK" {
+        if *k != "DRIVER_UMASK" && *k != "DRIVER_CLOSED_STDOUT" {
             c.env(k, v);
         }
     }
@@ -1459,6 +1464,20 @@ fn dry_run_default_output_remains_byte_for_byte_unchanged() {
     assert_eq!(o.stdout, historical_dry_run(&env).as_bytes());
     assert_eq!(o.stderr, b"INFO [run] cpu: dry run: nothing executed\n");
     assert!(calls(&env, "eb.calls").is_empty());
+}
+
+#[test]
+fn dry_run_succeeds_when_its_output_consumer_closes() {
+    let env = setup("");
+    let c = driver(&env, LIST, &[("DRIVER_CLOSED_STDOUT", "1")], &["--dry-run"]);
+    let o = c.wait_with_output().unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(o.stderr, b"INFO [run] cpu: dry run: nothing executed\n");
 }
 
 fn historical_dry_run(env: &Env) -> String {

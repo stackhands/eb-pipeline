@@ -1,5 +1,6 @@
 //! Per-target selection of build list lines.
 
+use crate::exit::Fail;
 use crate::schema::Select;
 use crate::util::ListLine;
 
@@ -13,17 +14,25 @@ pub struct Selected {
 }
 
 /// Tokens of every occurrence of the option on a line, and whether it occurs.
-fn tokens(sel: &Select, args: &[String]) -> (bool, Vec<String>) {
+fn tokens(sel: &Select, line: &ListLine) -> Result<(bool, Vec<String>), Fail> {
     let mut found = false;
     let mut out = Vec::new();
     let eq = format!("{}=", sel.option);
     let mut i = 0;
-    while i < args.len() {
-        let a = &args[i];
+    while i < line.args.len() {
+        let a = &line.args[i];
         let value = if a == &sel.option {
             found = true;
             i += 1;
-            args.get(i).map(String::as_str)
+            match line.args.get(i) {
+                Some(value) if !value.starts_with('-') => Some(value.as_str()),
+                _ => {
+                    return Err(Fail::usage(format!(
+                        "selector option `{}` needs a value in `{}`",
+                        sel.option, line.raw
+                    )));
+                }
+            }
         } else if let Some(v) = a.strip_prefix(&eq) {
             found = true;
             Some(v)
@@ -40,7 +49,7 @@ fn tokens(sel: &Select, args: &[String]) -> (bool, Vec<String>) {
         }
         i += 1;
     }
-    (found, out)
+    Ok((found, out))
 }
 
 fn stripped(sel: &Select, args: &[String]) -> Vec<String> {
@@ -61,8 +70,8 @@ fn stripped(sel: &Select, args: &[String]) -> Vec<String> {
 }
 
 /// Decide whether `line` is planned for the target that owns `sel`.
-pub fn select_line(sel: &Select, line: &ListLine) -> Selected {
-    let (found, toks) = tokens(sel, &line.args);
+pub fn select_line(sel: &Select, line: &ListLine) -> Result<Selected, Fail> {
+    let (found, toks) = tokens(sel, line)?;
     let planned = if found {
         toks.iter().any(|t| t == &sel.value)
     } else {
@@ -73,7 +82,7 @@ pub fn select_line(sel: &Select, line: &ListLine) -> Selected {
     } else {
         line.args.clone()
     };
-    Selected { planned, args }
+    Ok(Selected { planned, args })
 }
 
 #[cfg(test)]
@@ -92,53 +101,73 @@ mod tests {
 
     fn line(args: &[&str]) -> ListLine {
         ListLine {
-            raw: String::new(),
+            raw: std::iter::once("Foo-1.0.eb")
+                .chain(args.iter().copied())
+                .collect::<Vec<_>>()
+                .join(" "),
             easyconfig: "Foo-1.0.eb".into(),
             args: args.iter().map(|s| s.to_string()).collect(),
         }
     }
 
+    fn selected(sel: &Select, line: &ListLine) -> Selected {
+        select_line(sel, line).unwrap()
+    }
+
     #[test]
     fn absent_option_follows_when_absent() {
-        assert!(select_line(&sel(false, "all", ","), &line(&["--rebuild"])).planned);
-        assert!(!select_line(&sel(false, "none", ","), &line(&["--rebuild"])).planned);
+        assert!(selected(&sel(false, "all", ","), &line(&["--rebuild"])).planned);
+        assert!(!selected(&sel(false, "none", ","), &line(&["--rebuild"])).planned);
     }
 
     #[test]
     fn matching_and_non_matching_tokens() {
         let s = sel(false, "all", ",");
-        assert!(select_line(&s, &line(&["--only-targets=a"])).planned);
-        assert!(!select_line(&s, &line(&["--only-targets=b"])).planned);
-        assert!(!select_line(&s, &line(&["--only-targets="])).planned);
+        assert!(selected(&s, &line(&["--only-targets=a"])).planned);
+        assert!(!selected(&s, &line(&["--only-targets=b"])).planned);
+        assert!(!selected(&s, &line(&["--only-targets="])).planned);
         // a different option sharing a prefix does not match
-        assert!(select_line(&s, &line(&["--only-targets-x=b"])).planned);
+        assert!(selected(&s, &line(&["--only-targets-x=b"])).planned);
     }
 
     #[test]
     fn multiple_tokens_and_separator() {
         let s = sel(false, "none", ",");
-        assert!(select_line(&s, &line(&["--only-targets=b,c,a"])).planned);
-        assert!(!select_line(&s, &line(&["--only-targets=b,c"])).planned);
+        assert!(selected(&s, &line(&["--only-targets=b,c,a"])).planned);
+        assert!(!selected(&s, &line(&["--only-targets=b,c"])).planned);
         let s = sel(false, "none", "+");
-        assert!(select_line(&s, &line(&["--only-targets=b+a"])).planned);
-        assert!(!select_line(&s, &line(&["--only-targets=b,a"])).planned);
+        assert!(selected(&s, &line(&["--only-targets=b+a"])).planned);
+        assert!(!selected(&s, &line(&["--only-targets=b,a"])).planned);
     }
 
     #[test]
     fn separate_value_token_form() {
         let s = sel(true, "none", ",");
-        let r = select_line(&s, &line(&["--rebuild", "--only-targets", "b,a", "-f"]));
+        let r = selected(&s, &line(&["--rebuild", "--only-targets", "b,a", "-f"]));
         assert!(r.planned);
         assert_eq!(r.args, ["--rebuild", "-f"]);
+    }
+
+    #[test]
+    fn separate_option_without_a_value_is_refused() {
+        let s = sel(true, "all", ",");
+        for args in [
+            &["--only-targets"][..],
+            &["--only-targets", "--rebuild"][..],
+        ] {
+            let err = select_line(&s, &line(args)).unwrap_err();
+            assert_eq!(err.code, 2);
+            assert!(err.msg.contains("--only-targets"), "{}", err.msg);
+        }
     }
 
     #[test]
     fn strip_removes_the_option_only_when_set() {
         let l = line(&["--rebuild", "--only-targets=a", "--x"]);
         assert_eq!(
-            select_line(&sel(true, "all", ","), &l).args,
+            selected(&sel(true, "all", ","), &l).args,
             ["--rebuild", "--x"]
         );
-        assert_eq!(select_line(&sel(false, "all", ","), &l).args, l.args);
+        assert_eq!(selected(&sel(false, "all", ","), &l).args, l.args);
     }
 }
