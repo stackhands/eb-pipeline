@@ -233,6 +233,10 @@ fn notify_settings_are_checked_without_repeating_the_url() {
             "notify.webhook: must start with http:// or https://",
         ),
         (
+            format!("webhook = \"https://:443/{SECRET}\""),
+            "notify.webhook: names no host",
+        ),
+        (
             format!("webhook = \"https://h.example.org/{SECRET}\"\nwebhook_env = \"X\""),
             "notify: set webhook or webhook_env, not both",
         ),
