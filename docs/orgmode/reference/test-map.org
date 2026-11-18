@@ -9,8 +9,8 @@ The default uses a map of software name to test name.
 =--format eessi-modules= does not read a map. It prints the module names the European Environment for Scientific Software Installations (EESSI) test suite selects with ReFrame.
 
 #+begin_example
-eb-test-map --map FILE (--list FILE | --result FILE) [--toolchain NAME]... [--allow-unmapped] [--format FORMAT]
-eb-test-map (--list FILE | --result FILE) --format eessi-modules [--toolchain NAME]...
+eb-test-map --map FILE (--list FILE | --result FILE) [--toolchain NAME]... [--allow-unmapped] [--include-resumed] [--format FORMAT]
+eb-test-map (--list FILE | --result FILE) --format eessi-modules [--toolchain NAME]... [--include-resumed]
 #+end_example
 
 | Option | Meaning |
@@ -18,6 +18,7 @@ eb-test-map (--list FILE | --result FILE) --format eessi-modules [--toolchain NA
 | =--map FILE= | One software name and one test name per line, separated by whitespace. A line that starts with =#= is a comment. Required for =--format text= and =reframe=. Not read for =--format eessi-modules=. |
 | =--list FILE= | Build list file. With =.yml= or =.yaml= it is read as an EasyBuild easystack and its =easyconfigs= entries become the list lines. |
 | =--result FILE= | Result JSON written by =eb-pipeline run --result=. Only lines with =status = "success"= are kept. |
+| =--include-resumed= | Also keep a skipped result line whose note starts with =resumed:=. Requires =--result=. |
 | =--toolchain NAME= | A software name that needs no test, besides the built-in toolchains. |
 | =--allow-unmapped= | With =--format text= or =reframe=, print the tests that exist and exit 0 when an application has no row. Without it, that application prints nothing and exits 2. |
 | =--format FORMAT= | =text= (default): one test name per line. =reframe=: one selector per line as =-n ^...$=, with regex characters escaped. =eessi-modules=: one ReFrame argument, ~--setvar modules=Name/Version,...~. |
@@ -25,6 +26,9 @@ eb-test-map (--list FILE | --result FILE) --format eessi-modules [--toolchain NA
 The built-in toolchains are =GCC=, =GCCcore=, =foss=, =gfbf=, =gomkl=, =gompi=, =iimpi=, =intel= and =intel-compilers=.
 
 Pass one of =--list= or =--result=.
+Without =--include-resumed=, result input keeps only successful lines, as before.
+With it, result input also keeps lines that a resumed run skipped because their prior successful outputs still exist.
+Other skipped lines and failed lines remain excluded.
 
 With =--format text= or =reframe=, stdout is the test names, sorted, each once; =--format= chooses how each line is written.
 With =--format eessi-modules=, stdout is one line when the list has an application:

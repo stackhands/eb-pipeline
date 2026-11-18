@@ -109,6 +109,7 @@ fn the_how_to_shows_the_command_the_checks_phase_can_run() {
     assert!(page.contains("has no test"));
     assert!(page.contains("--format reframe"));
     assert!(page.contains("--format eessi-modules"));
+    assert!(page.contains("--include-resumed"));
     assert!(page.contains("--setvar modules="));
     let reference = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -116,6 +117,7 @@ fn the_how_to_shows_the_command_the_checks_phase_can_run() {
     ))
     .unwrap();
     assert!(reference.contains("--format eessi-modules"));
+    assert!(reference.contains("--include-resumed"));
     assert!(reference.contains("--setvar modules="));
     assert!(reference.contains("set_modules"));
 }
@@ -340,6 +342,82 @@ fn only_success_lines_are_kept_from_result() {
     let err = String::from_utf8(o.stderr).unwrap();
     assert!(err.contains("Missing has no test"), "{err}");
     assert!(!err.contains("FFTW"), "{err}");
+}
+
+#[test]
+fn result_formats_keep_default_bytes_and_can_include_resumed_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let map = dir.path().join("map.tsv");
+    let result = dir.path().join("result.json");
+    std::fs::write(&map, "Done done-test\nResumed resumed-test\n").unwrap();
+    std::fs::write(
+        &result,
+        r#"{
+  "schema_version": 1,
+  "kind": "result",
+  "lines": [
+    {"easyconfig": "Done-1.0.eb", "status": "success", "phase": "build"},
+    {"easyconfig": "Resumed-2.0.eb", "status": "skipped", "phase": "build", "note": "resumed: the unit succeeded and its outputs are still present"},
+    {"easyconfig": "Blocked-3.0.eb", "status": "skipped", "phase": "build", "note": "an earlier unit was refused"},
+    {"easyconfig": "Failed-4.0.eb", "status": "failed", "phase": "build"}
+  ]
+}"#,
+    )
+    .unwrap();
+
+    let run = |format: &str, include_resumed: bool| {
+        let mut command = bin();
+        command
+            .args(["--result"])
+            .arg(&result)
+            .args(["--format", format]);
+        if format != "eessi-modules" {
+            command.args(["--map"]).arg(&map);
+        }
+        if include_resumed {
+            command.arg("--include-resumed");
+        }
+        command.output().unwrap()
+    };
+
+    for (format, expected) in [
+        ("text", "done-test\n"),
+        ("reframe", "-n ^done-test$\n"),
+        ("eessi-modules", "--setvar modules=Done/1.0\n"),
+    ] {
+        let o = run(format, false);
+        assert_eq!(o.status.code(), Some(0));
+        assert_eq!(o.stdout, expected.as_bytes(), "format={format}");
+        assert_eq!(o.stderr, b"", "format={format}");
+    }
+
+    let o = run("text", true);
+    assert_eq!(o.status.code(), Some(0));
+    assert_eq!(o.stdout, b"done-test\nresumed-test\n");
+    assert_eq!(o.stderr, b"");
+
+    let o = run("eessi-modules", true);
+    assert_eq!(o.status.code(), Some(0));
+    assert_eq!(o.stdout, b"--setvar modules=Done/1.0,Resumed/2.0\n");
+    assert_eq!(o.stderr, b"");
+}
+
+#[test]
+fn include_resumed_requires_result_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = dir.path().join("build.list");
+    std::fs::write(&list, "Done-1.0.eb\n").unwrap();
+    let o = bin()
+        .args(["--format", "eessi-modules", "--include-resumed", "--list"])
+        .arg(&list)
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(2));
+    assert_eq!(o.stdout, b"");
+    assert_eq!(
+        o.stderr,
+        b"eb-test-map: --include-resumed requires --result\n"
+    );
 }
 
 #[test]
