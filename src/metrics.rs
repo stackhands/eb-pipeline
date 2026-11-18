@@ -6,7 +6,7 @@
 use crate::exit::Fail;
 use crate::util;
 use serde_json::{Map, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 /// Line statuses a result records, in label order.
@@ -102,6 +102,7 @@ pub fn from_result(v: &Value) -> Result<Status, Fail> {
     }
 
     let mut phases = Vec::new();
+    let mut phase_names = BTreeSet::new();
     if let Some(raw) = obj.get("phases") {
         let raw = raw
             .as_array()
@@ -114,6 +115,11 @@ pub fn from_result(v: &Value) -> Result<Status, Fail> {
                 .map_err(|_| Fail::usage(format!("result.phases[{i}].name must be a string")))?;
             let status = need_str(item, "status")
                 .map_err(|_| Fail::usage(format!("result.phases[{i}].status must be a string")))?;
+            if !phase_names.insert(name) {
+                return Err(Fail::usage(format!(
+                    "result.phases[{i}] has duplicate name `{name}`"
+                )));
+            }
             phases.push((name.to_string(), status.to_string()));
         }
     }
@@ -475,6 +481,19 @@ eb_pipeline_phase{{{id},phase=\"checks\",status=\"skipped\"}} 1
             "{}",
             err.msg
         );
+    }
+
+    #[test]
+    fn duplicate_phase_names_are_refused() {
+        let mut v = result();
+        v["phases"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"name": "build", "status": "ok"}));
+
+        let err = from_result(&v).unwrap_err();
+
+        assert!(err.msg.contains("duplicate name `build`"), "{}", err.msg);
     }
 
     #[test]
