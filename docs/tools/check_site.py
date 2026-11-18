@@ -110,7 +110,7 @@ def check_site(root, forbid, exempt=()):
                 target_rel = os.path.normpath(decoded.lstrip("/"))
             else:
                 target_rel = os.path.normpath(os.path.join(os.path.dirname(rel), decoded))
-            if target_rel.startswith(".."):
+            if target_rel == os.pardir or target_rel.startswith(os.pardir + os.sep):
                 errors.append(f"{where}: link leaves the site: {href}")
                 continue
             target = os.path.join(root, target_rel)
