@@ -133,6 +133,8 @@ No command takes an argument other than its options.
 | =audit=   | Run eb-stack vulnerability subcommands for one target and copy any generated rebuild lists to an output directory for =eb-pipeline run --list=.                                                                        |
 | =help=    | Print the help of the program, or of the command it names.                                                                                                                                                          |
 
+Two hidden packaging subcommands (=completions= and =man=) emit shell completion scripts and the section 1 manual page from the CLI parser.
+
 ** Options
 
 Every command takes =-h=, which prints a summary of its options, and =--help=, which prints them in full; both exit 0.
@@ -392,14 +394,14 @@ Another standard-output write error exits 1.
 | Status | Meaning                                                                                                                                                                                                                                                      |
 |--------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 |      0 | All requested work completed. =watch=: also nothing to rebuild.                                                                                                                                                                                              |
-|      1 | =run=: a line or a phase failed. =watch=: the rebuild failed, or an eb-stack call, the record or the state file did. =plan=: the shard plan could not be read. =status=: the log root could not be read. Any command: an output file could not be written.   |
+|      1 | =run=: a line or a phase failed. =watch=: the rebuild failed, an eb-stack call failed, or the record, state file, plan or rebuild list could not be read or written. =plan=: the shard plan could not be read. =status=: the log root could not be read. Any command: an output file could not be written. |
 |      2 | A usage error, an invalid site file, an unknown target, a list that cannot be read, is empty or has a quote that is not closed, an easystack that gives no lines as written, a tool below its =min_version=, or an =init --out= file that cannot be created. |
-|     75 | =run=: a resource was busy or a step is pending; run it again. =watch=: another watch of the target runs, its module environment did not load, or EESSI cannot be read.                                                                                      |
-|     78 | =run=: a precondition, admission or =eb-staged-rebuild= refused. =watch=: no =[watch]=, no EESSI, another EESSI version, no eb-stack, or no easyconfig tree for a vanished module.                                                                           |
+|     75 | =run=: a resource was busy or a step is pending; run it again. =watch=: another watch of the target runs, its module environment did not load, or EESSI cannot be read. =audit=: the module environment did not load, or EESSI cannot be read. |
+|     78 | =run=: a precondition, admission or =eb-staged-rebuild= refused. =watch=: no =[watch]=, no EESSI, another EESSI version, no eb-stack, or no easyconfig tree for a vanished module. =audit=: no eb-stack, or no EESSI in the module environment. |
 |    130 | =run= and =watch=: interrupted by =SIGINT=.                                                                                                                                                                                                                  |
 |    143 | =run= and =watch=: interrupted by =SIGTERM=.                                                                                                                                                                                                                 |
 
-The commands other than =run= and =watch= exit 0, 1 or 2.
+The commands other than =run=, =watch= and =audit= exit 0, 1 or 2.
 The rebuild of =watch= exits as a run would, and =watch= exits with its status.
 [[file:exit-status.org][Exit status]] has the cases behind each status, how =run= picks one when several apply, and how it reads the exit statuses of the tools it starts.
 
