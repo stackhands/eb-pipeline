@@ -33,6 +33,7 @@ struct Fixture {
     bin: PathBuf,
     calls: PathBuf,
     sync: PathBuf,
+    verify: PathBuf,
 }
 
 impl Fixture {
@@ -41,25 +42,39 @@ impl Fixture {
         let bin = dir.path().join("bin");
         let calls = dir.path().join("calls");
         let sync = dir.path().join("sync");
+        let verify = dir.path().join("verify");
         std::fs::create_dir(&bin).unwrap();
         write_exec(&bin.join("cvmfs_server"), CVMFS_SERVER);
         write_exec(
             &sync,
             "#!/bin/sh\necho \"sync $*\" >> \"$CALLS\"\n[ -n \"${SYNC_DELAY:-}\" ] && /bin/sleep \"$SYNC_DELAY\"\n[ -n \"${REMOVE_SERVER:-}\" ] && /bin/rm -f \"$BIN/cvmfs_server\"\nexit \"${SYNC_EXIT:-0}\"\n",
         );
+        write_exec(
+            &verify,
+            "#!/bin/sh\necho \"verify $*\" >> \"$CALLS\"\necho verify-stdout\necho verify-stderr >&2\nexit \"${VERIFY_EXIT:-0}\"\n",
+        );
         Self {
             dir,
             bin,
             calls,
             sync,
+            verify,
         }
     }
 
     fn command(&self) -> Command {
-        self.command_with_metrics(None)
+        self.command_with_options(None, None)
     }
 
     fn command_with_metrics(&self, metrics: Option<&Path>) -> Command {
+        self.command_with_options(metrics, None)
+    }
+
+    fn command_with_verify(&self, verify: Option<&str>) -> Command {
+        self.command_with_options(None, verify)
+    }
+
+    fn command_with_options(&self, metrics: Option<&Path>, verify: Option<&str>) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"));
         command
             .env("PATH", &self.bin)
@@ -68,6 +83,9 @@ impl Fixture {
             .env("REPOSITORY", "repo.example");
         if let Some(metrics) = metrics {
             command.arg("--metrics-file").arg(metrics);
+        }
+        if let Some(verify) = verify {
+            command.args(["--verify-cmd", verify]);
         }
         command
             .args(["repo.example", "--"])
@@ -293,6 +311,55 @@ publish repo.example
 }
 
 #[test]
+fn successful_verification_runs_between_sync_and_publish_without_a_shell() {
+    let fixture = Fixture::new();
+    let verify = format!("{} --cache 'two words'", fixture.verify.display());
+    let output = fixture.command_with_verify(Some(&verify)).output().unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(
+        fixture.calls(),
+        "list\ntransaction repo.example\nsync --delete\nverify --cache two words\npublish repo.example\n"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "verify-stdout\n");
+    assert_eq!(stderr(&output), "verify-stderr\n");
+}
+
+#[test]
+fn failed_verification_is_aborted_and_preserves_its_output_and_status() {
+    let fixture = Fixture::new();
+    let verify = fixture.verify.display().to_string();
+    let output = fixture
+        .command_with_verify(Some(&verify))
+        .env("VERIFY_EXIT", "29")
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 29);
+    assert_eq!(
+        fixture.calls(),
+        "list\ntransaction repo.example\nsync --delete\nverify \nabort -f repo.example\n"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "verify-stdout\n");
+    assert_eq!(stderr(&output), "verify-stderr\n");
+}
+
+#[test]
+fn verification_uses_a_shell_when_the_command_contains_shell_syntax() {
+    let fixture = Fixture::new();
+    let verify = "printf 'verify shell\\n' >> \"$CALLS\" && true";
+    let path = std::env::var("PATH").unwrap();
+    let output = fixture
+        .command_with_verify(Some(verify))
+        .env("PATH", format!("{}:{path}", fixture.bin.display()))
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(
+        fixture.calls(),
+        "list\ntransaction repo.example\nsync --delete\nverify shell\npublish repo.example\n"
+    );
+}
+
+#[test]
 fn failed_sync_is_aborted_and_its_exit_status_is_returned() {
     let fixture = Fixture::new();
     let output = fixture
@@ -310,6 +377,22 @@ fn failed_sync_is_aborted_and_its_exit_status_is_returned() {
         stderr(&output).contains("abort failed"),
         "{}",
         stderr(&output)
+    );
+}
+
+#[test]
+fn failed_sync_does_not_run_verification() {
+    let fixture = Fixture::new();
+    let verify = fixture.verify.display().to_string();
+    let output = fixture
+        .command_with_verify(Some(&verify))
+        .env("SYNC_EXIT", "23")
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 23);
+    assert_eq!(
+        fixture.calls(),
+        "list\ntransaction repo.example\nsync --delete\nabort -f repo.example\n"
     );
 }
 
@@ -382,6 +465,22 @@ fn a_sync_command_that_cannot_start_is_aborted_and_returns_127() {
 }
 
 #[test]
+fn a_verification_command_that_cannot_start_is_aborted_and_returns_127() {
+    let fixture = Fixture::new();
+    let missing = fixture.dir.path().join("missing-verify");
+    let output = fixture
+        .command_with_verify(Some(&missing.display().to_string()))
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 127);
+    assert!(stderr(&output).contains("cannot start verification command"));
+    assert_eq!(
+        fixture.calls(),
+        "list\ntransaction repo.example\nsync --delete\nabort -f repo.example\n"
+    );
+}
+
+#[test]
 fn a_missing_cvmfs_server_is_a_clear_error() {
     let fixture = Fixture::new();
     let empty = fixture.dir.path().join("empty");
@@ -407,22 +506,44 @@ fn dry_run_prints_every_possible_command_without_running_one() {
         .unwrap();
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("cvmfs_server list\n"), "{stdout}");
-    assert!(
-        stdout.contains("cvmfs_server transaction repo.example\n"),
-        "{stdout}"
+    let sync = format!("{} --delete", fixture.sync.display());
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        [
+            "cvmfs_server list",
+            "cvmfs_server transaction repo.example",
+            &sync,
+            "cvmfs_server publish repo.example",
+            "# on sync failure: cvmfs_server abort -f repo.example",
+        ]
     );
-    assert!(
-        stdout.contains(&format!("{} --delete\n", fixture.sync.display())),
-        "{stdout}"
-    );
-    assert!(
-        stdout.contains("cvmfs_server publish repo.example\n"),
-        "{stdout}"
-    );
-    assert!(
-        stdout.contains("cvmfs_server abort -f repo.example\n"),
-        "{stdout}"
+    assert!(fixture.calls().is_empty());
+}
+
+#[test]
+fn dry_run_prints_verification_between_sync_and_publish() {
+    let fixture = Fixture::new();
+    let verify = format!("{} --cache 'two words'", fixture.verify.display());
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
+        .args(["--dry-run", "--verify-cmd", &verify, "repo.example", "--"])
+        .arg(&fixture.sync)
+        .arg("--delete")
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let sync = format!("{} --delete", fixture.sync.display());
+    let verifier = format!("{} --cache 'two words'", fixture.verify.display());
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        [
+            "cvmfs_server list",
+            "cvmfs_server transaction repo.example",
+            &sync,
+            &verifier,
+            "cvmfs_server publish repo.example",
+            "# on sync or verification failure: cvmfs_server abort -f repo.example",
+        ]
     );
     assert!(fixture.calls().is_empty());
 }
@@ -462,6 +583,24 @@ fn invalid_arguments_are_usage_errors() {
         vec!["repo.example", "sync"],
         vec!["--metrics-file"],
         vec!["--unknown", "repo.example", "--", "sync"],
+        vec!["--verify-cmd"],
+        vec!["--verify-cmd", "", "repo.example", "--", "sync"],
+        vec![
+            "--verify-cmd",
+            "verify",
+            "--verify-cmd",
+            "again",
+            "repo.example",
+            "--",
+            "sync",
+        ],
+        vec![
+            "--verify-cmd",
+            "unterminated '",
+            "repo.example",
+            "--",
+            "sync",
+        ],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
             .args(args)

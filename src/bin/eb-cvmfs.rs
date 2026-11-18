@@ -12,7 +12,13 @@ struct Args {
     dry_run: bool,
     metrics_file: Option<PathBuf>,
     repository: String,
+    verify_cmd: Option<String>,
     sync: Vec<String>,
+}
+
+enum VerifyCommand {
+    Direct(Vec<String>),
+    Shell(String),
 }
 
 fn main() -> ExitCode {
@@ -65,6 +71,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut dry_run = false;
     let mut metrics_file = None;
     let mut repository = None;
+    let mut verify_cmd = None;
     let mut sync = Vec::new();
     let mut after_separator = false;
     let mut words = words.peekable();
@@ -96,6 +103,16 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 }
                 metrics_file = Some(PathBuf::from(path));
             }
+            "--verify-cmd" => {
+                if verify_cmd.is_some() {
+                    return Err("`--verify-cmd` may be given only once".into());
+                }
+                verify_cmd = Some(
+                    words
+                        .next()
+                        .ok_or_else(|| "`--verify-cmd` requires CMD".to_string())?,
+                );
+            }
             "--" => after_separator = true,
             _ if word.starts_with("--metrics-file=") => {
                 if metrics_file.is_some() {
@@ -106,6 +123,12 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                     return Err("--metrics-file PATH must not be empty".into());
                 }
                 metrics_file = Some(PathBuf::from(path));
+            }
+            _ if word.starts_with("--verify-cmd=") => {
+                if verify_cmd.is_some() {
+                    return Err("`--verify-cmd` may be given only once".into());
+                }
+                verify_cmd = Some(word["--verify-cmd=".len()..].to_string());
             }
             _ if word.starts_with('-') => return Err(format!("does not know `{word}`")),
             _ if repository.is_none() => repository = Some(word),
@@ -124,6 +147,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
         dry_run,
         metrics_file,
         repository,
+        verify_cmd,
         sync,
     })
 }
@@ -245,6 +269,11 @@ fn escape_label(value: &str) -> String {
 }
 
 fn run(args: &Args, facts: &mut Facts) -> Result<u8, String> {
+    let verify = args
+        .verify_cmd
+        .as_deref()
+        .map(parse_verify_command)
+        .transpose()?;
     if args.dry_run {
         println!("cvmfs_server list");
         println!(
@@ -255,12 +284,20 @@ fn run(args: &Args, facts: &mut Facts) -> Result<u8, String> {
             "{}",
             display_command(&args.sync.iter().map(String::as_str).collect::<Vec<_>>())
         );
+        if let Some(command) = &verify {
+            println!("{}", display_verify_command(command));
+        }
         println!(
             "{}",
             display_command(&["cvmfs_server", "publish", &args.repository])
         );
+        let failure = if verify.is_some() {
+            "sync or verification failure"
+        } else {
+            "sync failure"
+        };
         println!(
-            "# on sync failure: {}",
+            "# on {failure}: {}",
             display_command(&["cvmfs_server", "abort", "-f", &args.repository])
         );
         return Ok(0);
@@ -320,6 +357,34 @@ fn run(args: &Args, facts: &mut Facts) -> Result<u8, String> {
                 Some(eb_pipeline::run::seconds(transaction_started.elapsed()));
         }
         return Ok(exit_code(sync_status));
+    }
+
+    if let Some(command) = &verify {
+        let verify_name = display_verify_command(command);
+        let verify_status = match command {
+            VerifyCommand::Direct(words) => Command::new(&words[0]).args(&words[1..]).status(),
+            VerifyCommand::Shell(script) => Command::new("sh").args(["-c", script]).status(),
+        };
+        let verify_status = match verify_status {
+            Ok(status) => status,
+            Err(error) => {
+                eprintln!("eb-cvmfs: cannot start verification command `{verify_name}`: {error}");
+                let completed = abort(&args.repository, facts);
+                if completed {
+                    facts.transaction_duration_seconds =
+                        Some(eb_pipeline::run::seconds(transaction_started.elapsed()));
+                }
+                return Ok(command_start_exit(&error));
+            }
+        };
+        if !verify_status.success() {
+            let completed = abort(&args.repository, facts);
+            if completed {
+                facts.transaction_duration_seconds =
+                    Some(eb_pipeline::run::seconds(transaction_started.elapsed()));
+            }
+            return Ok(exit_code(verify_status));
+        }
     }
 
     let published = status(
@@ -392,6 +457,146 @@ fn exit_code(status: ExitStatus) -> u8 {
         .unwrap_or(1)
 }
 
+fn parse_verify_command(command: &str) -> Result<VerifyCommand, String> {
+    if command.trim().is_empty() {
+        return Err("`--verify-cmd` must not be empty".into());
+    }
+    if requires_shell(command) {
+        return Ok(VerifyCommand::Shell(command.to_string()));
+    }
+    let words = shell_words::split(command)
+        .map_err(|error| format!("cannot parse `--verify-cmd`: {error}"))?;
+    if words.is_empty() {
+        return Err("`--verify-cmd` must not be empty".into());
+    }
+    if is_assignment(&words[0]) || is_shell_word(&words[0]) {
+        Ok(VerifyCommand::Shell(command.to_string()))
+    } else {
+        Ok(VerifyCommand::Direct(words))
+    }
+}
+
+fn is_assignment(word: &str) -> bool {
+    let Some((name, _)) = word.split_once('=') else {
+        return false;
+    };
+    !name.is_empty()
+        && name.bytes().enumerate().all(|(index, byte)| {
+            byte == b'_' || byte.is_ascii_alphabetic() || (index > 0 && byte.is_ascii_digit())
+        })
+}
+
+fn is_shell_word(word: &str) -> bool {
+    matches!(
+        word,
+        "." | ":"
+            | "alias"
+            | "bg"
+            | "break"
+            | "case"
+            | "cd"
+            | "command"
+            | "continue"
+            | "do"
+            | "done"
+            | "elif"
+            | "else"
+            | "esac"
+            | "eval"
+            | "exec"
+            | "exit"
+            | "export"
+            | "fc"
+            | "fg"
+            | "fi"
+            | "for"
+            | "getopts"
+            | "hash"
+            | "if"
+            | "in"
+            | "jobs"
+            | "read"
+            | "readonly"
+            | "return"
+            | "set"
+            | "shift"
+            | "source"
+            | "then"
+            | "times"
+            | "trap"
+            | "type"
+            | "ulimit"
+            | "umask"
+            | "unalias"
+            | "unset"
+            | "until"
+            | "wait"
+            | "while"
+    )
+}
+
+fn requires_shell(command: &str) -> bool {
+    #[derive(Clone, Copy)]
+    enum Quote {
+        Unquoted,
+        Single,
+        Double,
+    }
+
+    let mut quote = Quote::Unquoted;
+    let mut escaped = false;
+    let mut word_start = true;
+    for character in command.chars() {
+        if escaped {
+            escaped = false;
+            word_start = false;
+            continue;
+        }
+        match quote {
+            Quote::Single => {
+                if character == '\'' {
+                    quote = Quote::Unquoted;
+                }
+            }
+            Quote::Double => match character {
+                '"' => quote = Quote::Unquoted,
+                '\\' => escaped = true,
+                '$' | '`' => return true,
+                _ => {}
+            },
+            Quote::Unquoted => match character {
+                '\'' => {
+                    quote = Quote::Single;
+                    word_start = false;
+                }
+                '"' => {
+                    quote = Quote::Double;
+                    word_start = false;
+                }
+                '\\' => {
+                    escaped = true;
+                    word_start = false;
+                }
+                '|' | '&' | ';' | '<' | '>' | '(' | ')' | '$' | '`' | '\n' => return true,
+                '*' | '?' | '[' => return true,
+                '~' | '#' | '!' if word_start => return true,
+                character if character.is_whitespace() => word_start = true,
+                _ => word_start = false,
+            },
+        }
+    }
+    false
+}
+
+fn display_verify_command(command: &VerifyCommand) -> String {
+    match command {
+        VerifyCommand::Direct(words) => {
+            display_command(&words.iter().map(String::as_str).collect::<Vec<_>>())
+        }
+        VerifyCommand::Shell(script) => display_command(&["sh", "-c", script]),
+    }
+}
+
 fn display_command(words: &[&str]) -> String {
     words
         .iter()
@@ -442,5 +647,26 @@ mod tests {
         assert!(text
             .lines()
             .all(|line| !line.starts_with("eb_") || { line.starts_with("eb_cvmfs_") }));
+    }
+
+    #[test]
+    fn verification_uses_a_shell_only_for_shell_syntax() {
+        let direct = parse_verify_command("check --path 'two words'").unwrap();
+        assert_eq!(display_verify_command(&direct), "check --path 'two words'");
+
+        let shell = parse_verify_command("test -s \"$CACHE\" && check").unwrap();
+        assert_eq!(
+            display_verify_command(&shell),
+            "sh -c 'test -s \"$CACHE\" && check'"
+        );
+
+        let builtin = parse_verify_command("command -v check").unwrap();
+        assert_eq!(display_verify_command(&builtin), "sh -c 'command -v check'");
+
+        let heredoc = parse_verify_command("cat <<'EOF'\n'\nEOF").unwrap();
+        assert_eq!(
+            display_verify_command(&heredoc),
+            "sh -c 'cat <<'\\''EOF'\\''\n'\\''\nEOF'"
+        );
     }
 }

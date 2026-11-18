@@ -8,16 +8,29 @@
 It is a companion command, not a phase that =eb-pipeline run= enables by default.
 
 #+begin_example
-eb-cvmfs [--dry-run] [--metrics-file PATH] REPOSITORY -- COMMAND [ARG...]
+eb-cvmfs [--dry-run] [--metrics-file PATH] [--verify-cmd CMD] REPOSITORY -- COMMAND [ARG...]
 #+end_example
 
 | Argument or option | Meaning |
 |--------------------+---------|
 | =REPOSITORY= | The CVMFS repository name passed to =cvmfs_server transaction=, =publish= and =abort=. |
+| =--verify-cmd CMD= | After synchronization, run CMD inside the open transaction and publish only when it succeeds. |
 | =--= | Ends =eb-cvmfs= options and starts the synchronization command. |
 | =COMMAND [ARG...]= | The site's synchronization command and its arguments. It is started directly, without a shell. |
 | =--dry-run= | Print every command in the bracket without checking, opening, changing, publishing or aborting the repository. |
 | =--metrics-file PATH= | Atomically replace =PATH= with Prometheus text after each valid invocation. Without it, no metrics or lock file is written. |
+
+CMD is one argument to =--verify-cmd=.
+Quote the complete value in the shell that starts =eb-cvmfs=:
+
+#+begin_src bash
+eb-cvmfs --verify-cmd '/opt/site/bin/check-cache --root "/cvmfs/repo.example"' \
+  repo.example -- /opt/site/bin/sync-module-cache
+#+end_src
+
+When CMD contains only an external command, arguments and quoting, =eb-cvmfs= splits it into an argument vector and starts the command directly.
+Shell built-ins or syntax such as environment expansion, pipelines, =&&=, redirection or globbing make =eb-cvmfs= run =sh -c CMD= instead.
+Single-quote the complete CMD at the outer command line when expansion should happen in that inner shell rather than in the shell that starts =eb-cvmfs=.
 
 ** Execution order
 
@@ -26,10 +39,13 @@ Without =--dry-run=, =eb-cvmfs=:
 1. runs =cvmfs_server list= and refuses the repository when its entry says =in transaction=;
 2. runs =cvmfs_server transaction REPOSITORY=;
 3. starts =COMMAND [ARG...]=;
-4. runs =cvmfs_server publish REPOSITORY= when the command exits 0, or =cvmfs_server abort -f REPOSITORY= when it does not.
+4. when =--verify-cmd= was given, starts CMD after the synchronization exits 0;
+5. runs =cvmfs_server publish REPOSITORY= when every requested command exits 0, or =cvmfs_server abort -f REPOSITORY= when synchronization or verification does not.
 
-An abort failure is reported, but does not replace the synchronization command's exit status.
+An abort failure is reported, but does not replace the synchronization or verification command's exit status.
 A synchronization command that cannot be found is treated as exit 127; another failure to start it is exit 126.
+A verification command that cannot start uses the same statuses.
+Command output is inherited, including output from a failed verification.
 =eb-cvmfs= performs no tarball build or packaging step.
 
 ** Metrics
@@ -59,13 +75,14 @@ It changes a successful invocation to exit 1, but does not mask an existing tran
 
 | Status | Meaning |
 |--------+---------|
-| =0= | The synchronization and publish succeeded, or =--dry-run= printed the commands. |
+| =0= | Synchronization, optional verification and publish succeeded, or =--dry-run= printed the commands. |
 | =1= | The repository operation succeeded, but the requested metrics file could not be written. |
 | =2= | The arguments are invalid, =cvmfs_server list= cannot start or fails, or the repository is already in a transaction. |
 | transaction status | =cvmfs_server transaction= failed. |
 | synchronization status | The synchronization failed; =eb-cvmfs= attempted =abort -f=. |
-| publish status | Synchronization succeeded and =cvmfs_server publish= failed. |
-| =126= or =127= | The synchronization command could not start; =eb-cvmfs= attempted =abort -f=. |
+| verification status | Verification failed; =eb-cvmfs= attempted =abort -f=. |
+| publish status | Synchronization and optional verification succeeded and =cvmfs_server publish= failed. |
+| =126= or =127= | The synchronization or verification command could not start; =eb-cvmfs= attempted =abort -f=. |
 
 ** See also
 

@@ -1,16 +1,19 @@
 eb-cvmfs: run a cache synchronization inside one CVMFS transaction.
 
-  eb-cvmfs [--dry-run] [--metrics-file PATH] REPOSITORY -- COMMAND [ARG...]
+  eb-cvmfs [--dry-run] [--metrics-file PATH] [--verify-cmd CMD] REPOSITORY -- COMMAND [ARG...]
 
 Checks that REPOSITORY is not already in a transaction, starts
 `cvmfs_server transaction REPOSITORY`, and runs COMMAND with its arguments.
-If COMMAND succeeds, publishes REPOSITORY. If COMMAND fails or cannot start,
-aborts it with `cvmfs_server abort -f REPOSITORY` and returns COMMAND's exit
-status.
+If COMMAND succeeds and --verify-cmd is present, runs CMD before publishing.
+External commands without shell syntax are split into arguments and started
+directly; shell built-ins or commands with shell syntax run as `sh -c CMD`.
+Quote CMD as one argument to eb-cvmfs. If COMMAND or CMD fails or cannot
+start, aborts the transaction and returns that command's exit status without
+hiding its output.
 
 This command only brackets the configured synchronization. It does not build
 or package tarballs. `--dry-run` prints the check, transaction, sync, publish,
-and failure-abort commands without running them.
+optional verification, and failure-abort commands without running them.
 
 `--metrics-file PATH` atomically replaces Prometheus text after every valid
 invocation, including `--dry-run` and command failures. It preserves the mode
