@@ -1393,15 +1393,17 @@ pub fn settle(
         recorded = record(p, &work, probe, revision, &rebuilt, false)?;
         let _ = std::fs::remove_dir_all(&work);
     }
+    let local = vec![local_modules_dir(p)];
     update(&dir, target, |s| {
         if let Some(a) = abi {
             s.abi_baseline = Some(a.clone());
         }
         for v in verdicts {
             match v.action.as_str() {
-                "gone" => {
+                "gone" if eessi::find(&local, &v.module).is_none() => {
                     s.installs.remove(&v.module);
                 }
+                "gone" => {}
                 "keep" | "unaffected" => {
                     let Some(i) = s.installs.get_mut(&v.module) else {
                         continue;

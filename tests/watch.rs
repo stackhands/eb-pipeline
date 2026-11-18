@@ -5,7 +5,8 @@
 mod common;
 
 use common::*;
-use std::process::Output;
+use std::process::{Command, Output, Stdio};
+use std::time::Duration;
 
 const WATCH: &str = "[watch]\neasyconfigs = [\"@ROOT@/robot\"]\n";
 
@@ -1005,4 +1006,92 @@ fn an_install_whose_module_is_gone_is_dropped_from_the_record() {
     assert!(t.watch_state("cpu")["installs"]
         .get("Bar/2.0-GCCcore-13.2.0")
         .is_none());
+}
+
+#[test]
+fn watch_does_not_drop_an_install_recorded_while_it_rebuilds() {
+    let t = built("");
+    let vars = eessi_vars(&t, "2023.06");
+    change(&t);
+    std::fs::remove_file(
+        t.root()
+            .join("install/modules/all/Bar/2.0-GCCcore-13.2.0.lua"),
+    )
+    .unwrap();
+
+    let real_eb = t.stubs.join("eb-real");
+    std::fs::rename(t.stubs.join("eb"), &real_eb).unwrap();
+    write_exec(
+        &t.stubs.join("eb"),
+        &format!(
+            r#"#!/bin/sh
+case " $* " in
+  *" Foo-1.0-GCCcore-13.2.0.eb "*)
+    : > "$STUB_DIR/watch-paused"
+    while [ ! -e "$STUB_DIR/watch-continue" ]; do sleep 0.01; done
+    ;;
+esac
+exec "{}" "$@"
+"#,
+            real_eb.display()
+        ),
+    );
+
+    let site = t.site.display().to_string();
+    let path = format!(
+        "{}:{}",
+        t.stubs.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut command = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"));
+    command
+        .args([
+            "watch",
+            "--site",
+            &site,
+            "--target",
+            "cpu",
+            "--build-type",
+            "production",
+            "--log-stamp",
+            LATER,
+        ])
+        .env("PATH", path)
+        .env("STUB_DIR", t.root())
+        .env_remove("EB_PIPELINE_LOG_STAMP")
+        .env_remove("EB_PIPELINE_RUN_ID")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, value) in &vars {
+        command.env(key, value);
+    }
+    let child = command.spawn().unwrap();
+    let paused = t.root().join("watch-paused");
+    for _ in 0..1000 {
+        if paused.is_file() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(paused.is_file(), "watch did not reach the paused rebuild");
+
+    let rerun = run(
+        &t,
+        "cpu",
+        "20260103_000003",
+        "Bar-2.0-GCCcore-13.2.0.eb\n",
+        &with(&vars),
+    );
+    assert_eq!(code(&rerun), 0, "{}", stderr(&rerun));
+    assert!(t.watch_state("cpu")["installs"]
+        .get("Bar/2.0-GCCcore-13.2.0")
+        .is_some());
+
+    std::fs::write(t.root().join("watch-continue"), "").unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(t.watch_state("cpu")["installs"]
+        .get("Bar/2.0-GCCcore-13.2.0")
+        .is_some());
 }
