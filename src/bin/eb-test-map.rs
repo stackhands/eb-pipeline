@@ -37,6 +37,7 @@ struct Args {
     result: Option<String>,
     extra_toolchains: BTreeSet<String>,
     allow_unmapped: bool,
+    include_resumed: bool,
     format: OutputFormat,
 }
 
@@ -149,6 +150,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut result: Option<String> = None;
     let mut extra_toolchains = BTreeSet::new();
     let mut allow_unmapped = false;
+    let mut include_resumed = false;
     let mut format = OutputFormat::Plain;
     let mut words = words.peekable();
     while let Some(word) = words.next() {
@@ -158,6 +160,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 std::process::exit(0);
             }
             "--allow-unmapped" => allow_unmapped = true,
+            "--include-resumed" => include_resumed = true,
             "--map" | "--list" | "--result" | "--toolchain" | "--format" => {
                 let value = words
                     .next()
@@ -201,12 +204,16 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     if format != OutputFormat::EessiModules && map.is_none() {
         return Err("--map is required".to_string());
     }
+    if include_resumed && result.is_none() {
+        return Err("--include-resumed requires --result".into());
+    }
     Ok(Args {
         map,
         list,
         result,
         extra_toolchains,
         allow_unmapped,
+        include_resumed,
         format,
     })
 }
@@ -243,7 +250,7 @@ fn package_names(args: &Args) -> Result<Vec<String>, String> {
     if let Some(path) = &args.list {
         package_names_from_list(path)
     } else if let Some(path) = &args.result {
-        package_names_from_result(path)
+        package_names_from_result(path, args.include_resumed)
     } else {
         unreachable!("validated in parse")
     }
@@ -253,7 +260,7 @@ fn easyconfig_paths(args: &Args) -> Result<Vec<String>, String> {
     if let Some(path) = &args.list {
         easyconfigs_from_list(path)
     } else if let Some(path) = &args.result {
-        easyconfigs_from_result(path)
+        easyconfigs_from_result(path, args.include_resumed)
     } else {
         unreachable!("validated in parse")
     }
@@ -284,14 +291,14 @@ fn easyconfigs_from_list(path: &str) -> Result<Vec<String>, String> {
     }
 }
 
-fn package_names_from_result(path: &str) -> Result<Vec<String>, String> {
-    easyconfigs_from_result(path)?
+fn package_names_from_result(path: &str, include_resumed: bool) -> Result<Vec<String>, String> {
+    easyconfigs_from_result(path, include_resumed)?
         .into_iter()
         .map(|line| package_name(&line))
         .collect()
 }
 
-fn easyconfigs_from_result(path: &str) -> Result<Vec<String>, String> {
+fn easyconfigs_from_result(path: &str, include_resumed: bool) -> Result<Vec<String>, String> {
     let text = fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
     let value: Value =
         serde_json::from_str(&text).map_err(|e| format!("cannot parse {path}: {e}"))?;
@@ -314,7 +321,13 @@ fn easyconfigs_from_result(path: &str) -> Result<Vec<String>, String> {
     for (i, item) in lines.iter().enumerate() {
         let line = object(item, &format!("lines[{i}]"))?;
         let status = req_str(line, "status", &format!("lines[{i}]"))?;
-        if status == "success" {
+        let resumed = include_resumed
+            && status == "skipped"
+            && line
+                .get("note")
+                .and_then(Value::as_str)
+                .is_some_and(|note| note.starts_with("resumed:"));
+        if status == "success" || resumed {
             let easyconfig = req_str(line, "easyconfig", &format!("lines[{i}]"))?;
             names.push(easyconfig.to_string());
         }

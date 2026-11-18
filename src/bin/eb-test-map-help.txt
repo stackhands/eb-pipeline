@@ -1,14 +1,17 @@
 eb-test-map: name the tests that cover the easyconfigs in a build list.
 
   eb-test-map --map FILE (--list FILE | --result FILE) [--toolchain NAME]...
-              [--allow-unmapped] [--format text|reframe]
-  eb-test-map (--list FILE | --result FILE) --format eessi-modules [--toolchain NAME]...
+              [--allow-unmapped] [--include-resumed] [--format text|reframe]
+  eb-test-map (--list FILE | --result FILE) --format eessi-modules
+              [--toolchain NAME]... [--include-resumed]
 
 FILE of --map has one software name and one test name per line.
 A --list file is a build list, or an easystack when its file name ends in
 .yml or .yaml. A line of that list is an easyconfig, or a path to one.
 --result FILE reads a result written by `eb-pipeline run --result` and keeps
 only lines whose status is `success`.
+--include-resumed also keeps skipped lines whose note starts with `resumed:`,
+which a run writes when prior successful outputs remain. It requires --result.
 
 The software name is the part of an easyconfig file name before the version.
 GCC, GCCcore, foss, gfbf, gomkl, gompi, iimpi, intel and intel-compilers
