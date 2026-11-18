@@ -8,7 +8,7 @@ mod archive_manifest;
 
 use std::env;
 use std::fs::{File, OpenOptions};
-use std::io;
+use std::io::{self, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -18,6 +18,14 @@ use std::time::{Duration, Instant};
 const TIMEOUT_EXIT: u8 = 124;
 const MAX_TIMEOUT_SECONDS: u64 = i32::MAX as u64;
 const TERMINATION_GRACE: Duration = Duration::from_secs(1);
+
+fn write_stdout(bytes: &[u8]) -> Result<(), String> {
+    match io::stdout().lock().write_all(bytes) {
+        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        Err(e) => Err(format!("cannot write stdout: {e}")),
+        Ok(()) => Ok(()),
+    }
+}
 
 struct Args {
     check: bool,
@@ -463,34 +471,42 @@ fn run(args: &Args, facts: &mut Facts) -> Result<u8, String> {
         .map(parse_verify_command)
         .transpose()?;
     if args.dry_run {
-        println!("cvmfs_server list");
-        println!(
-            "{}",
-            display_command(&["cvmfs_server", "transaction", &args.repository])
-        );
-        println!(
-            "{}",
-            display_command(&args.sync.iter().map(String::as_str).collect::<Vec<_>>())
-        );
+        let mut plan = String::new();
+        plan.push_str("cvmfs_server list\n");
+        plan.push_str(&display_command(&[
+            "cvmfs_server",
+            "transaction",
+            &args.repository,
+        ]));
+        plan.push('\n');
+        plan.push_str(&display_command(
+            &args.sync.iter().map(String::as_str).collect::<Vec<_>>(),
+        ));
+        plan.push('\n');
         if let Some(command) = &verify {
-            println!("{}", display_verify_command(command));
+            plan.push_str(&display_verify_command(command));
+            plan.push('\n');
         }
-        println!("{}", display_publish_command(args));
+        plan.push_str(&display_publish_command(args));
+        plan.push('\n');
         if args.check {
-            println!(
-                "{}",
-                display_command(&["cvmfs_server", "check", &args.repository])
-            );
+            plan.push_str(&display_command(&[
+                "cvmfs_server",
+                "check",
+                &args.repository,
+            ]));
+            plan.push('\n');
         }
         let failure = if verify.is_some() {
             "sync or verification failure"
         } else {
             "sync failure"
         };
-        println!(
-            "# on {failure}: {}",
+        plan.push_str(&format!(
+            "# on {failure}: {}\n",
             display_command(&["cvmfs_server", "abort", "-f", &args.repository])
-        );
+        ));
+        write_stdout(plan.as_bytes())?;
         return Ok(0);
     }
 

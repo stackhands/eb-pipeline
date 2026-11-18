@@ -8,10 +8,10 @@
 //! `--setvar modules=Name/Version,...` argument for the applications in
 //! the list.
 
+use eb_pipeline::util;
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
-use std::io::{self, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -109,15 +109,18 @@ fn text_names(args: &Args) -> Result<ExitCode, String> {
             eprintln!("eb-test-map: {name} has no test in {map_path}; allowed");
         }
     }
-    let mut out = io::stdout().lock();
+    let mut out_text = String::new();
     for test in &tests {
         let line = match args.format {
             OutputFormat::Plain => test.clone(),
             OutputFormat::Reframe => format!("-n ^{}$", escape_regex_literal(test)),
             OutputFormat::EessiModules => unreachable!(),
         };
-        writeln!(out, "{line}").map_err(|e| format!("cannot write the test names: {e}"))?;
+        out_text.push_str(&line);
+        out_text.push('\n');
     }
+    util::write_stdout(out_text.as_bytes())
+        .map_err(|e| format!("cannot write the test names: {e}"))?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -138,8 +141,8 @@ fn eessi_modules(args: &Args) -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
     let joined = modules.into_iter().collect::<Vec<_>>().join(",");
-    let mut out = io::stdout().lock();
-    writeln!(out, "--setvar modules={joined}")
+    let line = format!("--setvar modules={joined}\n");
+    util::write_stdout(line.as_bytes())
         .map_err(|e| format!("cannot write the module list: {e}"))?;
     Ok(ExitCode::SUCCESS)
 }

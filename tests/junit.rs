@@ -415,3 +415,32 @@ fn the_pages_name_eb_junit() {
     let reference = std::fs::read_to_string(root.join("reference/index.org")).unwrap();
     assert!(reference.contains("\n   junit\n"), "{reference}");
 }
+
+#[test]
+fn junit_succeeds_when_stdout_consumer_closes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("result.json");
+    std::fs::write(
+        &path,
+        r#"{"kind":"result","schema_version":1,"site":"s","target":"t","build_type":"b","run_id":"r","exit_code":0,"lines":[]}"#,
+    )
+    .unwrap();
+    let mut fds = [0; 2];
+    unsafe {
+        assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+        assert_eq!(libc::close(fds[0]), 0);
+    }
+    let closed = unsafe { <std::process::Stdio as std::os::fd::FromRawFd>::from_raw_fd(fds[1]) };
+    let o = bin()
+        .args(["--result"])
+        .arg(&path)
+        .stdout(closed)
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+}
