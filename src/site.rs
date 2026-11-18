@@ -144,6 +144,14 @@ fn env_name_ok(s: &str) -> bool {
         && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+fn validate_env_map(path: &str, values: &BTreeMap<String, String>, errs: &mut Vec<String>) {
+    for name in values.keys().filter(|name| !env_name_ok(name)) {
+        errs.push(format!(
+            "{path}: `{name}` is not an environment variable name"
+        ));
+    }
+}
+
 /// Report unknown or unbalanced `{placeholder}` uses in `text`.
 fn check_placeholders(key: &str, text: &str, allowed: &[&str], errs: &mut Vec<String>) {
     let mut rest = text;
@@ -390,6 +398,7 @@ fn validate_route(t: &str, r: &Route, e: &mut Vec<String>) {
     for (k, v) in &r.env {
         check_placeholders(&format!("targets.{t}.route.env.{k}"), v, ROUTE_ALL, e);
     }
+    validate_env_map(&format!("targets.{t}.route.env"), &r.env, e);
     for s in r.shares_ro.iter().chain(&r.shares_rw) {
         check_placeholders(&format!("targets.{t}.route.shares"), s, ROUTE_BASIC, e);
     }
@@ -513,6 +522,7 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
     if site.scheduler.launch.trim().is_empty() {
         e.push("scheduler.launch: must not be empty".into());
     }
+    validate_env_map("scheduler.env", &site.scheduler.env, &mut e);
     check_placeholders(
         "scheduler.job_name_template",
         &site.scheduler.job_name_template,
@@ -556,6 +566,13 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
         }
         if let Some(s) = &t.select {
             validate_select(&t.name, s, &mut e);
+        }
+        for (package, values) in &t.package_env {
+            validate_env_map(
+                &format!("targets.{}.package_env.{package}", t.name),
+                values,
+                &mut e,
+            );
         }
         if site.eessi_on().is_some() {
             validate_eessi_target(t, &mut e);
@@ -648,11 +665,7 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
         if a.enabled && a.default_footprint.is_none() {
             e.push("admission.default_footprint: required when admission is enabled".into());
         }
-        let env_ok = !a.job_id_env.is_empty()
-            && a.job_id_env
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_');
-        if !env_ok {
+        if !env_name_ok(&a.job_id_env) {
             e.push("admission.job_id_env: use letters, digits and `_`".into());
         }
         if a.attempts == 0 {
@@ -745,6 +758,21 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
         e.push(format!(
             "modules.init: `{m}` has white space; an entry is one module name, so give each module its own entry"
         ));
+    }
+    for (package, values) in &site.modules.package_env {
+        validate_env_map(&format!("modules.package_env.{package}"), values, &mut e);
+    }
+    if let Some(layer) = site.eessi_on() {
+        for (key, name) in [
+            ("cpu_override_var", &layer.cpu_override_var),
+            ("accel_override_var", &layer.accel_override_var),
+        ] {
+            if !env_name_ok(name) {
+                e.push(format!(
+                    "modules.eessi.{key}: `{name}` is not an environment variable name"
+                ));
+            }
+        }
     }
     let shell = &site.modules.shell;
     let shell_name = Path::new(shell).file_name().and_then(|n| n.to_str());
@@ -895,6 +923,9 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
                     "licences.below_version.{n}: no group set for `{n}`"
                 ));
             }
+        }
+        for (package, values) in &l.env {
+            validate_env_map(&format!("licences.env.{package}"), values, &mut e);
         }
     }
     if let Some(n) = &site.notify {
@@ -1152,6 +1183,23 @@ mod override_tests {
 #[cfg(test)]
 mod validation_tests {
     use super::*;
+
+    #[test]
+    fn environment_maps_reject_names_the_process_cannot_export() {
+        let mut parsed = parse(include_str!("../templates/small-cluster.toml")).unwrap();
+        parsed
+            .scheduler
+            .env
+            .insert("BAD=NAME".into(), "value".into());
+
+        let errors = validate(&parsed, None);
+        assert!(
+            errors.contains(
+                &"scheduler.env: `BAD=NAME` is not an environment variable name".to_string()
+            ),
+            "{errors:?}"
+        );
+    }
 
     #[test]
     fn duplicate_shard_module_sources_are_refused() {
