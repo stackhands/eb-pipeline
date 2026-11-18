@@ -233,8 +233,26 @@ enum Cmd {
     },
     /// Recompute the input record and check its inclusion proof.
     Verify {
-        #[command(flatten)]
-        common: Common,
+        /// Site file.
+        #[arg(long, env = "EB_PIPELINE_SITE")]
+        site: PathBuf,
+        /// Build list file, or an EasyBuild easystack.
+        #[arg(
+            long,
+            env = "EB_PIPELINE_LIST",
+            required_unless_present = "recorded_list",
+            conflicts_with = "recorded_list"
+        )]
+        list: Option<PathBuf>,
+        /// Read the list path recorded in the plan or result.
+        #[arg(long)]
+        recorded_list: bool,
+        /// Target name.
+        #[arg(long, env = "EB_PIPELINE_TARGET")]
+        target: String,
+        /// Build type name.
+        #[arg(long, env = "EB_PIPELINE_BUILD_TYPE")]
+        build_type: String,
         /// Plan or result JSON that holds `input_attestation`.
         #[arg(long)]
         from: PathBuf,
@@ -1497,9 +1515,15 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     Ok(res.exit_code)
 }
 
-fn cmd_verify(c: &Common, from: &Path) -> Result<i32, Fail> {
+fn cmd_verify(
+    site_path: &Path,
+    list_path: Option<&Path>,
+    recorded_list: bool,
+    target: &str,
+    from: &Path,
+) -> Result<i32, Fail> {
     let (s, errs) = {
-        let s = site::load(&c.site)?;
+        let s = site::load(site_path)?;
         let e = site::validate(&s, None);
         (s, e)
     };
@@ -1533,8 +1557,18 @@ fn cmd_verify(c: &Common, from: &Path) -> Result<i32, Fail> {
             ))
         }
     };
-    let Some(list) = c.list.as_deref() else {
-        return Err(Fail::usage("verify needs --list"));
+    let list = if recorded_list {
+        doc.get("list")
+            .and_then(serde_json::Value::as_str)
+            .map(Path::new)
+            .ok_or_else(|| {
+                Fail::usage(format!(
+                    "{} has no string `list` for --recorded-list",
+                    from.display()
+                ))
+            })?
+    } else {
+        list_path.expect("clap requires --list or --recorded-list")
     };
     let list_text = std::fs::read_to_string(list)
         .map_err(|e| Fail::usage(format!("cannot read list {}: {e}", list.display())))?;
@@ -1550,17 +1584,17 @@ fn cmd_verify(c: &Common, from: &Path) -> Result<i32, Fail> {
             list.display()
         )));
     }
-    if s.target(&c.target).is_err() {
-        return Err(Fail::usage(format!("no target {}", c.target)));
+    if s.target(target).is_err() {
+        return Err(Fail::usage(format!("no target {target}")));
     }
     eb_pipeline::attest::verify(
         &eb_pipeline::attest::Request {
             site: &s,
             attest: conf,
-            site_path: &c.site,
+            site_path,
             list_path: list,
             lines: &lines,
-            target: &c.target,
+            target,
         },
         &stored,
     )?;
@@ -1674,7 +1708,14 @@ fn main() {
                 resume_result: resume_result.as_deref(),
             },
         ),
-        Cmd::Verify { common, from } => cmd_verify(common, from),
+        Cmd::Verify {
+            site,
+            list,
+            recorded_list,
+            target,
+            build_type: _,
+            from,
+        } => cmd_verify(site, list.as_deref(), *recorded_list, target, from),
         Cmd::Watch {
             site,
             target,

@@ -323,10 +323,60 @@ fn an_enabled_plan_appends_a_record_and_verify_recomputes_it() {
         "{}",
         String::from_utf8_lossy(&verified.stderr)
     );
+    assert_eq!(verified.stderr, b"");
+    let expected = format!(
+        "verified input record {}\n",
+        att["record_sha256"].as_str().unwrap()
+    );
+    assert_eq!(verified.stdout, expected.as_bytes());
+
+    let recorded = tree.run(
+        &[
+            "verify",
+            "--site",
+            root.join("site.toml").to_str().unwrap(),
+            "--recorded-list",
+            "--target",
+            "cpu",
+            "--build-type",
+            "production",
+            "--from",
+            plan_path.to_str().unwrap(),
+        ],
+        &[
+            ("STUB_EASYCONFIG", ec.as_str()),
+            ("EB_IMAGE_DIGEST", "sha256:abc"),
+            ("EB_ROUTE_RECEIPT", "receipt-1"),
+        ],
+    );
+    assert_eq!(recorded.status.code(), Some(0));
+    assert_eq!(recorded.stdout, verified.stdout);
+    assert_eq!(recorded.stderr, verified.stderr);
+
+    let conflict = tree.run(
+        &[
+            "verify",
+            "--site",
+            root.join("site.toml").to_str().unwrap(),
+            "--list",
+            root.join("list.txt").to_str().unwrap(),
+            "--recorded-list",
+            "--target",
+            "cpu",
+            "--build-type",
+            "production",
+            "--from",
+            plan_path.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert_eq!(conflict.status.code(), Some(2));
+    assert!(conflict.stdout.is_empty());
     assert!(
-        String::from_utf8_lossy(&verified.stdout).contains("verified input record "),
+        String::from_utf8_lossy(&conflict.stderr)
+            .contains("the argument '--list <LIST>' cannot be used with '--recorded-list'"),
         "{}",
-        String::from_utf8_lossy(&verified.stdout)
+        String::from_utf8_lossy(&conflict.stderr)
     );
 
     let mut bad_inclusion = plan_json.clone();

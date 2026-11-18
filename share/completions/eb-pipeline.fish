@@ -120,16 +120,11 @@ complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand run" -l dry-run 
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand run" -l oom-preflight -d 'Ask `eb-stack stack oom` whether any planned package exceeds this node'
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand run" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand verify" -l site -d 'Site file' -r -F
-complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand verify" -l list -d 'Build list file: one `Name-version-toolchain.eb [eb options]` per line, or an EasyBuild easystack, a `.yml` or `.yaml` file' -r -F
-complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand verify" -l package-plan -d 'Directory written by `eb-stack package plan`; builds its emitted recipes' -r -F
+complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand verify" -l list -d 'Build list file, or an EasyBuild easystack' -r -F
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand verify" -l target -d 'Target name' -r
-complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand verify" -l build-type -d 'Build type name (selects per-build-type overrides)' -r
-complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand verify" -l run-id -d 'Run label recorded in the result and passed to tools; a staged rebuild line passes `<run-id>-<easyconfig stem>`. Default: the log stamp for `run`, `<run-id>` for `plan`' -r
-complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand verify" -l log-stamp -d 'Timestamp directory under the log root: a UTC time as `YYYYMMDD_HHMMSS`, the name `eb-keep-logs rotate` ages. Default: the current UTC time, taken once per run; `<log-stamp>` for `plan`' -r
-complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand verify" -l offline-bundle -d 'Build a checksum-indexed bundle of prefetched and configured assets' -r -F
+complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand verify" -l build-type -d 'Build type name' -r
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand verify" -l from -d 'Plan or result JSON that holds `input_attestation`' -r -F
-complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand verify" -l verify-package-plan -d 'Run ecosystem-native checks after a package-plan build'
-complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand verify" -l require-offline -d 'Run phases after source prefetch through sources.offline_wrapper'
+complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand verify" -l recorded-list -d 'Read the list path recorded in the plan or result'
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand verify" -s h -l help -d 'Print help'
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand watch" -l site -d 'Site file' -r -F
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand watch" -l target -d 'Target name' -r

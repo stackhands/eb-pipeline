@@ -91,6 +91,15 @@ A real =rfc9162-sidecar= also checks the signed checkpoint and the inclusion pat
    =verify= runs =eb-stack= again, rebuilds the record, checks the inclusion path with the published =rfc9162= library, and asks =rfc9162-sidecar verify-proof= to check the signed checkpoint and the rest of the stored proof.
    Give =verify= the same site, list and target that produced the file.
 
+   To use the list path stored in the plan or result, pass =--recorded-list= in place of =--list=:
+
+   #+begin_src bash
+   eb-pipeline verify --site site.toml --recorded-list --target cpu --build-type production --from plan.json
+   #+end_src
+
+   Relative recorded paths are read from the directory where =verify= runs.
+   Keep the list at that path, or use =--list= to name its current location.
+
 3. A changed input is refused.
    After the patch file differs from the one that was hashed:
 

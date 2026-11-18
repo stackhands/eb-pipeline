@@ -317,13 +317,16 @@ With =--dry-run=, a planned command prints as =[PHASE] COMMAND= and a phase that
 
 *** verify
 
-=verify= takes the first four options of =plan=, and this:
+=verify= takes =--site=, =--target= and =--build-type= as =plan= does, and these:
 
-| Option       | Meaning                                                                                          |
-|--------------+--------------------------------------------------------------------------------------------------|
-| =--from FILE= | The plan or result JSON that holds =input_attestation=. Required. Needs =[attest] enabled=.     |
+| Option              | Variable             | Meaning                                                                                              |
+|---------------------+----------------------+------------------------------------------------------------------------------------------------------|
+| =--list FILE=       | =EB_PIPELINE_LIST=   | Recompute from this build list or easystack. Use this or =--recorded-list=.                           |
+| =--recorded-list=   |                      | Recompute from the =list= path in =--from=. Conflicts with =--list=.                                 |
+| =--from FILE=       |                      | The plan or result JSON that holds =input_attestation=. Required. Needs =[attest] enabled=.           |
 
 =verify= recomputes the input record and checks the inclusion proof in =FILE=.
+A relative recorded list path is resolved from the current working directory.
 A record that no longer matches the inputs exits 78.
 A proof that =rfc9162-sidecar verify-proof= rejects exits 1.
 Without =[attest] enabled=, =verify= exits 2.
