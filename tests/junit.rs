@@ -29,6 +29,7 @@ fn help_and_version_exit_zero() {
     let text = String::from_utf8(help.stdout).unwrap();
     assert!(text.contains("eb-junit [--result FILE]... [--reframe-report FILE]... [--out FILE]"));
     assert!(text.contains("--reframe-report FILE"));
+    assert!(text.contains("--fail-on-failure"));
     assert!(text.contains("Exit 0 means the report was"));
     assert!(help.stderr.is_empty());
 
@@ -36,6 +37,44 @@ fn help_and_version_exit_zero() {
     assert_eq!(version.status.code(), Some(0));
     let text = String::from_utf8(version.stdout).unwrap();
     assert!(text.starts_with("eb-junit "), "{text}");
+}
+
+#[test]
+fn default_stdout_and_status_remain_byte_for_byte_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("result.json");
+    std::fs::write(&path, result(0, "")).unwrap();
+    let output = bin().arg("--result").arg(&path).output().unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stderr, b"");
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+            "<testsuites name=\"eb-pipeline\" tests=\"0\" failures=\"0\" errors=\"0\" skipped=\"0\" time=\"0.000\">\n",
+            "  <testsuite name=\"example/cpu\" tests=\"0\" failures=\"0\" errors=\"0\" skipped=\"0\" time=\"0.000\" hostname=\"cpu\">\n",
+            "    <properties>\n",
+            "      <property name=\"schema_version\" value=\"1\"/>\n",
+            "      <property name=\"site\" value=\"example\"/>\n",
+            "      <property name=\"target\" value=\"cpu\"/>\n",
+            "      <property name=\"build_type\" value=\"production\"/>\n",
+            "      <property name=\"run_id\" value=\"nightly\"/>\n",
+            "      <property name=\"exit_code\" value=\"0\"/>\n",
+            "    </properties>\n",
+            "  </testsuite>\n",
+            "</testsuites>\n",
+        )
+        .as_bytes()
+    );
+    let gated = bin()
+        .arg("--result")
+        .arg(&path)
+        .arg("--fail-on-failure")
+        .output()
+        .unwrap();
+    assert_eq!(gated.status.code(), Some(0));
+    assert_eq!(gated.stdout, output.stdout);
+    assert!(gated.stderr.is_empty());
 }
 
 #[test]
@@ -73,6 +112,48 @@ fn a_result_file_is_reported_and_left_unchanged() {
     assert!(!xml.contains("logs/ok.log"), "{xml}");
     assert!(xml.contains("<failure type=\"failed\" message=\"failed\">"));
     assert!(xml.contains("log: logs/bad.log"));
+}
+
+#[test]
+fn fail_on_failure_writes_the_same_report_before_returning_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("result.json");
+    std::fs::write(
+        &path,
+        result(
+            1,
+            r#"{"easyconfig":"Bad.eb","unit":"all","phase":"build","status":"failed","exit_code":1}"#,
+        ),
+    )
+    .unwrap();
+
+    let default = bin().arg("--result").arg(&path).output().unwrap();
+    assert_eq!(default.status.code(), Some(0));
+    assert!(default.stderr.is_empty());
+
+    let gated = bin()
+        .arg("--result")
+        .arg(&path)
+        .arg("--fail-on-failure")
+        .output()
+        .unwrap();
+    assert_eq!(gated.status.code(), Some(1));
+    assert_eq!(gated.stdout, default.stdout);
+    assert!(gated.stderr.is_empty());
+
+    let report = dir.path().join("junit.xml");
+    let gated_file = bin()
+        .arg("--result")
+        .arg(&path)
+        .arg("--out")
+        .arg(&report)
+        .arg("--fail-on-failure")
+        .output()
+        .unwrap();
+    assert_eq!(gated_file.status.code(), Some(1));
+    assert!(gated_file.stdout.is_empty());
+    assert!(gated_file.stderr.is_empty());
+    assert_eq!(std::fs::read(report).unwrap(), default.stdout);
 }
 
 #[test]
@@ -135,6 +216,15 @@ fn a_reframe_report_adds_suites() {
         xml.contains("<failure type=\"failure\" message=\"failure\">"),
         "{xml}"
     );
+    let gated = bin()
+        .args(["--reframe-report"])
+        .arg(&report)
+        .arg("--fail-on-failure")
+        .output()
+        .unwrap();
+    assert_eq!(gated.status.code(), Some(1));
+    assert_eq!(gated.stdout, xml.as_bytes());
+    assert!(gated.stderr.is_empty());
 }
 
 #[test]
