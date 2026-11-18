@@ -50,6 +50,8 @@ A stand-in for =eb-stack= writes the hash file, and a stand-in for =eb= writes t
    eb-pipeline does not hash the easyconfigs itself.
    The file covers the easyconfig bytes and their dependency hashes, so a change to those bytes changes the digest.
    Options on the build list, such as =--rebuild=, are not in that file.
+   A dry run previews a fresh run and cannot be combined with =--resume-result=.
+   Test the resume behavior with a real run and a distinct result path, as in step 3.
 
 2. Run the list and keep the result:
 

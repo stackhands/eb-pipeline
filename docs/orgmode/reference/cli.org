@@ -297,9 +297,9 @@ Exit 2 means the file is missing, is not JSON, or its =kind= is not =result=.
 | =--result FILE=        | Write the result file to =FILE= when the run ends. Without it, no result file is written. An error in the input, which stops the run before it starts, leaves an existing =FILE= as it was. It must differ from =--metrics-file=.   |
 | =--plan-out FILE=      | Write the plan computed by this invocation before any phase command starts. A dry run writes it too. =FILE= must differ from every result and metrics path.                                                                       |
 | =--metrics-file FILE=  | Atomically replace =FILE= with Prometheus text when the run ends. Without it, no metrics file is written. A dry run does not write it. It must differ from =--result= and =--resume-result=.                                             |
-| =--resume-result FILE= | Continue from =FILE= when =[resume] enabled= is true and the input digest still matches. Without that, exit 2 and no result file. A mismatch, a missing =input_digest=, or an incomplete identity exits 78 and writes the result. |
+| =--resume-result FILE= | Continue from =FILE= when =[resume] enabled= is true and the input digest still matches. Conflicts with =--dry-run=. Without that, exit 2 and no result file. A mismatch, a missing =input_digest=, or an incomplete identity exits 78 and writes the result. |
 | =--shard-plan DIR=     | Read the units from a plan previously written by =eb-stack stack shard=. The run does not call the shard planner or require its installed-module-directory environment variables.                                             |
-| =--dry-run=            | Print each command of the plan on stdout and start nothing. No result file, metrics file or summary is written, even with an output option.                                                                                     |
+| =--dry-run=            | Print each command of a fresh plan on stdout and start nothing. Conflicts with =--resume-result=. No result file, metrics file or summary is written, even with an output option.                                                           |
 | =--oom-preflight=      | Before any package starts, ask =eb-stack stack oom= about the planned packages. Requires =--node=. Without this option no out-of-memory check runs.                                                                             |
 | =--node NODE=          | The node passed to =eb-stack stack oom=, as =CORES:MEMORY_MIB= or =CORES:MEMORY_MIB:TARGET=. Requires =--oom-preflight=.                                                                                                        |
 
@@ -314,6 +314,7 @@ When the OOM count is greater than zero, the preflight is refused, every planned
 The command reads only the =oom=N= summary line from eb-stack; eb-pipeline does not estimate memory itself.
 
 With =--dry-run=, a planned command prints as =[PHASE] COMMAND= and a phase that starts nothing as =# [PHASE] STATUS=.
+The preview does not evaluate a prior result, so =--dry-run= and =--resume-result= together exit 2.
 
 *** verify
 

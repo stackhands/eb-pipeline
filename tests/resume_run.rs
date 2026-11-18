@@ -147,6 +147,7 @@ fn resume(shards: u32) -> impl FnOnce(&Path) -> String {
 
 struct Out {
     code: i32,
+    stdout: String,
     stderr: String,
     result: Option<Value>,
 }
@@ -191,6 +192,7 @@ fn invoke(w: &World, cmd: &str, list: Option<&str>, vars: &[(&str, &str)], extra
     };
     Out {
         code: o.status.code().unwrap_or(127),
+        stdout,
         stderr,
         result: parsed,
     }
@@ -213,6 +215,79 @@ fn line<'a>(v: &'a Value, easyconfig: &str) -> &'a Value {
         .iter()
         .find(|l| l["easyconfig"] == easyconfig)
         .unwrap_or_else(|| panic!("no line {easyconfig} in {v}"))
+}
+
+#[test]
+fn dry_run_and_resume_result_are_refused_together() {
+    let w = world(resume(1));
+    let prior = w.root.join("prior.json");
+    std::fs::write(&prior, "{}\n").unwrap();
+    let out = invoke(
+        &w,
+        "run",
+        Some("Foo-1.0-foss-2025a.eb\n"),
+        &[],
+        &[
+            "--dry-run",
+            "--resume-result",
+            prior.to_str().unwrap(),
+            "--run-id",
+            "r1",
+            "--log-stamp",
+            "20260101_000000",
+        ],
+    );
+    assert_eq!(out.code, 2);
+    assert!(out.stdout.is_empty());
+    assert!(
+        out.stderr
+            .contains("the argument '--dry-run' cannot be used with '--resume-result <FILE>'"),
+        "{}",
+        out.stderr
+    );
+    assert!(calls(&w, "eb.calls").is_empty());
+    assert!(calls(&w, "eb-stack.calls").is_empty());
+}
+
+#[test]
+fn dry_run_without_resume_keeps_its_output() {
+    let w = world(resume(1));
+    let out = invoke(
+        &w,
+        "run",
+        Some("Foo-1.0-foss-2025a.eb\n"),
+        &[],
+        &[
+            "--dry-run",
+            "--run-id",
+            "r1",
+            "--log-stamp",
+            "20260101_000000",
+        ],
+    );
+    assert_eq!(out.code, 0);
+    let root = w.root.display();
+    let eb_stack = w.stubs.join("eb-stack");
+    let eb_stack = eb_stack.display();
+    let expected = format!(
+        concat!(
+            "# [licences] not configured\n",
+            "[shard] {eb_stack} stack order --out {root}/logs/20260101_000000/cpu/input-order.txt --hashes-out {root}/logs/20260101_000000/cpu/input-hashes.txt --easyconfigs {root}/easyconfigs --root Foo==1.0\n",
+            "# [sources] not configured\n",
+            "# [admission] not configured\n",
+            "[build] eb Foo-1.0-foss-2025a.eb\n",
+            "# [checks] not configured\n",
+            "# [caches] not configured\n",
+            "# [logs] not configured\n",
+        ),
+        eb_stack = eb_stack,
+        root = root,
+    );
+    assert_eq!(out.stdout.as_bytes(), expected.as_bytes());
+    assert_eq!(
+        out.stderr.as_bytes(),
+        b"INFO [run] cpu: dry run: nothing executed\n"
+    );
 }
 
 #[test]
