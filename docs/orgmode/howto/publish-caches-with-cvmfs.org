@@ -47,23 +47,27 @@ That expression contains expansion and =&&=, so =eb-cvmfs= runs it as =sh -c CMD
 A failed verifier keeps its standard output and standard error visible, triggers =cvmfs_server abort -f= and returns its status.
 The synchronization command and verifier are not retried by =eb-cvmfs=.
 
-** 4. Bound synchronization and verification
+** 4. Bound synchronization, verification and publish
 
 Add =--sync-timeout SEC= when synchronization must stop after a fixed number of seconds.
 Add =--verify-timeout SEC= with =--verify-cmd= to bound the verifier separately:
+Add =--publish-timeout SEC= to bound =cvmfs_server publish=:
 
 #+begin_src bash
 eb-cvmfs \
   --sync-timeout 900 \
   --verify-cmd '/opt/site/bin/check-module-cache --root "/cvmfs/repo.example"' \
   --verify-timeout 120 \
+  --publish-timeout 300 \
   repo.example -- /opt/site/bin/sync-module-cache
 #+end_src
 
 Choose deadlines that cover a normal run at the publishing site.
-Both values are positive whole seconds.
-When either deadline expires, =eb-cvmfs= terminates the complete command process group, waits the documented one-second grace period between =TERM= and =KILL=, and aborts the transaction once.
-The timed-out command is not retried, and no publish starts.
+All three values are positive whole seconds.
+When a deadline expires, =eb-cvmfs= terminates the complete command process group, waits the documented one-second grace period between =TERM= and =KILL=, and aborts the transaction once.
+The timed-out command is not retried.
+After a synchronization or verification timeout, no publish starts.
+After a publish timeout, no integrity check starts.
 Exit status 124 and the optional metrics file distinguish a timeout from a command failure.
 
 ** 5. Name the publish and check the repository
