@@ -1,8 +1,9 @@
 //! Observable behavior of opt-in offline bundles.
 
+mod exec_stub;
+
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -78,8 +79,7 @@ struct Fixture {
 }
 
 fn executable(path: &Path, text: &str) {
-    std::fs::write(path, text).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    exec_stub::write_exec(path, text);
 }
 
 fn digest(bytes: &[u8]) -> String {

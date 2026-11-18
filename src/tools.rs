@@ -4,7 +4,11 @@ use crate::exit::{self, Fail};
 use crate::schema::{Site, ToolSpec};
 use crate::util::{cmp_version, find_version, parse_version};
 use std::collections::BTreeMap;
+use std::io;
 use std::process::{Command, Stdio};
+
+#[cfg(test)]
+use std::time::Duration;
 
 /// A sibling tool that eb-pipeline starts as a subprocess.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,10 +91,10 @@ pub fn needed(site: &Site) -> Vec<Tool> {
 
 /// Run `bin --version` and return the parsed version.
 pub fn probe(bin: &str) -> Result<Vec<u64>, String> {
-    let out = Command::new(bin)
-        .arg("--version")
-        .output()
-        .map_err(|e| format!("cannot run `{bin} --version`: {e}"))?;
+    let mut command = Command::new(bin);
+    command.arg("--version");
+    let out =
+        command_output(&mut command).map_err(|e| format!("cannot run `{bin} --version`: {e}"))?;
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
@@ -117,12 +121,10 @@ pub fn probe(bin: &str) -> Result<Vec<u64>, String> {
 /// its Zig build says 0.2.1, and its shell script 0.1.0, with the option
 /// and without it.
 pub fn help_lists(bin: &str, env: &BTreeMap<String, String>, option: &str) -> Result<bool, String> {
-    let out = Command::new(bin)
-        .arg("--help")
-        .envs(env)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| format!("cannot run `{bin} --help`: {e}"))?;
+    let mut command = Command::new(bin);
+    command.arg("--help").envs(env).stdin(Stdio::null());
+    let out =
+        command_output(&mut command).map_err(|e| format!("cannot run `{bin} --help`: {e}"))?;
     if !out.status.success() {
         let code = out
             .status
@@ -175,6 +177,29 @@ fn join(v: &[u64]) -> String {
     v.iter().map(u64::to_string).collect::<Vec<_>>().join(".")
 }
 
+#[cfg(not(test))]
+fn command_output(command: &mut Command) -> io::Result<std::process::Output> {
+    command.output()
+}
+
+#[cfg(test)]
+fn command_output(command: &mut Command) -> io::Result<std::process::Output> {
+    const ATTEMPTS: usize = 8;
+    const BASE_MS: u64 = 5;
+    let mut last_error: Option<io::Error> = None;
+    for attempt in 0..ATTEMPTS {
+        match command.output() {
+            Ok(output) => return Ok(output),
+            Err(error) if error.raw_os_error() == Some(26) && attempt + 1 < ATTEMPTS => {
+                last_error = Some(error);
+                std::thread::sleep(Duration::from_millis(BASE_MS * (1 << attempt)));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| io::Error::other("cannot run command")))
+}
+
 /// Outcome of a staged-rebuild exit code.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum StagedOutcome {
@@ -225,13 +250,22 @@ pub fn map_rotate(code: i32) -> RotateOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn a_failed_version_command_does_not_supply_an_accepted_version() {
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("eb-stack");
-        std::fs::write(&bin, "#!/bin/sh\necho 'eb-stack 99.0' >&2\nexit 1\n").unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&bin)
+            .unwrap();
+        file.write_all(b"#!/bin/sh\necho 'eb-stack 99.0' >&2\nexit 1\n")
+            .unwrap();
+        file.sync_all().unwrap();
+        drop(file);
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         let error = probe(bin.to_str().unwrap()).unwrap_err();

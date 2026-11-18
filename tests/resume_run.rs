@@ -1,7 +1,9 @@
 //! `run --resume-result` against stub `eb` and `eb-stack` programs.
 
+mod exec_stub;
+
 use serde_json::Value;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -94,8 +96,7 @@ fn world(extra: impl FnOnce(&Path) -> String) -> World {
     std::fs::create_dir(&stubs).unwrap();
     for (name, text) in [("eb-stack", EB_STACK), ("eb", EB)] {
         let path = stubs.join(name);
-        std::fs::write(&path, text).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        exec_stub::write_exec(&path, text);
     }
     std::fs::create_dir(root.join("easyconfigs")).unwrap();
     let site = root.join("site.toml");

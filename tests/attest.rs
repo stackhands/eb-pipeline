@@ -3,6 +3,8 @@
 //! `run` append a record through `eb-stack` and `rfc9162-sidecar`, and
 //! `verify` recomputes that record.
 
+mod exec_stub;
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Output};
@@ -74,8 +76,7 @@ exit 2
 const EB: &str = "#!/bin/sh\nexit 0\n";
 
 fn write_exec(path: &Path, text: &str) {
-    std::fs::write(path, text).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    exec_stub::write_exec(path, text);
 }
 
 fn bin() -> Command {

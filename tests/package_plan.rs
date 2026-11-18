@@ -1,5 +1,6 @@
+mod exec_stub;
+
 use sha2::{Digest, Sha256};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -11,8 +12,7 @@ struct Fixture {
 }
 
 fn executable(path: &Path, text: &str) {
-    std::fs::write(path, text).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    exec_stub::write_exec(path, text);
 }
 
 fn fixture(origin: &str, package: &str, recipe: &str) -> Fixture {

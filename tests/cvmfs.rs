@@ -1,6 +1,7 @@
 //! `eb-cvmfs` brackets one configured synchronization in a CVMFS transaction.
 
-use std::io::Write;
+mod exec_stub;
+
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -53,14 +54,8 @@ exit 99
 static EXEC_FORK_LOCK: RwLock<()> = RwLock::new(());
 
 fn write_exec(path: &Path, text: &str) {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let _guard = EXEC_FORK_LOCK.write().unwrap_or_else(|e| e.into_inner());
-    let mut temp = tempfile::NamedTempFile::new_in(parent).unwrap();
-    temp.write_all(text.as_bytes()).unwrap();
-    temp.as_file().flush().unwrap();
-    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
-    let persisted = temp.persist(path).unwrap();
-    drop(persisted);
+    exec_stub::write_exec(path, text);
 }
 
 trait CommandSyncExt {

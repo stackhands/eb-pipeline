@@ -1,6 +1,7 @@
 //! `run` against stub tool binaries written into a temporary directory.
 
 mod common;
+mod exec_stub;
 
 use serde_json::Value;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -203,8 +204,7 @@ struct Env {
 
 fn write_exec(path: &Path, text: &str) {
     let _g = SPAWN.lock().unwrap();
-    std::fs::write(path, text).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    exec_stub::write_exec(path, text);
 }
 
 fn setup(extra_site: &str) -> Env {

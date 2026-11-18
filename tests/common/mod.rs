@@ -2,10 +2,12 @@
 //! `eb-stack` binaries, and a fake EESSI tree, for the tests of the run
 //! summary, `watch` and what reads them. Each test file uses a part of it.
 #![allow(dead_code)]
+#[path = "../exec_stub.rs"]
+mod exec_stub_shared;
 
+use exec_stub_shared::CommandSyncExt;
 use serde_json::Value;
 use std::os::fd::FromRawFd;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -223,8 +225,7 @@ pub fn set_revision(dir: &Path, rev: u64) {
 }
 
 pub fn write_exec(path: &Path, text: &str) {
-    std::fs::write(path, text).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    exec_stub_shared::write_exec(path, text);
 }
 
 /// A stand-in for srun, and for the prolog and epilog of its node: each job
@@ -348,7 +349,7 @@ pub fn eb_pipeline(t: &T, args: &[&str], vars: &[(&str, &str)]) -> Output {
     for (k, v) in vars {
         c.env(k, v);
     }
-    c.output().unwrap()
+    c.sync_output()
 }
 
 /// `run` of `list` for `target` in the run directory `stamp`.
