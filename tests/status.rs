@@ -75,6 +75,61 @@ fn status_prints_the_last_runs_newest_first() {
 }
 
 #[test]
+fn default_status_output_stays_byte_for_byte_unchanged() {
+    let t = three_runs();
+    let o = status(&t, &["--last", "1"]);
+    let expected =
+        format!("{C}  no summary.json: the run is still going, or ended before writing one\n");
+    assert_eq!(o.status.code(), Some(0));
+    assert_eq!(o.stdout, expected.as_bytes());
+    assert_eq!(o.stderr, b"");
+}
+
+#[test]
+fn problems_only_keeps_failed_and_incomplete_runs() {
+    let t = three_runs();
+    let o = status(&t, &["--problems-only", "--last", "3"]);
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    let out = stdout(&o);
+    assert!(out.contains(C), "{out}");
+    assert!(out.contains(B), "{out}");
+    assert!(!out.contains(A), "{out}");
+}
+
+#[test]
+fn problems_only_counts_matching_runs_for_last() {
+    let t = setup("");
+    let o = run(
+        &t,
+        "cpu",
+        A,
+        LIST,
+        &[("STUB_EB_FAIL", "Bar-2.0-foss-2025a")],
+    );
+    assert_eq!(code(&o), 1, "{}", stderr(&o));
+    assert_eq!(code(&run(&t, "cpu", B, LIST, &[])), 0);
+
+    let o = status(&t, &["--problems-only", "--last", "1", "--format", "json"]);
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    let v: Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["runs"].as_array().unwrap().len(), 1);
+    assert_eq!(v["runs"][0]["run"], A);
+}
+
+#[test]
+fn problems_only_evaluates_the_selected_target() {
+    let t = three_runs();
+    let o = status(&t, &["--target", "gpu", "--problems-only"]);
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    assert_eq!(o.stdout, b"");
+    assert!(
+        stderr(&o).contains("no problematic runs under"),
+        "{}",
+        stderr(&o)
+    );
+}
+
+#[test]
 fn status_as_json_carries_each_summary() {
     let t = three_runs();
     let o = status(&t, &["--format", "json"]);

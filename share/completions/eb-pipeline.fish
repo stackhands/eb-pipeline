@@ -81,6 +81,7 @@ complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand status" -l targe
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand status" -l last -d 'How many runs' -r
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand status" -l format -d '`text`: a line per run and per target; `json`: one JSON document' -r -f -a "text\t''
 json\t''"
+complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand status" -l problems-only -d 'Keep only nonzero runs and runs without a readable summary'
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand status" -s h -l help -d 'Print help'
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand metrics" -l result -d 'Result file written by `run --result`' -r -F
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand metrics" -l format -d '`prometheus`, the default, or `json`' -r -f -a "prometheus\t''
