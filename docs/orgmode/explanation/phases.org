@@ -53,7 +53,8 @@ Each admission reserves the inodes of one unit, and the reservation is removed w
 
 *** One exit status for the whole run
 
-A signal ends the run with its own status: =run= passes =SIGTERM= or =SIGINT= to the child that is running, starts no other, writes the result file, and exits 143 or 130.
+A signal ends the run with its own status: =run= passes =SIGTERM= or =SIGINT= to the process group of the command that is running, starts no other, writes the result file, and exits 143 or 130.
+The process group includes descendants that a command starts, so they receive the same signal instead of continuing the phase after their parent ends.
 Otherwise the run exits 1 when a line or a phase failed, else 78 when something was refused, by a precondition, by admission or by eb-staged-rebuild, else 75 when a step is pending, else 0.
 
 The order puts first what needs the most from a person.

@@ -51,7 +51,8 @@ Exit codes of watch:
   0    nothing to rebuild: no install is recorded, EESSI is as recorded, or no
        recorded install needs a rebuild; --dry-run printed the plan; --adopt
        recorded the installs; or the rebuild succeeded
-  1    the rebuild failed, or an eb-stack call, the record or the state file did
+  1    the rebuild failed, an eb-stack call failed, or the record, state
+       file, plan or rebuild list could not be read or written
   2    invalid arguments or site file, or eb-stack below its min_version
   75   another watch of the target holds its lock, the module environment did
        not load, or the EESSI repository or a module tree cannot be read
@@ -408,13 +409,17 @@ fn to_sorted<T: Serialize>(v: &T) -> serde_json::Value {
     serde_json::to_value(v).expect("serializable")
 }
 
+fn write_stdout_text(text: &str) -> Result<(), Fail> {
+    util::write_stdout(text.as_bytes())
+        .map_err(|e| Fail::new(exit::FAILED, format!("cannot write stdout: {e}")))
+}
+
 fn write_json(v: &serde_json::Value, path: Option<&Path>) -> Result<(), Fail> {
     let text = serde_json::to_string_pretty(v).expect("serializable") + "\n";
     match path {
         Some(p) if p != Path::new("-") => util::write_atomic(p, text.as_bytes())
             .map_err(|e| Fail::new(exit::FAILED, format!("cannot write {}: {e}", p.display()))),
-        _ => util::write_stdout(text.as_bytes())
-            .map_err(|e| Fail::new(exit::FAILED, format!("cannot write stdout: {e}"))),
+        _ => write_stdout_text(&text),
     }
 }
 
@@ -533,11 +538,11 @@ fn cmd_explain(
     let v = explain(&s, site_file(site_path).as_deref(), target, build_type)?;
     match format {
         Format::Json => write_json(&v, None)?,
-        Format::Toml => print!(
-            "{}",
-            toml::to_string_pretty(&v)
-                .map_err(|e| Fail::new(exit::FAILED, format!("cannot render TOML: {e}")))?
-        ),
+        Format::Toml => {
+            let rendered = toml::to_string_pretty(&v)
+                .map_err(|e| Fail::new(exit::FAILED, format!("cannot render TOML: {e}")))?;
+            write_stdout_text(&rendered)?;
+        }
     }
     Ok(exit::OK)
 }
@@ -547,13 +552,17 @@ fn cmd_targets(site_path: &Path, format: TextOrJson) -> Result<i32, Fail> {
     let names: Vec<&str> = s.targets.iter().map(|t| t.name.as_str()).collect();
     match format {
         TextOrJson::Text => {
+            let mut out = String::new();
             for n in &names {
-                println!("{n}");
+                out.push_str(n);
+                out.push('\n');
             }
+            write_stdout_text(&out)?;
         }
         // Compact, unlike write_json: GITHUB_OUTPUT and the like take one `name=value` line.
         TextOrJson::Json => {
-            println!("{}", serde_json::to_string(&names).expect("serializable"))
+            let line = format!("{}\n", serde_json::to_string(&names).expect("serializable"));
+            write_stdout_text(&line)?;
         }
     }
     Ok(exit::OK)
@@ -591,7 +600,7 @@ fn cmd_status(
         );
     }
     match format {
-        TextOrJson::Text => print!("{}", summary::status_text(&runs)),
+        TextOrJson::Text => write_stdout_text(&summary::status_text(&runs))?,
         TextOrJson::Json => write_json(&summary::status_json(root, &runs), None)?,
     }
     Ok(exit::OK)
@@ -604,8 +613,8 @@ fn cmd_metrics(path: &Path, format: StatusFormat) -> Result<i32, Fail> {
         .map_err(|e| Fail::usage(format!("cannot parse {}: {e}", path.display())))?;
     let status = metrics::from_result(&value)?;
     match format {
-        StatusFormat::Prometheus => print!("{}", metrics::prometheus(&status)),
-        StatusFormat::Json => print!("{}", metrics::status_json(&status)),
+        StatusFormat::Prometheus => write_stdout_text(&metrics::prometheus(&status))?,
+        StatusFormat::Json => write_stdout_text(&metrics::status_json(&status))?,
     }
     Ok(exit::OK)
 }
@@ -638,9 +647,11 @@ fn cmd_init(
     hints: bool,
 ) -> Result<i32, Fail> {
     if list {
+        let mut out = String::new();
         for t in templates::TEMPLATES {
-            println!("{:<16} {}", t.name, t.summary);
+            out.push_str(&format!("{:<16} {}\n", t.name, t.summary));
         }
+        write_stdout_text(&out)?;
         return Ok(exit::OK);
     }
     let name = template.unwrap_or_default();
@@ -656,11 +667,11 @@ fn cmd_init(
     })?;
     let wrote_path = match out {
         None => {
-            print!("{}", t.text);
+            write_stdout_text(t.text)?;
             None
         }
         Some(p) if p == Path::new("-") => {
-            print!("{}", t.text);
+            write_stdout_text(t.text)?;
             None
         }
         Some(p) => {
@@ -903,12 +914,11 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         (input.bundle.display().to_string(), input.lines.clone())
     } else {
         let list = c.list.as_deref().expect("clap requires one input");
-        let list_text = std::fs::read_to_string(list)
-            .map_err(|e| Fail::usage(format!("cannot read list {}: {e}", list.display())))?;
         let lines = if easystack::is_easystack(list) {
-            easystack::parse(&list_text)
-                .map_err(|e| Fail::usage(format!("easystack {}: {e}", list.display())))?
+            easystack::read(list).map_err(Fail::usage)?
         } else {
+            let list_text = std::fs::read_to_string(list)
+                .map_err(|e| Fail::usage(format!("cannot read list {}: {e}", list.display())))?;
             util::parse_list(&list_text)?
         };
         (list.display().to_string(), lines)
@@ -1224,9 +1234,12 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             ));
         }
         if w.dry_run {
+            let mut out = String::new();
             for i in &installs {
-                println!("{}", i.module);
+                out.push_str(&i.module);
+                out.push('\n');
             }
+            write_stdout_text(&out)?;
             drop_work();
             say(&format!(
                 "dry run: would adopt {} against {eessi_now}",
@@ -1262,12 +1275,14 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     if let Some((_, first)) = other.first() {
         if w.dry_run {
             let width = other.iter().map(|(m, _)| m.len()).max().unwrap_or(0);
+            let mut out = String::new();
             for (m, i) in &other {
-                println!(
-                    "{m:<width$}  built against EESSI {} {}",
+                out.push_str(&format!(
+                    "{m:<width$}  built against EESSI {} {}\n",
                     i.eessi_version, i.software_subdir
-                );
+                ));
             }
+            let _ = write_stdout_text(&out);
         }
         drop_work();
         return Err(Fail::new(
@@ -1283,12 +1298,13 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             ),
         ));
     }
-    let print = |doc: &watch::PlanDoc| {
+    let print = |doc: &watch::PlanDoc| -> Result<(), Fail> {
         if w.dry_run {
-            print!("{}", doc.text());
+            write_stdout_text(&doc.text())?;
         } else {
             doc.text().lines().for_each(say);
         }
+        Ok(())
     };
     let abi_conf = conf.abi_drift.as_ref().filter(|a| a.enabled);
     let (abi_now, abi_fields) = if let Some(a) = abi_conf {
@@ -1309,7 +1325,7 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
         drop_work();
         let doc = watch::PlanDoc::unchanged(name, &probe, revision, &state);
         write_plan(&doc)?;
-        print(&doc);
+        print(&doc)?;
         return Ok(exit::OK);
     }
     let mut verdicts = watch::assess(&state, &probe.modules_dirs, &local_dir, conf.rebuild_review);
@@ -1346,7 +1362,7 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
         if let Err(f) = watch::need_eb_stack(&s) {
             let doc = watch::PlanDoc::new(name, &probe, revision, verdicts);
             write_plan(&doc)?;
-            print(&doc);
+            print(&doc)?;
             return Err(Fail::new(
                 f.code,
                 format!(
@@ -1379,7 +1395,7 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
         if vanished && robot.is_empty() {
             let doc = watch::PlanDoc::new(name, &probe, revision, verdicts);
             write_plan(&doc)?;
-            print(&doc);
+            print(&doc)?;
             return Err(Fail::new(
                 exit::REFUSED,
                 "a dependency vanished from EESSI, and eb-stack has no easyconfig tree to plan its local build from: set [watch] easyconfigs, or load EasyBuild in [modules] init",
@@ -1407,7 +1423,7 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             }
         }
     }
-    print(&doc);
+    print(&doc)?;
     if w.dry_run {
         if doc.rebuild.is_empty() {
             drop_work();
@@ -1556,12 +1572,11 @@ fn cmd_verify(
     } else {
         list_path.expect("clap requires --list or --recorded-list")
     };
-    let list_text = std::fs::read_to_string(list)
-        .map_err(|e| Fail::usage(format!("cannot read list {}: {e}", list.display())))?;
     let lines = if easystack::is_easystack(list) {
-        easystack::parse(&list_text)
-            .map_err(|e| Fail::usage(format!("easystack {}: {e}", list.display())))?
+        easystack::read(list).map_err(Fail::usage)?
     } else {
+        let list_text = std::fs::read_to_string(list)
+            .map_err(|e| Fail::usage(format!("cannot read list {}: {e}", list.display())))?;
         util::parse_list(&list_text)?
     };
     if lines.is_empty() {
@@ -1584,7 +1599,7 @@ fn cmd_verify(
         },
         &stored,
     )?;
-    println!("verified input record {}", stored.record_sha256);
+    write_stdout_text(&format!("verified input record {}\n", stored.record_sha256))?;
     Ok(exit::OK)
 }
 
@@ -1627,10 +1642,7 @@ fn main() {
                 },
             )
         }
-        Cmd::Schema => {
-            print!("{}", schema::reference());
-            Ok(exit::OK)
-        }
+        Cmd::Schema => write_stdout_text(&schema::reference()).map(|()| exit::OK),
         Cmd::Init {
             template,
             list,

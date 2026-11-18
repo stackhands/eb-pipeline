@@ -16,6 +16,11 @@ pub fn write_stdout(bytes: &[u8]) -> std::io::Result<()> {
     }
 }
 
+/// A non-empty Unicode value from the process environment.
+pub fn env_value(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.is_empty())
+}
+
 /// Whether two paths name the same file, including through a symbolic or
 /// hard link. A path that does not exist is resolved through its parent.
 pub fn paths_alias(path_a: &Path, path_b: &Path) -> bool {

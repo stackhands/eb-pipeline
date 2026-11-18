@@ -12,25 +12,114 @@ use crate::util::{list_word, ListLine};
 use serde_yaml::{Mapping, Value};
 use std::path::Path;
 
+struct Diagnostic {
+    message: String,
+    location: Option<(usize, usize)>,
+}
+
 /// Whether the build list `path` is an easystack: a `.yml` or `.yaml` file.
 pub fn is_easystack(path: &Path) -> bool {
     path.extension().is_some_and(|e| e == "yml" || e == "yaml")
 }
 
+/// Read and parse an easystack, with source locations in its diagnostics.
+pub fn read(path: &Path) -> Result<Vec<ListLine>, String> {
+    let bytes =
+        std::fs::read(path).map_err(|e| format!("cannot read list {}: {e}", path.display()))?;
+    let text = std::str::from_utf8(&bytes).map_err(|e| {
+        let (line, column) = byte_location(&bytes, e.valid_up_to());
+        format!(
+            "easystack {}:{line}:{column}: input is not valid UTF-8",
+            path.display()
+        )
+    })?;
+    parse_diagnostic(text).map_err(|error| match error.location {
+        Some((line, column)) => format!(
+            "easystack {}:{line}:{column}: {}",
+            path.display(),
+            error.message
+        ),
+        None => format!("easystack {}: {}", path.display(), error.message),
+    })
+}
+
 /// The build list lines of the easystack `text`, in file order.
 pub fn parse(text: &str) -> Result<Vec<ListLine>, String> {
-    let mut doc: Value = serde_yaml::from_str(text).map_err(|e| e.to_string())?;
-    doc.apply_merge().map_err(|e| e.to_string())?;
+    parse_diagnostic(text).map_err(|error| error.message)
+}
+
+fn parse_diagnostic(text: &str) -> Result<Vec<ListLine>, Diagnostic> {
+    let mut doc: Value =
+        serde_yaml::from_str(text).map_err(|error| yaml_diagnostic(text, error))?;
+    doc.apply_merge()
+        .map_err(|error| yaml_diagnostic(text, error))?;
     let entries = match doc.get("easyconfigs") {
-        Some(Value::Sequence(s)) => s,
-        Some(_) => return Err("`easyconfigs` is not a list; start each entry with `- `".into()),
-        None => return Err("there is no top-level `easyconfigs` key".into()),
+        Some(Value::Sequence(entries)) => entries,
+        Some(_) => {
+            return Err(Diagnostic {
+                message: "`easyconfigs` is not a list; start each entry with `- `".into(),
+                location: None,
+            })
+        }
+        None => {
+            return Err(Diagnostic {
+                message: "there is no top-level `easyconfigs` key".into(),
+                location: None,
+            })
+        }
     };
     entries
         .iter()
         .enumerate()
-        .map(|(i, e)| entry(e).map_err(|m| format!("entry {}: {m}", i + 1)))
+        .map(|(i, item)| {
+            entry(item).map_err(|message| Diagnostic {
+                message: format!("entry {}: {message}", i + 1),
+                location: None,
+            })
+        })
         .collect()
+}
+
+fn yaml_diagnostic(text: &str, error: serde_yaml::Error) -> Diagnostic {
+    let mut location = error
+        .location()
+        .map(|location| (location.line(), location.column()));
+    let mut message = error.to_string();
+    if let Some(duplicate) = duplicate_key_location(text, &message) {
+        location = Some(duplicate);
+    }
+    if let Some((line, column)) = location {
+        message = message.replace(&format!(" at line {line} column {column}"), "");
+    }
+    Diagnostic { message, location }
+}
+
+fn duplicate_key_location(text: &str, message: &str) -> Option<(usize, usize)> {
+    let encoded = message.strip_prefix("duplicate entry with key ")?;
+    let key: String = serde_json::from_str(encoded).ok()?;
+    let mut indents = std::collections::BTreeSet::new();
+    for (index, line) in text.lines().enumerate() {
+        let line = line.trim_end_matches('\r');
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        let Some((token, _)) = line[indent..].split_once(':') else {
+            continue;
+        };
+        let token = token.trim();
+        if token.trim_matches(['\'', '"']) == key && !indents.insert(indent) {
+            return Some((index + 1, indent + 1));
+        }
+    }
+    None
+}
+
+fn byte_location(bytes: &[u8], offset: usize) -> (usize, usize) {
+    let before = &bytes[..offset];
+    let line = before.iter().filter(|byte| **byte == b'\n').count() + 1;
+    let column = before
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(offset + 1, |newline| offset - newline);
+    (line, column)
 }
 
 fn entry(e: &Value) -> Result<ListLine, String> {
