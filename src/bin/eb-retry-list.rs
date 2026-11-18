@@ -125,23 +125,11 @@ fn run() -> Result<ExitCode, String> {
 }
 
 fn check_output_alias(out: Option<&str>, inputs: &[(&str, Option<&str>)]) -> Result<(), String> {
-    let Some(out) = out.filter(|path| *path != "-") else {
-        return Ok(());
-    };
-    let out = Path::new(out);
-    for (option, path) in inputs {
-        let Some(path) = path else {
-            continue;
-        };
-        let path = Path::new(path);
-        if util::paths_alias(path, out) {
-            return Err(format!(
-                "{option} and --out must name different files, both resolve to {}",
-                util::resolved_path(path).display()
-            ));
-        }
-    }
-    Ok(())
+    let paths: Vec<_> = inputs
+        .iter()
+        .map(|(option, path)| (*option, path.map(Path::new)))
+        .collect();
+    util::refuse_output_alias("--out", out.map(Path::new), &paths)
 }
 
 fn read_list(path: &str) -> Result<Vec<ListLine>, String> {

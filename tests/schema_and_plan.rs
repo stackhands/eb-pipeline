@@ -251,6 +251,54 @@ fn plan_is_deterministic_and_sorted() {
 }
 
 #[test]
+fn plan_and_run_outputs_refuse_input_aliases_before_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let site = dir.path().join("site.toml");
+    let list = dir.path().join("build.list");
+    let site_bytes = b"keep site bytes\n";
+    let list_bytes = b"keep list bytes\n";
+    std::fs::write(&site, site_bytes).unwrap();
+    std::fs::write(&list, list_bytes).unwrap();
+    let list_alias = dir.path().join("list-output.json");
+    std::os::unix::fs::symlink(&list, &list_alias).unwrap();
+
+    for (command, output_option, output, expected_input) in [
+        ("plan", "--out", site.as_path(), "--site"),
+        ("run", "--plan-out", list_alias.as_path(), "--list"),
+        ("run", "--result", site.as_path(), "--site"),
+        ("run", "--metrics-file", list.as_path(), "--list"),
+    ] {
+        let output = bin()
+            .arg(command)
+            .arg("--site")
+            .arg(&site)
+            .arg("--list")
+            .arg(&list)
+            .args(["--target", "cpu", "--build-type", "production"])
+            .arg(output_option)
+            .arg(output)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{command} {output_option}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, b"");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(&format!(
+                "{expected_input} and {output_option} must name different files"
+            )),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(std::fs::read(&site).unwrap(), site_bytes);
+        assert_eq!(std::fs::read(&list).unwrap(), list_bytes);
+    }
+}
+
+#[test]
 fn schema_subcommand_lists_every_key() {
     let o = bin().arg("schema").output().unwrap();
     assert_eq!(o.status.code(), Some(0));

@@ -108,6 +108,79 @@ kept:
 ";
 
 #[test]
+fn watch_outputs_refuse_input_and_each_other_before_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let site = dir.path().join("site.toml");
+    let site_bytes = b"keep site bytes\n";
+    std::fs::write(&site, site_bytes).unwrap();
+    let site_alias = dir.path().join("watch-plan.json");
+    std::os::unix::fs::symlink(&site, &site_alias).unwrap();
+
+    let command = std::process::Command::new(env!("CARGO_BIN_EXE_eb-pipeline"))
+        .arg("watch")
+        .arg("--site")
+        .arg(&site)
+        .args(["--target", "cpu", "--build-type", "production"])
+        .arg("--plan-out")
+        .arg(&site_alias)
+        .output()
+        .unwrap();
+    assert_eq!(command.status.code(), Some(2));
+    assert_eq!(command.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&command.stderr)
+            .contains("--site and --plan-out must name different files"),
+        "{}",
+        String::from_utf8_lossy(&command.stderr)
+    );
+    assert_eq!(std::fs::read(&site).unwrap(), site_bytes);
+
+    let shared = dir.path().join("watch-output.json");
+    let command = std::process::Command::new(env!("CARGO_BIN_EXE_eb-pipeline"))
+        .arg("watch")
+        .arg("--site")
+        .arg(&site)
+        .args(["--target", "cpu", "--build-type", "production"])
+        .arg("--plan-out")
+        .arg(&shared)
+        .arg("--result")
+        .arg(&shared)
+        .output()
+        .unwrap();
+    assert_eq!(command.status.code(), Some(2));
+    assert_eq!(command.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&command.stderr)
+            .contains("--result and --plan-out must name different files"),
+        "{}",
+        String::from_utf8_lossy(&command.stderr)
+    );
+    assert!(!shared.exists());
+    assert_eq!(std::fs::read(&site).unwrap(), site_bytes);
+
+    let result_alias = dir.path().join("watch-result.json");
+    std::fs::hard_link(&site, &result_alias).unwrap();
+    let command = std::process::Command::new(env!("CARGO_BIN_EXE_eb-pipeline"))
+        .arg("watch")
+        .arg("--site")
+        .arg(&site)
+        .args(["--target", "cpu", "--build-type", "production"])
+        .arg("--result")
+        .arg(&result_alias)
+        .output()
+        .unwrap();
+    assert_eq!(command.status.code(), Some(2));
+    assert_eq!(command.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&command.stderr)
+            .contains("--site and --result must name different files"),
+        "{}",
+        String::from_utf8_lossy(&command.stderr)
+    );
+    assert_eq!(std::fs::read(&site).unwrap(), site_bytes);
+}
+
+#[test]
 fn a_newer_generation_directory_exits_75_and_asks_nothing() {
     let t = built("");
     let repo = t.root().join("eessi");

@@ -126,6 +126,58 @@ fn default_reframe_output_and_status_remain_byte_for_byte_unchanged() {
 }
 
 #[test]
+fn output_aliases_are_refused_before_report_inputs_are_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    let result_path = dir.path().join("result.json");
+    let result_bytes = result(0, "");
+    std::fs::write(&result_path, &result_bytes).unwrap();
+    let result_alias = dir.path().join("result.xml");
+    std::os::unix::fs::symlink(&result_path, &result_alias).unwrap();
+
+    let output = bin()
+        .arg("--result")
+        .arg(&result_path)
+        .arg("--out")
+        .arg(&result_alias)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("--result and --out must name different files"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(&result_path).unwrap(), result_bytes);
+
+    let reframe_path = dir.path().join("reframe.json");
+    let reframe_bytes = r#"{"runs":[]}"#;
+    std::fs::write(&reframe_path, reframe_bytes).unwrap();
+    let reframe_alias = dir.path().join("reframe.xml");
+    std::fs::hard_link(&reframe_path, &reframe_alias).unwrap();
+    let output = bin()
+        .arg("--reframe-report")
+        .arg(&reframe_path)
+        .arg("--out")
+        .arg(&reframe_alias)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("--reframe-report and --out must name different files"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&reframe_path).unwrap(),
+        reframe_bytes
+    );
+}
+
+#[test]
 fn custom_properties_apply_to_every_suite() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("result.json"), result(0, "")).unwrap();

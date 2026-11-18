@@ -6,6 +6,7 @@
 
 use eb_pipeline::plan::module_rel;
 use eb_pipeline::summary::{self, Summary};
+use eb_pipeline::util;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::env;
@@ -52,6 +53,22 @@ fn main() -> ExitCode {
 
 fn run() -> Result<ExitCode, String> {
     let args = parse(env::args().skip(1))?;
+    let inputs: Vec<_> = args
+        .results
+        .iter()
+        .map(|path| ("--result", Some(Path::new(path))))
+        .chain(
+            args.summaries
+                .iter()
+                .map(|path| ("--summary", Some(Path::new(path)))),
+        )
+        .chain(
+            args.existing
+                .iter()
+                .map(|path| ("--existing", Some(Path::new(path)))),
+        )
+        .collect();
+    util::refuse_output_alias("--out", args.out.as_deref().map(Path::new), &inputs)?;
     let mut weights = match args.existing.as_deref() {
         Some(path) => read_existing(Path::new(path))?,
         None => BTreeMap::new(),
