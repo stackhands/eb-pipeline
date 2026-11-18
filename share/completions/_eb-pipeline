@@ -43,8 +43,11 @@ known-failures\:"\`stack known-failures\`, with robot trees and each selected \`
 '--easyconfigs-repo=[easybuild-easyconfigs checkout for \`from-commit\` pins]:EASYCONFIGS_REPO:_files' \
 '--easyblocks-repo=[easybuild-easyblocks checkout for \`include-easyblocks-from-commit\`]:EASYBLOCKS_REPO:_files' \
 '--easybuild-version=[EasyBuild release \`X.Y.Z\`. Overrides \`eb-X.Y.Z\` in the list file name]:EASYBUILD_VERSION:_default' \
+'--gap-out=[Write eb-stack'\''s gap report files into this directory]:GAP_OUT:_files' \
+'--generation=[Toolchain generation passed to \`eb-stack stack gap\`]:GENERATION:_default' \
 '--probe-tools[Run each needed tool'\''s \`--version\` and enforce min_version]' \
 '--check-from-commit[Ask \`eb-stack stack from-commit\` whether pins are already in the EasyBuild release tag]' \
+'--shadow[Also write \`stack shadow\` JavaScript Object Notation (JSON) output to \`DIR/shadow.json\`]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0

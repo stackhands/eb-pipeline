@@ -1,0 +1,59 @@
+#+TITLE: Compare a site layer against a base stack
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Compare a site layer against a base stack
+
+Run =check --gap-out= to ask eb-stack which local modules a European Environment for Scientific Software Installations (EESSI) generation lacks.
+Add =--shadow= to report local recipes whose names the EESSI stack already provides.
+The ordinary site-file check starts neither report.
+
+** Configure the trees
+
+Give each target its local module root.
+Name the module and easyconfig trees in the shards table.
+
+#+begin_src toml
+[[targets]]
+name = "cpu"
+modules_root = "/software/local/cpu/modules"
+
+[shards]
+enabled = false
+installed_modules_dirs = ["/software/eessi/cpu/modules/all"]
+easyconfigs = ["/software/local/easyconfigs"]
+#+end_src
+
+=--gap-out= reads these fields even when shard planning is disabled.
+It also reads EESSI trees from =shards.installed_modules_dirs_from_env= and =watch.modules_dirs=, and easyconfig trees from =watch.easyconfigs=.
+Repeated paths are passed once.
+
+** Write the reports
+
+Run:
+
+#+begin_src bash
+eb-pipeline check \
+  --site site.toml \
+  --gap-out gap-report \
+  --generation 2026.1 \
+  --shadow
+#+end_src
+
+=eb-pipeline= directly runs these subprocesses:
+
+#+begin_example
+eb-stack stack gap --site /software/local/cpu/modules/all --installed /software/eessi/cpu/modules/all --easyconfigs /software/local/easyconfigs --generation 2026.1 --out-dir gap-report
+eb-stack stack shadow --easyconfigs /software/local/easyconfigs --base /software/eessi/cpu/modules/all --json
+#+end_example
+
+It does not start =scheduler.launch=.
+=stack gap= writes its reports into =gap-report=, including =gap.tsv=, =roots.txt= and =version-change.tsv=.
+=eb-pipeline= keeps the subprocess streams there as =gap.stdout.log= and =gap.stderr.log= and prints eb-stack's gap summary line unchanged.
+With =--shadow=, the JavaScript Object Notation (JSON) report is written to =shadow.json= and the standard error is written to =shadow.stderr.log=.
+
+Exit 0 means both requested reports completed and the shadow report found no overlap.
+Exit 1 from =stack shadow= remains exit 1 after =shadow.json= is written, so the file identifies the overlapping recipes.
+Use =roots.txt= as the input to the next eb-stack planning step, or inspect =gap.tsv= to see every route.
+
+See [[file:../reference/cli.org][The eb-pipeline command]] for every option and output file, and [[file:from-eb-stack.org][Build what eb-stack plans]] for using eb-stack output in a run.
