@@ -655,6 +655,38 @@ fn build_names(v: &serde_json::Value) -> Vec<String> {
 }
 
 #[test]
+fn a_selector_option_without_a_value_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let site = dir.path().join("site.toml");
+    let list = dir.path().join("build.list");
+    std::fs::write(
+        &site,
+        MINIMAL.replace(
+            "name = \"other\"",
+            "name = \"other\"\n[targets.select]\noption = \"--only-targets\"\nvalue = \"other\"\nwhen_absent = \"all\"\nstrip = true",
+        ),
+    )
+    .unwrap();
+    std::fs::write(&list, "Bad-1.0.eb --only-targets --rebuild\n").unwrap();
+
+    let output = bin()
+        .args(["plan", "--site"])
+        .arg(&site)
+        .arg("--list")
+        .arg(&list)
+        .args(["--target", "other", "--build-type", "production"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stdout, b"");
+    assert_eq!(
+        output.stderr,
+        b"ERROR [main] -: selector option `--only-targets` needs a value in `Bad-1.0.eb --only-targets --rebuild`\n"
+    );
+}
+
+#[test]
 fn selection_in_plan() {
     let site = with_target(
         "[targets.select]\noption = \"--only-targets\"\nvalue = \"other\"\nwhen_absent = \"none\"\n",
