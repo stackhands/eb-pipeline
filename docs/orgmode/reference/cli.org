@@ -99,7 +99,7 @@ Sibling tool codes are mapped explicitly:
                     0 admitted, 78 refused, 1 failed, 2 usage
   eb-stack stack shard
                     the code in shards.planner_exit_unsharded (default 3) means
-                    unsharded; the run continues
+                    unsharded and the run continues; 2 usage, any other non-zero failed
   eb-staged-rebuild 2 is a refusal there; the driver records it as refused
                     (exit 78), 75 as pending (exit 75), any other non-zero as failed
   eb-keep-logs      rotate 75 means another rotate holds the log root's lock;
