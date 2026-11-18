@@ -63,6 +63,7 @@ Without =--dry-run=, =eb-cvmfs=:
 An abort failure is reported, but does not replace the command failure or timeout status that caused it.
 A synchronization command that cannot be found is treated as exit 127; another failure to start it is exit 126.
 A verification command that cannot start uses the same statuses.
+When a command ends from signal N, =eb-cvmfs= reports status 128 + N.
 Command output is inherited, including output from a failed verification.
 =eb-cvmfs= performs no tarball build or packaging step.
 It does not ingest an archive itself: the synchronization command remains responsible for any ingest, and only after the optional check has passed.
@@ -167,6 +168,7 @@ It changes a successful invocation to exit 1, but does not mask an existing tran
 | publish status | Synchronization and optional verification succeeded and =cvmfs_server publish= failed. |
 | check status | Publish succeeded and =cvmfs_server check= failed. |
 | =126= or =127= | The synchronization or verification command could not start; =eb-cvmfs= attempted =abort -f=. |
+| =128 + N= | A transaction, synchronization, verification, publish or check command ended from signal N. |
 
 ** See also
 
