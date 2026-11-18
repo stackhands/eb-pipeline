@@ -27,6 +27,7 @@ recipes into a build list. The pipeline reads the bundle but never changes it.
    Otherwise it builds every =.eb= file under =bundle/easyconfigs= in sorted
    order. Each line uses that directory as its first EasyBuild robot overlay.
    Included easyblocks under =bundle/easyblocks= are passed to EasyBuild too.
+   Every recipe in =closure.plan.json= must also appear in the build order.
 
 2. Run the build:
 

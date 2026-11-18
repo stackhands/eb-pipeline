@@ -205,11 +205,18 @@ fn verification(bundle: &Path, recipes: &[PathBuf]) -> Result<Vec<Verification>,
             })?
             .iter()
             .map(|recipe| {
-                recipe.as_str().ok_or_else(|| {
+                let raw = recipe.as_str().ok_or_else(|| {
                     Fail::usage(format!("{} recipes must be strings", closure.display()))
-                })
+                })?;
+                let path = safe_relative(bundle, raw, "closure recipe")?;
+                if !recipes.contains(&path) {
+                    return Err(Fail::usage(format!(
+                        "{} recipe is absent from build-order.json: {raw}",
+                        closure.display()
+                    )));
+                }
+                Ok(path)
             })
-            .map(|recipe| recipe.and_then(|raw| safe_relative(bundle, raw, "closure recipe")))
             .collect::<Result<Vec<_>, _>>()?;
         out.extend(for_recipes(&origin, &package, &paths));
     }
@@ -297,6 +304,38 @@ pub const R_DESCRIPTION_CHECK: &str = r#"p <- commandArgs(TRUE)[1]; i <- install
 #[cfg(test)]
 mod tests {
     use super::load;
+
+    #[test]
+    fn closure_recipes_must_appear_in_the_build_order() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("easyconfigs")).unwrap();
+        std::fs::write(
+            root.path().join("package.plan.json"),
+            r#"{"schema_version":1,"origin":"pypi","package":{"name":"demo"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join("build-order.json"),
+            r#"{"schema_version":1,"recipes":["easyconfigs/A-1.0.eb"]}"#,
+        )
+        .unwrap();
+        std::fs::write(root.path().join("easyconfigs/A-1.0.eb"), "").unwrap();
+        std::fs::write(root.path().join("easyconfigs/B-1.0.eb"), "").unwrap();
+        std::fs::write(
+            root.path().join("closure.plan.json"),
+            r#"{"schema_version":1,"root":{"manifest":"package.plan.json","recipes":["easyconfigs/B-1.0.eb"]},"companions":[]}"#,
+        )
+        .unwrap();
+
+        let error = load(root.path()).unwrap_err();
+        assert_eq!(
+            error.msg,
+            format!(
+                "{} recipe is absent from build-order.json: easyconfigs/B-1.0.eb",
+                root.path().join("closure.plan.json").display()
+            )
+        );
+    }
 
     #[test]
     fn build_order_cannot_escape_the_bundle() {
