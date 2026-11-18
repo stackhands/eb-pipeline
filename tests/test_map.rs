@@ -640,3 +640,31 @@ fn test_map_succeeds_when_stdout_consumer_closes() {
         );
     }
 }
+
+#[test]
+fn plain_build_list_options_are_not_part_of_the_easyconfig_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = dir.path().join("build.list");
+    std::fs::write(&list, "GROMACS-2024.1-foss-2023b.eb --rebuild\n").unwrap();
+    let with_option = bin()
+        .args(["--format", "eessi-modules", "--list"])
+        .arg(&list)
+        .output()
+        .unwrap();
+    assert_eq!(with_option.status.code(), Some(0));
+    assert_eq!(
+        with_option.stdout,
+        b"--setvar modules=GROMACS/2024.1-foss-2023b\n"
+    );
+    assert_eq!(with_option.stderr, b"");
+
+    std::fs::write(&list, "GROMACS-2024.1-foss-2023b.eb\n").unwrap();
+    let without_option = bin()
+        .args(["--format", "eessi-modules", "--list"])
+        .arg(&list)
+        .output()
+        .unwrap();
+    assert_eq!(without_option.status.code(), Some(0));
+    assert_eq!(without_option.stdout, with_option.stdout);
+    assert_eq!(without_option.stderr, b"");
+}

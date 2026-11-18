@@ -303,15 +303,11 @@ fn easyconfigs_from_list(path: &str) -> Result<Vec<String>, String> {
         Ok(lines.into_iter().map(|line| line.easyconfig).collect())
     } else {
         let list_text = fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
-        let mut out = Vec::new();
-        for line in list_text.lines() {
-            let line = strip_comment(line);
-            if line.is_empty() {
-                continue;
-            }
-            out.push(line.to_string());
-        }
-        Ok(out)
+        Ok(util::parse_list(&list_text)
+            .map_err(|error| format!("{path}: {}", error.msg))?
+            .into_iter()
+            .map(|line| line.easyconfig)
+            .collect())
     }
 }
 
