@@ -646,7 +646,7 @@ fn disambiguate(names: &[String]) -> Vec<String> {
     let mut seen = BTreeMap::<String, usize>::new();
     let mut out = Vec::with_capacity(names.len());
     for name in names {
-        let n = seen.entry(name.clone()).or_insert(0);
+        let n = seen.entry(escape_attr(name)).or_insert(0);
         *n += 1;
         if *n == 1 {
             out.push(name.clone());
