@@ -138,6 +138,23 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(verify)
+_arguments "${_arguments_options[@]}" : \
+'--site=[Site file]:SITE:_files' \
+'(--package-plan)--list=[Build list file\: one \`Name-version-toolchain.eb \[eb options\]\` per line, or an EasyBuild easystack, a \`.yml\` or \`.yaml\` file]:LIST:_files' \
+'(--list)--package-plan=[Directory written by \`eb-stack package plan\`; builds its emitted recipes]:PACKAGE_PLAN:_files' \
+'--target=[Target name]:TARGET:_default' \
+'--build-type=[Build type name (selects per-build-type overrides)]:BUILD_TYPE:_default' \
+'--run-id=[Run label recorded in the result and passed to tools; a staged rebuild line passes \`<run-id>-<easyconfig stem>\`. Default\: the log stamp for \`run\`, \`<run-id>\` for \`plan\`]:RUN_ID:_default' \
+'--log-stamp=[Timestamp directory under the log root\: a UTC time as \`YYYYMMDD_HHMMSS\`, the name \`eb-keep-logs rotate\` ages. Default\: the current UTC time, taken once per run; \`<log-stamp>\` for \`plan\`]:LOG_STAMP:_default' \
+'--offline-bundle=[Build a checksum-indexed bundle of prefetched and configured assets]:OFFLINE_BUNDLE:_files' \
+'--from=[Plan or result JSON that holds \`input_attestation\`]:FROM:_files' \
+'--verify-package-plan[Run ecosystem-native checks after a package-plan build]' \
+'--require-offline[Run phases after source prefetch through sources.offline_wrapper]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
 (watch)
 _arguments "${_arguments_options[@]}" : \
 '--site=[Site file]:SITE:_files' \
@@ -216,6 +233,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(verify)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (watch)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -253,6 +274,7 @@ _eb-pipeline_commands() {
 'metrics:Print Prometheus text, or a short JSON status, for one result file' \
 'plan:Compute phases, launch lines, environments and tool calls without executing' \
 'run:Execute the plan'\''s phases as subprocesses' \
+'verify:Recompute the input record and check its inclusion proof' \
 'watch:Rebuild the recorded installs an EESSI change reaches, in dependency order' \
 'completions:Generate shell completion scripts from the clap command definition' \
 'man:Generate a section 1 man page from the clap command definition' \
@@ -287,6 +309,7 @@ _eb-pipeline__subcmd__help_commands() {
 'metrics:Print Prometheus text, or a short JSON status, for one result file' \
 'plan:Compute phases, launch lines, environments and tool calls without executing' \
 'run:Execute the plan'\''s phases as subprocesses' \
+'verify:Recompute the input record and check its inclusion proof' \
 'watch:Rebuild the recorded installs an EESSI change reaches, in dependency order' \
 'completions:Generate shell completion scripts from the clap command definition' \
 'man:Generate a section 1 man page from the clap command definition' \
@@ -354,6 +377,11 @@ _eb-pipeline__subcmd__help__subcmd__targets_commands() {
     local commands; commands=()
     _describe -t commands 'eb-pipeline help targets commands' commands "$@"
 }
+(( $+functions[_eb-pipeline__subcmd__help__subcmd__verify_commands] )) ||
+_eb-pipeline__subcmd__help__subcmd__verify_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline help verify commands' commands "$@"
+}
 (( $+functions[_eb-pipeline__subcmd__help__subcmd__watch_commands] )) ||
 _eb-pipeline__subcmd__help__subcmd__watch_commands() {
     local commands; commands=()
@@ -398,6 +426,11 @@ _eb-pipeline__subcmd__status_commands() {
 _eb-pipeline__subcmd__targets_commands() {
     local commands; commands=()
     _describe -t commands 'eb-pipeline targets commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__verify_commands] )) ||
+_eb-pipeline__subcmd__verify_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline verify commands' commands "$@"
 }
 (( $+functions[_eb-pipeline__subcmd__watch_commands] )) ||
 _eb-pipeline__subcmd__watch_commands() {

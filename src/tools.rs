@@ -9,7 +9,8 @@ use std::process::{Command, Stdio};
 /// A sibling tool that eb-pipeline starts as a subprocess.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
-    /// eb-stack, for stack planning, admission, SBOMs, resume and offline bundles.
+    /// eb-stack, for stack planning, admission, SBOMs, resume, offline bundles
+    /// and, when `[attest]` is enabled, `recipe easyblock`.
     EbStack,
     /// eb-keep-logs, for `failed` and `rotate`.
     EbKeepLogs,
@@ -71,6 +72,7 @@ pub fn needed(site: &Site) -> Vec<Tool> {
         || site.resume_on().is_some()
         || site.admission_on().is_some()
         || site.sbom_on().is_some()
+        || site.attest_on().is_some()
     {
         v.push(Tool::EbStack);
     }

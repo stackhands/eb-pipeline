@@ -180,6 +180,61 @@ const ROUTE_ALL: &[&str] = &[
 ];
 const ROUTE_BASIC: &[&str] = &["phase_dir", "log_dir", "work_dir", "target", "phase"];
 
+/// `[attest]` paths, the signing key and the verifier lines.
+fn validate_attest(site: &Site, e: &mut Vec<String>) {
+    if site.attest_on().is_none() {
+        return;
+    }
+    let a = site.attest.as_ref().expect("attest enabled");
+    match a.log_dir.as_deref() {
+        Some(p) if p.starts_with('/') => {}
+        Some(p) => e.push(format!("attest.log_dir: `{p}` is not an absolute path")),
+        None => e.push("attest.log_dir: required when [attest] is enabled".into()),
+    }
+    match a.key.as_deref() {
+        Some(p) if p.starts_with('/') => {}
+        Some(p) => e.push(format!("attest.key: `{p}` is not an absolute path")),
+        None => e.push("attest.key: required when [attest] is enabled".into()),
+    }
+    match a.origin.as_deref() {
+        Some(o) if !o.is_empty() && !o.chars().any(char::is_whitespace) => {}
+        _ => e.push("attest.origin: required when [attest] is enabled, with no whitespace".into()),
+    }
+    if a.trusted.is_empty() {
+        e.push(
+            "attest.trusted: at least one verifier line is required when [attest] is enabled"
+                .into(),
+        );
+    }
+    for line in &a.trusted {
+        if line.is_empty() || line.split('+').count() < 3 {
+            e.push(format!("attest.trusted: `{line}` is not name+keyid+base64"));
+        }
+    }
+    if a.bin.is_empty() {
+        e.push("attest.bin: must not be empty".into());
+    }
+    if let Some(n) = &a.image_digest_env {
+        if !env_name_ok(n) {
+            e.push(format!(
+                "attest.image_digest_env: `{n}` is not an environment variable name"
+            ));
+        }
+    }
+    let trees = crate::attest::easyconfig_trees(site);
+    if trees.is_empty() {
+        e.push(
+            "[attest] enabled needs easyconfigs, on attest.easyconfigs, resume.easyconfigs or shards.easyconfigs"
+                .into(),
+        );
+    }
+    for p in trees.iter().chain(&a.easyblocks).chain(&a.patches) {
+        if !p.starts_with('/') {
+            e.push(format!("attest path: `{p}` is not an absolute path"));
+        }
+    }
+}
+
 /// `[resume]` trees, and the repository that names a requeued workspace.
 fn validate_resume(site: &Site, e: &mut Vec<String>) {
     if site.resume_on().is_none() {
@@ -617,6 +672,7 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
         }
     }
     validate_resume(site, &mut e);
+    validate_attest(site, &mut e);
     if let Some(s) = &site.sources {
         for (i, asset) in s.assets.iter().enumerate() {
             if asset.path.trim().is_empty() {
@@ -921,6 +977,10 @@ impl Site {
     /// Resume section when a run records an input identity.
     pub fn resume_on(&self) -> Option<&Resume> {
         self.resume.as_ref().filter(|r| r.enabled)
+    }
+    /// Attest section when a plan records an input attestation.
+    pub fn attest_on(&self) -> Option<&Attest> {
+        self.attest.as_ref().filter(|a| a.enabled)
     }
     /// Sources section when it prefetches.
     pub fn sources_on(&self) -> Option<&Sources> {

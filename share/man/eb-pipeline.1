@@ -43,6 +43,9 @@ Compute phases, launch lines, environments and tool calls without executing
 eb\-pipeline\-run(1)
 Execute the plan\*(Aqs phases as subprocesses
 .TP
+eb\-pipeline\-verify(1)
+Recompute the input record and check its inclusion proof
+.TP
 eb\-pipeline\-watch(1)
 Rebuild the recorded installs an EESSI change reaches, in dependency order
 .TP
@@ -68,7 +71,7 @@ EB_PIPELINE__FILESYSTEMS__SCRATCH=/scratch/eb; the result is validated like the
 file.
 
 Output streams: stdout carries plan, explain, schema, init, status, targets and
-metrics, and run \-\-dry\-run or watch \-\-dry\-run output only. Events go to stderr
+metrics, and verify, and run \-\-dry\-run or watch \-\-dry\-run output only. Events go to stderr
 as `LEVEL [phase] target: message`. The result JSON goes to \-\-result, and each
 run\*(Aqs summary to summary.json and summary.html in its run directory,
 <log_root>/<log\-stamp>/. Run \-\-metrics\-file atomically replaces a Prometheus

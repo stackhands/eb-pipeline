@@ -83,6 +83,10 @@ pub struct Plan {
     /// Lines left out by the target's selector.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub deselected: Vec<Deselected>,
+    /// Checkpoint and inclusion proof of the input record, when `[attest]` is
+    /// enabled. Absent, the plan JSON is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_attestation: Option<crate::attest::InputAttestation>,
 }
 
 /// A line that the target's selector left out.
@@ -1401,6 +1405,7 @@ pub fn build_plan(
         selected_list: p.selected_list_path().map(|x| x.display().to_string()),
         phases,
         deselected,
+        input_attestation: None,
     })
 }
 

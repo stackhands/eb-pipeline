@@ -22,6 +22,7 @@ synopsis=(
     'metrics [OPTIONS] --result <RESULT>'
     'plan [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>'
     'run [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>'
+    'verify [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE> --from <FROM>'
     'watch [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>'
 )
 for usage in "${synopsis[@]}"; do

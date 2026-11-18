@@ -52,6 +52,9 @@ _eb__pipeline() {
             eb__pipeline,targets)
                 cmd="eb__pipeline__subcmd__targets"
                 ;;
+            eb__pipeline,verify)
+                cmd="eb__pipeline__subcmd__verify"
+                ;;
             eb__pipeline,watch)
                 cmd="eb__pipeline__subcmd__watch"
                 ;;
@@ -91,6 +94,9 @@ _eb__pipeline() {
             eb__pipeline__subcmd__help,targets)
                 cmd="eb__pipeline__subcmd__help__subcmd__targets"
                 ;;
+            eb__pipeline__subcmd__help,verify)
+                cmd="eb__pipeline__subcmd__help__subcmd__verify"
+                ;;
             eb__pipeline__subcmd__help,watch)
                 cmd="eb__pipeline__subcmd__help__subcmd__watch"
                 ;;
@@ -101,7 +107,7 @@ _eb__pipeline() {
 
     case "${cmd}" in
         eb__pipeline)
-            opts="-h -V --help --version check schema init explain targets status metrics plan run watch completions man help"
+            opts="-h -V --help --version check schema init explain targets status metrics plan run verify watch completions man help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -201,7 +207,7 @@ _eb__pipeline() {
             return 0
             ;;
         eb__subcmd__pipeline__subcmd__help)
-            opts="check schema init explain targets status metrics plan run watch completions man help"
+            opts="check schema init explain targets status metrics plan run verify watch completions man help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -369,6 +375,20 @@ _eb__pipeline() {
             return 0
             ;;
         eb__subcmd__pipeline__subcmd__help__subcmd__targets)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        eb__subcmd__pipeline__subcmd__help__subcmd__verify)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -635,6 +655,56 @@ _eb__pipeline() {
                     ;;
                 --format)
                     COMPREPLY=($(compgen -W "text json" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        eb__subcmd__pipeline__subcmd__verify)
+            opts="-h --site --list --package-plan --verify-package-plan --target --build-type --run-id --log-stamp --offline-bundle --require-offline --from --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --site)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --list)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --package-plan)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --target)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --build-type)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --run-id)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-stamp)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --offline-bundle)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --from)
+                    COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
                 *)
