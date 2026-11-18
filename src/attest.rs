@@ -548,14 +548,22 @@ fn patch_literals(text: &str) -> Vec<String> {
 fn easyblock_literal(text: &str) -> Option<String> {
     for line in text.lines() {
         let code = line.split('#').next().unwrap_or(line).trim();
-        let rest = code.strip_prefix("easyblock")?.trim();
-        let rest = rest.strip_prefix('=')?.trim();
-        let quote = rest.chars().next()?;
+        let Some(rest) = code.strip_prefix("easyblock") else {
+            continue;
+        };
+        let Some(rest) = rest.trim().strip_prefix('=') else {
+            continue;
+        };
+        let Some(quote) = rest.trim().chars().next() else {
+            continue;
+        };
         if quote != '\'' && quote != '"' {
             continue;
         }
-        let body = &rest[quote.len_utf8()..];
-        let end = body.find(quote)?;
+        let body = &rest.trim()[quote.len_utf8()..];
+        let Some(end) = body.find(quote) else {
+            continue;
+        };
         let name = &body[..end];
         if is_ident(name) {
             return Some(name.to_string());

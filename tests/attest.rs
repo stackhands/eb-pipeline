@@ -235,7 +235,7 @@ fn an_enabled_plan_appends_a_record_and_verify_recomputes_it() {
     let easyconfig = root.join("easyconfigs/Foo-1.0.eb");
     std::fs::write(
         &easyconfig,
-        "easyblock = 'EB_Foo'\npatches = ['foo.patch']\n",
+        "name = 'Foo'\neasyblock = 'EB_Foo'\npatches = ['foo.patch']\n",
     )
     .unwrap();
     std::fs::write(root.join("patches/foo.patch"), "diff\n").unwrap();
@@ -413,7 +413,7 @@ fn an_enabled_plan_appends_a_record_and_verify_recomputes_it() {
 
     std::fs::write(
         &easyconfig,
-        "easyblock = 'EB_Foo'\npatches = ['foo.patch']\nchanged\n",
+        "name = 'Foo'\neasyblock = 'EB_Foo'\npatches = ['foo.patch']\nchanged\n",
     )
     .unwrap();
     let mismatch = tree.run(
@@ -445,7 +445,7 @@ fn an_enabled_plan_appends_a_record_and_verify_recomputes_it() {
 
     std::fs::write(
         &easyconfig,
-        "easyblock = 'EB_Foo'\npatches = ['foo.patch']\n",
+        "name = 'Foo'\neasyblock = 'EB_Foo'\npatches = ['foo.patch']\n",
     )
     .unwrap();
     let mut tampered = plan_json.clone();
