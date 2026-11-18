@@ -57,7 +57,8 @@ zen4
 
 Each run takes the lock =.summary.lock= of the run directory, reads =summary.json=, replaces the entry of its own target and keeps the others, and writes both files anew through a rename, so that a reader never sees half of one.
 A later run of the same target with the same stamp replaces that target's entry.
-A =summary.json= with another =schema_version=, or one that does not parse, is replaced.
+A =summary.json= with another =schema_version= is replaced.
+One that does not parse is kept, and the run warns that no summary was written, so one target cannot erase the other target entries that may still be recoverable.
 
 A summary that cannot be written is a warning, and the run exits as it would have without it.
 Here a directory is in the way of =summary.json=:

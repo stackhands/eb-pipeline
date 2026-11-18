@@ -128,6 +128,27 @@ fn targets_that_share_a_log_stamp_share_one_summary() {
 }
 
 #[test]
+fn a_corrupt_summary_is_not_replaced_by_one_target() {
+    let t = setup("");
+    let cpu = run(&t, "cpu", STAMP, LIST, &[]);
+    assert_eq!(code(&cpu), 0, "{}", stderr(&cpu));
+    let gpu = run(&t, "gpu", STAMP, LIST, &[]);
+    assert_eq!(code(&gpu), 0, "{}", stderr(&gpu));
+    let path = t.run_dir(STAMP).join("summary.json");
+    let corrupt = b"{not json\n";
+    std::fs::write(&path, corrupt).unwrap();
+
+    let repeated = run(&t, "cpu", STAMP, LIST, &[]);
+    assert_eq!(code(&repeated), 0, "{}", stderr(&repeated));
+    assert_eq!(std::fs::read(&path).unwrap(), corrupt);
+    assert!(
+        stderr(&repeated).contains("no summary written: cannot parse"),
+        "{}",
+        stderr(&repeated)
+    );
+}
+
+#[test]
 fn a_dry_run_writes_no_summary() {
     let t = setup("");
     let list = t.root().join("list.txt");
