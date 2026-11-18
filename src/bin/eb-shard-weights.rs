@@ -324,6 +324,7 @@ fn read_existing(path: &Path) -> Result<BTreeMap<String, u64>, String> {
     let text =
         fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let mut out = BTreeMap::new();
+    let mut first_lines = BTreeMap::new();
     for (i, raw) in text.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -355,7 +356,15 @@ fn read_existing(path: &Path) -> Result<BTreeMap<String, u64>, String> {
                 value.trim()
             ));
         }
-        out.insert(module.trim().to_string(), ceil_seconds(secs));
+        let module = module.trim();
+        if let Some(first) = first_lines.insert(module.to_string(), i + 1) {
+            return Err(format!(
+                "{} line {}: module `{module}` was already set on line {first}",
+                path.display(),
+                i + 1
+            ));
+        }
+        out.insert(module.to_string(), ceil_seconds(secs));
     }
     Ok(out)
 }
