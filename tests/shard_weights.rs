@@ -401,6 +401,32 @@ fn invalid_inputs_exit_2() {
 }
 
 #[test]
+fn a_corrupt_log_root_summary_prevents_partial_weights() {
+    let dir = tempfile::tempdir().unwrap();
+    let logs = dir.path().join("logs");
+    let run = logs.join("20261118_230000");
+    let existing = dir.path().join("existing.tsv");
+    std::fs::create_dir_all(&run).unwrap();
+    std::fs::write(run.join("summary.json"), "not json\n").unwrap();
+    std::fs::write(&existing, "Keep/1.0\t7\n").unwrap();
+
+    let output = bin()
+        .args(["--log-root"])
+        .arg(&logs)
+        .args(["--existing"])
+        .arg(&existing)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("summary.json"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn docs_name_eb_shard_weights() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/orgmode");
     for rel in ["howto/build-from-ci.org", "reference/cli.org"] {
