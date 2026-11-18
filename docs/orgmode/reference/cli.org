@@ -406,10 +406,11 @@ A list line is split into words as a shell splits them, with single and double q
 
 *** eb-retry-list
 
-=eb-retry-list= reads a run result (=--result=) or one target of a run summary (=--summary= with =--target=) together with the original build list or easystack (=--list=), and writes the unfinished lines in their original order with their =eb= options.
+=eb-retry-list= reads a run result (=--result=) or one target of a run summary (=--summary= with =--target=) together with the original build list or easystack, named by =--list= or its recorded path, and writes the unfinished lines in their original order with their =eb= options.
 
 #+begin_example
-eb-retry-list (--result FILE | --summary FILE --target NAME) --list FILE
+eb-retry-list (--result FILE | --summary FILE --target NAME)
+              (--list FILE | --recorded-list)
               [--status STATUS,...] [--classify] [--class CLASS,...]
               [--node CORES:MEMORY_MIB[:TARGET]] [--drop-oom]
               [--easyconfigs DIR]... [--arch ARCH]... [--out FILE]
@@ -420,7 +421,8 @@ eb-retry-list (--result FILE | --summary FILE --target NAME) --list FILE
 | =--result FILE= | Result file written by =eb-pipeline run --result=. Mutually exclusive with =--summary=. |
 | =--summary FILE= | Run summary file (=summary.json=). Requires =--target=. |
 | =--target NAME= | Target entry to read from =--summary=. |
-| =--list FILE= | Build list or easystack (=.yml= or =.yaml=) passed to the run. Required. |
+| =--list FILE= | Build list or easystack (=.yml= or =.yaml=) passed to the run. Mutually exclusive with =--recorded-list=. |
+| =--recorded-list= | Read the build-list path from the result or selected summary target and use it as written. Mutually exclusive with =--list=. |
 | =--status STATUS,...= | Comma-separated statuses to keep: =failed=, =refused=, =pending=, =skipped=, =unreached=. Default: all non-=success= lines and unreached lines on a non-zero exit. |
 | =--classify= | Pass each selected line's recorded log to =eb-stack stack bot-classify --json=. Without =--class=, keep the =interrupted=, =resource= and =timeout= sub-classes. |
 | =--class CLASS,...= | Classes to keep instead of that default. A line stays when the JSON =class= or =sub_class= is one of these names. Repeatable. Requires =--classify=. |
@@ -431,7 +433,7 @@ eb-retry-list (--result FILE | --summary FILE --target NAME) --list FILE
 | =--out FILE= | Write the retry list to =FILE=; =-= or absent prints to stdout. |
 
 Exit 0 means the retry list was written (empty when every line succeeded, was deselected, was not in a selected class, or was dropped by =--drop-oom=).
-Exit 2 is a missing or invalid input, a selected line without a recorded log, an =eb-stack= that cannot start or fails, invalid classifier output, or =stack oom= output that has no single =oom=N= line matching its warnings.
+Exit 2 is a missing or invalid input, an absent or unreadable recorded list, a selected line without a recorded log, an =eb-stack= that cannot start or fails, invalid classifier output, or =stack oom= output that has no single =oom=N= line matching its warnings.
 Classification and the memory check never fall back to retaining a line that =eb-stack= did not accept.
 =eb-retry-list= does not classify a log or estimate memory itself.
 
