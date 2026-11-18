@@ -3,12 +3,47 @@
 use std::process::Command;
 
 fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_eb-test-map"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_eb-test-map"));
+    command.env_remove("EB_PIPELINE_LIST");
+    command.env_remove("EB_PIPELINE_RESULT");
+    command
 }
 
 fn files(dir: &std::path::Path, map: &str, list: &str) {
     std::fs::write(dir.join("map.tsv"), map).unwrap();
     std::fs::write(dir.join("build.list"), list).unwrap();
+}
+
+#[test]
+fn list_environment_falls_back_and_the_flag_wins() {
+    let dir = tempfile::tempdir().unwrap();
+    files(
+        dir.path(),
+        "GROMACS gromacs\n",
+        "GROMACS-2024.1-foss-2023b.eb\n",
+    );
+    let map = dir.path().join("map.tsv");
+    let list = dir.path().join("build.list");
+    let from_env = bin()
+        .args(["--map"])
+        .arg(&map)
+        .env("EB_PIPELINE_LIST", &list)
+        .output()
+        .unwrap();
+    let from_flag = bin()
+        .args(["--map"])
+        .arg(&map)
+        .args(["--list"])
+        .arg(&list)
+        .env("EB_PIPELINE_RESULT", dir.path().join("wrong.json"))
+        .output()
+        .unwrap();
+    assert_eq!(from_env.status.code(), Some(0));
+    assert_eq!(from_flag.status.code(), Some(0));
+    assert_eq!(from_env.stdout, b"gromacs\n");
+    assert_eq!(from_flag.stdout, from_env.stdout);
+    assert!(from_env.stderr.is_empty());
+    assert!(from_flag.stderr.is_empty());
 }
 
 fn result_file(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
@@ -573,4 +608,63 @@ fn duplicate_single_value_flags_are_refused() {
             String::from_utf8_lossy(&o.stderr)
         );
     }
+}
+
+#[test]
+fn test_map_succeeds_when_stdout_consumer_closes() {
+    let dir = tempfile::tempdir().unwrap();
+    let map = dir.path().join("map.tsv");
+    std::fs::write(&map, "G g\n").unwrap();
+    let list = dir.path().join("l.txt");
+    std::fs::write(&list, "G-1.0.eb\n").unwrap();
+
+    for format in ["text", "eessi-modules"] {
+        let mut fds = [0; 2];
+        unsafe {
+            assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+            assert_eq!(libc::close(fds[0]), 0);
+        }
+        let closed =
+            unsafe { <std::process::Stdio as std::os::fd::FromRawFd>::from_raw_fd(fds[1]) };
+        let mut cmd = bin();
+        cmd.args(["--list"]).arg(&list).args(["--format", format]);
+        if format != "eessi-modules" {
+            cmd.args(["--map"]).arg(&map);
+        }
+        let o = cmd.stdout(closed).output().unwrap();
+        assert_eq!(
+            o.status.code(),
+            Some(0),
+            "{format}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    }
+}
+
+#[test]
+fn plain_build_list_options_are_not_part_of_the_easyconfig_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = dir.path().join("build.list");
+    std::fs::write(&list, "GROMACS-2024.1-foss-2023b.eb --rebuild\n").unwrap();
+    let with_option = bin()
+        .args(["--format", "eessi-modules", "--list"])
+        .arg(&list)
+        .output()
+        .unwrap();
+    assert_eq!(with_option.status.code(), Some(0));
+    assert_eq!(
+        with_option.stdout,
+        b"--setvar modules=GROMACS/2024.1-foss-2023b\n"
+    );
+    assert_eq!(with_option.stderr, b"");
+
+    std::fs::write(&list, "GROMACS-2024.1-foss-2023b.eb\n").unwrap();
+    let without_option = bin()
+        .args(["--format", "eessi-modules", "--list"])
+        .arg(&list)
+        .output()
+        .unwrap();
+    assert_eq!(without_option.status.code(), Some(0));
+    assert_eq!(without_option.stdout, with_option.stdout);
+    assert_eq!(without_option.stderr, b"");
 }

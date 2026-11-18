@@ -451,23 +451,30 @@ eb-retry-list (--result FILE | --summary FILE --target NAME)
 | =--status STATUS,...= | Comma-separated statuses to keep: =failed=, =refused=, =pending=, =skipped=, =unreached=. Default: all non-=success= lines and unreached lines on a non-zero exit. |
 | =--classify= | Pass each selected line's recorded log to =eb-stack stack bot-classify --json=. Without =--class=, keep the =interrupted=, =resource= and =timeout= sub-classes. |
 | =--class CLASS,...= | Classes to keep instead of that default. A line stays when the JSON =class= or =sub_class= is one of these names. Repeatable. Requires =--classify=. |
-| =--node NODE= | =CORES:MEMORY_MIB= or =CORES:MEMORY_MIB:TARGET=, passed to =eb-stack stack oom --node=. The lines that remain are written to a temporary easystack and passed as =--easystack=. A line the command warns may run out of memory is named on stderr and still written. Requires =--classify=. |
+| =--node NODE= | =CORES:MEMORY_MIB= or =CORES:MEMORY_MIB:TARGET=, passed to =eb-stack stack oom --node=. The lines that remain are written to a temporary easystack with their =eb= options and passed as =--easystack=. A line the command warns may run out of memory is named on stderr and still written. Requires =--classify=. |
 | =--drop-oom= | Leave out every line =--node= warned about. Requires =--node=. |
 | =--easyconfigs DIR= | Robot tree passed through to =eb-stack stack oom --easyconfigs=. Repeatable. Requires =--node=. |
 | =--arch ARCH= | CPU target passed through to =eb-stack stack oom --arch=. Repeatable. Requires =--node=. |
 | =--out FILE= | Atomically replace =FILE= with the complete retry list; =-= or absent prints to stdout. It must differ from the result or summary and from the explicit or recorded build list, including through symbolic and hard links. |
 | =--require-lines= | Exit 1 after writing an empty retry list. Without it, an empty retry list exits 0. |
 
+=--result=, =--list= and =--target= fall back to =EB_PIPELINE_RESULT=,
+=EB_PIPELINE_LIST= and =EB_PIPELINE_TARGET=. A command-line option wins.
+=--summary= selects the summary instead of =EB_PIPELINE_RESULT=, and
+=--recorded-list= selects the recorded path instead of =EB_PIPELINE_LIST=.
+
 Exit 0 means the retry list was written (empty when every line succeeded, was deselected, was not in a selected class, or was dropped by =--drop-oom=).
 With =--require-lines=, exit 1 means the retry list was written but is empty.
 Exit 2 is a missing or invalid input, an output path that aliases an input, an absent or unreadable recorded list, a selected line without a recorded log, an =eb-stack= that cannot start or fails, invalid classifier output, or =stack oom= output that has no single =oom=N= line matching its warnings.
 Classification and the memory check never fall back to retaining a line that =eb-stack= did not accept.
+The memory check refuses option forms that an easystack cannot represent and refuses one easyconfig with different option sets.
 =eb-retry-list= does not classify a log or estimate memory itself.
 When =stack oom= rejects its generated easystack, the error names the source build list instead of the deleted temporary file.
 
 *** eb-shard-weights
 
 =eb-shard-weights= turns observed =duration_seconds= of succeeded =build= lines from =result.json=, =summary.json= or =--log-root= into the =MODULE<TAB>SECONDS= table read by =eb-stack stack shard --weights= and =[shards] weights=.
+Each succeeded =build= line in a result must contain a non-negative numeric =duration_seconds=.
 
 #+begin_example
 eb-shard-weights (--result FILE... | --summary FILE... | --log-root DIR [--last N])
@@ -481,11 +488,14 @@ eb-shard-weights (--result FILE... | --summary FILE... | --log-root DIR [--last 
 | =--summary FILE= | Run summary file (=summary.json=). Repeatable. |
 | =--log-root DIR= | Log root holding =LOG_STAMP= run directories to scan. |
 | =--last N= | How many newest run directories under =--log-root= to read (1 to 65535; default 10). |
-| =--target NAME= | Keep observations from this target only. |
+| =--target NAME= | Keep observations from this target only; exit 2 when no input contains it. |
 | =--existing FILE= | Seed weights TSV (=MODULE<TAB>SECONDS=) to merge with new observations. |
 | =--min-samples N= | Update a module only after N selected observations, from 1 to 65535; 1 when absent. Under-sampled existing weights remain unchanged. |
 | =--mode MODE= | Combine durations with =max= (default), =latest= or =mean=. |
 | =--out FILE= | Atomically replace =FILE= with the complete table; =-= or absent prints to stdout. =FILE= must differ from every result, summary and existing weights file. |
+
+With no input option, =EB_PIPELINE_RESULT= supplies one result file.
+=EB_PIPELINE_TARGET= supplies =--target=. A command-line option wins.
 
 Exit 0 means the table was written. Exit 2 is a missing or invalid input.
 
@@ -508,7 +518,9 @@ eb-junit [--result FILE]... [--reframe-report FILE]... [--out FILE]
 | =--property NAME=VALUE= | Add the property to every suite. Repeat for more properties; the last value for a name wins. |
 | =--fail-on-failure= | Write the complete report, then exit 1 when it contains at least one failure. |
 
-At least one of =--result= or =--reframe-report= is required.
+With no input option, =EB_PIPELINE_RESULT= supplies one result file.
+A command-line input wins. Otherwise at least one of =--result= or
+=--reframe-report= is required.
 
 Exit 0 means the report was written, including when a run's own exit code is not 0.
 With =--fail-on-failure=, exit 1 means the report was written and contains a failure.

@@ -16,6 +16,11 @@ With `--recorded-list`, the tool reads the build-list path stored in the
 result or selected summary target instead of taking `--list`. The recorded
 path is used as written and must still be readable.
 
+`--result`, `--list` and `--target` fall back to `EB_PIPELINE_RESULT`,
+`EB_PIPELINE_LIST` and `EB_PIPELINE_TARGET`. A command-line option wins.
+`--summary` selects the summary instead of `EB_PIPELINE_RESULT`, and
+`--recorded-list` selects the recorded path instead of `EB_PIPELINE_LIST`.
+
 Without `--status`, every unfinished status (`failed`, `refused`, `pending`,
 `skipped`, and lines not yet reached before a non-zero exit) is included.
 Deselected lines and lines recorded as `success` are left out. A `skipped`

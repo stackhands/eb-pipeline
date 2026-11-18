@@ -8,7 +8,6 @@ use serde_json::{Map, Number, Value};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::io::{self, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -87,8 +86,7 @@ fn run() -> Result<ExitCode, String> {
                 .map_err(|e| format!("cannot write {path}: {e}"))?;
         }
         _ => {
-            let mut out = io::stdout().lock();
-            out.write_all(report.as_bytes())
+            util::write_stdout(report.as_bytes())
                 .map_err(|e| format!("cannot write the report: {e}"))?;
         }
     }
@@ -153,6 +151,11 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 }
                 return Err(format!("does not know `{word}`"));
             }
+        }
+    }
+    if results.is_empty() && reframe_reports.is_empty() {
+        if let Some(result) = util::env_value("EB_PIPELINE_RESULT") {
+            results.push(result);
         }
     }
     if results.is_empty() && reframe_reports.is_empty() {
@@ -643,7 +646,7 @@ fn disambiguate(names: &[String]) -> Vec<String> {
     let mut seen = BTreeMap::<String, usize>::new();
     let mut out = Vec::with_capacity(names.len());
     for name in names {
-        let n = seen.entry(name.clone()).or_insert(0);
+        let n = seen.entry(escape_attr(name)).or_insert(0);
         *n += 1;
         if *n == 1 {
             out.push(name.clone());

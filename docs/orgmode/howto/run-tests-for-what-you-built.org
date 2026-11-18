@@ -102,20 +102,20 @@ The EESSI build-and-deploy bot does this with =tests/eessi_test_mapping/software
    ReFrame splits the value of =--setvar= on commas and does not drop spaces.
    =set_modules= in the test suite keeps a test only when every module name that test asks for is in the list.
    When the list has no application, the command prints nothing and exits 0, so the script does not pass an empty =modules= value.
-   =--map= is not read. =--allow-unmapped= applies to =--format text= only.
+   =--map= is not read. =--allow-unmapped= applies to =--format text= and =--format reframe= only.
    =[checks].command= is still not a shell, so this =reframe= line belongs in the same kind of script as step 3.
 
 * If it fails
 
 | Message | Cause | What to do |
 |---------+-------+------------|
-| =--map is required= or =--list is required= | The default format was not given both files, or =--format eessi-modules= was not given a list. | Pass =--map= and =--list= for test names. Pass =--list= for module names. |
-| =cannot read FILE= | The map or the list is not there. | Use the path the build uses. |
-| =SOFTWARE has no test in FILE= | An application in the list has no row, and it is not a toolchain. This is =--format text=. | Add a row, or pass =--toolchain NAME= when that software is a toolchain of the site's. The run stays failed until the map covers it. |
-| =list line N: FILE is not an easyconfig= | A line is not an =.eb= file name. | Leave comments as lines that start with =#=. |
-| =list line N: FILE has no version= | The file name has no component that starts with a digit, so it is not =Name/Version=. | Use =Name-Version.eb= or =Name-Version-Toolchain.eb=. |
-| =has a comma or a space in its module name= | That name would not stay one entry when ReFrame splits the list on commas. | Use a module name without a comma or a space. |
-| =unknown --format= | The format is not =text= or =eessi-modules=. | Omit =--format= for test names, or pass =eessi-modules=. |
+| =--map is required= or =--list or --result is required= | The default or =reframe= format was not given both =--map= and an input (=--list= or =--result=), or =--format eessi-modules= was not given an input. | Pass =--map= and =--list= (or =--result=) for test names. Pass =--list= (or =--result=) for module names. |
+| =cannot read FILE= | The map, list, or result file is not there. | Use the path the build uses. |
+| =SOFTWARE has no test in FILE= | An application in the list has no row, and it is not a toolchain. This applies to =--format text= and =--format reframe=. | Add a row, or pass =--toolchain NAME= when that software is a toolchain of the site's. The run stays failed until the map covers it. |
+| =`FILE` is not an easyconfig= or =list line N: `FILE` is not an easyconfig= | A line is not an =.eb= file name. | Leave comments as lines that start with =#=. |
+| =list line N: `FILE` has no version= | The file name has no component that starts with a digit, so it is not =Name/Version=. | Use =Name-Version.eb= or =Name-Version-Toolchain.eb=. |
+| =list line N: `FILE` has a comma or a space in its module name= | That name would not stay one entry when ReFrame splits the list on commas. | Use a module name without a comma or a space. |
+| =unknown --format `VALUE`; expected `text`, `reframe`, or `eessi-modules`= | The format is not =text=, =reframe=, or =eessi-modules=. | Omit =--format= for test names, or pass =reframe= or =eessi-modules=. |
 
 * Next steps
 

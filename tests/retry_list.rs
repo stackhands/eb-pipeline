@@ -4,7 +4,11 @@ use std::process::Command;
 use std::{os::unix::fs::PermissionsExt, path::Path};
 
 fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_eb-retry-list"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_eb-retry-list"));
+    command.env_remove("EB_PIPELINE_RESULT");
+    command.env_remove("EB_PIPELINE_LIST");
+    command.env_remove("EB_PIPELINE_TARGET");
+    command
 }
 
 fn write_exec(path: &Path, text: &str) {
@@ -54,6 +58,9 @@ Tail-1.0-foss-2025a.eb --from-pr=123
         .arg(&result)
         .args(["--list"])
         .arg(&list)
+        .env("EB_PIPELINE_RESULT", dir.path().join("wrong-result.json"))
+        .env("EB_PIPELINE_LIST", dir.path().join("wrong-list.txt"))
+        .env("EB_PIPELINE_TARGET", "wrong")
         .output()
         .unwrap();
     assert_eq!(
@@ -68,14 +75,40 @@ Tail-1.0-foss-2025a.eb --from-pr=123
         String::from_utf8_lossy(&o.stderr)
     );
     assert_eq!(
-        String::from_utf8(o.stdout).unwrap(),
-        "\
-Bar-1.0-foss-2025a.eb --robot
+        o.stdout,
+        b"Bar-1.0-foss-2025a.eb --robot
 Baz-1.0-foss-2025a.eb --rebuild
 Qux-1.0-foss-2025a.eb
 Tail-1.0-foss-2025a.eb --from-pr=123
 "
     );
+}
+
+#[test]
+fn common_environment_variables_supply_result_and_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = dir.path().join("build.list");
+    let result = dir.path().join("result.json");
+    std::fs::write(&list, "Foo-1.0.eb\n").unwrap();
+    std::fs::write(
+        &result,
+        r#"{"kind":"result","exit_code":1,"lines":[{"easyconfig":"Foo-1.0.eb","status":"failed"}]}"#,
+    )
+    .unwrap();
+
+    let o = bin()
+        .env("EB_PIPELINE_RESULT", &result)
+        .env("EB_PIPELINE_LIST", &list)
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(o.stdout, b"Foo-1.0.eb\n");
+    assert!(o.stderr.is_empty());
 }
 
 #[test]
@@ -144,6 +177,20 @@ easyconfigs:
         std::fs::read_to_string(&out).unwrap(),
         "GROMACS-2024.1-foss-2023b.eb --rebuild\n"
     );
+
+    let from_env = bin()
+        .args(["--summary"])
+        .arg(&summary)
+        .args(["--list"])
+        .arg(&stack)
+        .args(["--status", "failed"])
+        .env("EB_PIPELINE_TARGET", "zen2")
+        .env("EB_PIPELINE_RESULT", dir.path().join("wrong-result.json"))
+        .output()
+        .unwrap();
+    assert_eq!(from_env.status.code(), Some(0));
+    assert_eq!(from_env.stdout, b"GROMACS-2024.1-foss-2023b.eb --rebuild\n");
+    assert!(from_env.stderr.is_empty());
 
     let o = bin()
         .args(["--summary"])
@@ -385,7 +432,11 @@ fn recorded_list_reads_the_path_from_a_result_or_summary_target() {
             "--recorded-list",
         ],
     ] {
-        let o = bin().args(args).output().unwrap();
+        let o = bin()
+            .args(args)
+            .env("EB_PIPELINE_LIST", dir.path().join("wrong.list"))
+            .output()
+            .unwrap();
         assert_eq!(o.status.code(), Some(0));
         assert_eq!(o.stdout, b"Retry.eb --rebuild\n");
         assert_eq!(o.stderr, b"");
@@ -1029,6 +1080,17 @@ fn node_warns_without_dropping_unless_drop_oom_is_set() {
         calls_text.contains("Big.eb") && calls_text.contains("Small.eb"),
         "{calls_text}"
     );
+    let generated: serde_yaml::Value = serde_yaml::from_str(
+        calls_text
+            .split_once("EASYSTACK\n")
+            .expect("generated easystack")
+            .1,
+    )
+    .unwrap();
+    assert_eq!(
+        generated["easyconfigs"][0]["Big.eb"]["options"]["robot"],
+        serde_yaml::Value::Bool(true)
+    );
     assert!(
         !std::path::Path::new(easystack).exists(),
         "temporary easystack was left behind"
@@ -1496,4 +1558,37 @@ fn duplicate_single_value_flags_are_refused() {
             String::from_utf8_lossy(&o.stderr)
         );
     }
+}
+
+#[test]
+fn retry_list_succeeds_when_stdout_consumer_closes() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = dir.path().join("list.txt");
+    std::fs::write(&list, "Want.eb\n").unwrap();
+    let result = dir.path().join("result.json");
+    std::fs::write(
+        &result,
+        r#"{"kind":"result","exit_code":1,"lines":[{"easyconfig":"Want.eb","status":"failed"}]}"#,
+    )
+    .unwrap();
+    let mut fds = [0; 2];
+    unsafe {
+        assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+        assert_eq!(libc::close(fds[0]), 0);
+    }
+    let closed = unsafe { <std::process::Stdio as std::os::fd::FromRawFd>::from_raw_fd(fds[1]) };
+    let o = bin()
+        .args(["--result"])
+        .arg(&result)
+        .args(["--list"])
+        .arg(&list)
+        .stdout(closed)
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
 }

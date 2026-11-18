@@ -8,10 +8,10 @@
 //! `--setvar modules=Name/Version,...` argument for the applications in
 //! the list.
 
+use eb_pipeline::util;
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
-use std::io::{self, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -109,15 +109,18 @@ fn text_names(args: &Args) -> Result<ExitCode, String> {
             eprintln!("eb-test-map: {name} has no test in {map_path}; allowed");
         }
     }
-    let mut out = io::stdout().lock();
+    let mut out_text = String::new();
     for test in &tests {
         let line = match args.format {
             OutputFormat::Plain => test.clone(),
             OutputFormat::Reframe => format!("-n ^{}$", escape_regex_literal(test)),
             OutputFormat::EessiModules => unreachable!(),
         };
-        writeln!(out, "{line}").map_err(|e| format!("cannot write the test names: {e}"))?;
+        out_text.push_str(&line);
+        out_text.push('\n');
     }
+    util::write_stdout(out_text.as_bytes())
+        .map_err(|e| format!("cannot write the test names: {e}"))?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -138,8 +141,8 @@ fn eessi_modules(args: &Args) -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
     let joined = modules.into_iter().collect::<Vec<_>>().join(",");
-    let mut out = io::stdout().lock();
-    writeln!(out, "--setvar modules={joined}")
+    let line = format!("--setvar modules={joined}\n");
+    util::write_stdout(line.as_bytes())
         .map_err(|e| format!("cannot write the module list: {e}"))?;
     Ok(ExitCode::SUCCESS)
 }
@@ -202,6 +205,10 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
             }
             _ => return Err(format!("does not know `{word}`")),
         }
+    }
+    if list.is_none() && result.is_none() {
+        list = eb_pipeline::util::env_value("EB_PIPELINE_LIST");
+        result = eb_pipeline::util::env_value("EB_PIPELINE_RESULT");
     }
     let format = format.unwrap_or(OutputFormat::Plain);
     if list.is_some() && result.is_some() {
@@ -296,15 +303,11 @@ fn easyconfigs_from_list(path: &str) -> Result<Vec<String>, String> {
         Ok(lines.into_iter().map(|line| line.easyconfig).collect())
     } else {
         let list_text = fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
-        let mut out = Vec::new();
-        for line in list_text.lines() {
-            let line = strip_comment(line);
-            if line.is_empty() {
-                continue;
-            }
-            out.push(line.to_string());
-        }
-        Ok(out)
+        Ok(util::parse_list(&list_text)
+            .map_err(|error| format!("{path}: {}", error.msg))?
+            .into_iter()
+            .map(|line| line.easyconfig)
+            .collect())
     }
 }
 
