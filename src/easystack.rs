@@ -19,7 +19,11 @@ struct Diagnostic {
 
 /// Whether the build list `path` is an easystack: a `.yml` or `.yaml` file.
 pub fn is_easystack(path: &Path) -> bool {
-    path.extension().is_some_and(|e| e == "yml" || e == "yaml")
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("yml") || extension.eq_ignore_ascii_case("yaml")
+        })
 }
 
 /// Read and parse an easystack, with source locations in its diagnostics.
@@ -546,6 +550,8 @@ easyconfigs:
         for (p, want) in [
             ("rebuilds/x.yml", true),
             ("x.yaml", true),
+            ("rebuilds/x.YML", true),
+            ("x.YAML", true),
             ("x.list", false),
             ("x.yml.list", false),
             ("yml", false),
