@@ -71,6 +71,17 @@ The site file on this page builds for two kinds of node, =zen2= and =zen4=, each
 
 The script exits as one run of eb-pipeline would, from what the runs of its targets came to; [[file:../reference/exit-status.org][Exit status]] gives the order.
 
+7. To archive the plan that a run computed, add =--plan-out= beside =--result=:
+
+   #+begin_src bash
+   eb-pipeline run --site site.toml --list build.list --target zen2 \
+     --build-type production --plan-out plan-zen2.json \
+     --result result-zen2.json
+   #+end_src
+
+   Upload both files as CI artifacts.
+   The plan is written before any phase command starts and uses the same run id, log stamp and resolved paths as the run.
+
 ** Check that it worked
 
 Each run prints its lines as it goes, and the script the exit status of each target.

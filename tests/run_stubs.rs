@@ -555,6 +555,31 @@ fn metrics_cannot_share_one_file_with_both_json_roles() {
 }
 
 #[test]
+fn plan_out_cannot_alias_the_result_lexically_canonically_or_by_hard_link() {
+    for kind in ["lexical", "canonical", "hard-link"] {
+        let env = setup("");
+        let result = env.dir.path().join("result.json");
+        std::fs::write(&result, "keep result\n").unwrap();
+        let plan = output_alias(&result, kind);
+        let o = driver(&env, LIST, &[], &["--plan-out", plan.to_str().unwrap()])
+            .wait_with_output()
+            .unwrap();
+        assert_eq!(o.status.code(), Some(2), "{kind}");
+        let stderr = String::from_utf8(o.stderr).unwrap();
+        assert!(
+            stderr.contains("--result and --plan-out must name different files"),
+            "{stderr}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&result).unwrap(),
+            "keep result\n",
+            "{kind}"
+        );
+        assert!(calls(&env, "eb.calls").is_empty());
+    }
+}
+
+#[test]
 fn result_phases_follow_the_pipeline_order() {
     let env = setup("");
     let o = go(&env, LIST, &[]);
@@ -1327,14 +1352,100 @@ fn sigterm_is_forwarded_and_exit_is_143() {
 }
 
 #[test]
-fn dry_run_starts_nothing() {
+fn dry_run_default_output_remains_byte_for_byte_unchanged() {
     let env = setup("");
     let c = driver(&env, LIST, &[], &["--dry-run"]);
     let o = c.wait_with_output().unwrap();
     assert_eq!(o.status.code(), Some(0));
-    let out = String::from_utf8_lossy(&o.stdout);
-    assert!(out.contains("[build] eb Foo-1.0-foss-2025a.eb"), "{out}");
+    assert_eq!(o.stdout, historical_dry_run(&env).as_bytes());
+    assert_eq!(o.stderr, b"INFO [run] cpu: dry run: nothing executed\n");
     assert!(calls(&env, "eb.calls").is_empty());
+}
+
+fn historical_dry_run(env: &Env) -> String {
+    let root = env.dir.path().display();
+    let keep_logs = env.stubs.join("eb-keep-logs");
+    let keep_logs = keep_logs.display();
+    format!(
+        concat!(
+            "[preflight] {keep_logs} --version\n",
+            "# [licences] not configured\n",
+            "# [shard] not configured\n",
+            "# [sources] not configured\n",
+            "# [admission] not configured\n",
+            "[build] eb Foo-1.0-foss-2025a.eb --tmp-logdir={root}/logs/20260101_000000/cpu/easybuild-logs/Foo-1.0-foss-2025a\n",
+            "[build] EASYBUILD_OUTPUT_STYLE=basic {keep_logs} failed '<exit-status>' Foo-1.0-foss-2025a {root}/logs/20260101_000000/cpu {root}/logs/20260101_000000/cpu/easybuild-logs/Foo-1.0-foss-2025a\n",
+            "[build] eb Bar-2.0-foss-2025a.eb --tmp-logdir={root}/logs/20260101_000000/cpu/easybuild-logs/Bar-2.0-foss-2025a\n",
+            "[build] EASYBUILD_OUTPUT_STYLE=basic {keep_logs} failed '<exit-status>' Bar-2.0-foss-2025a {root}/logs/20260101_000000/cpu {root}/logs/20260101_000000/cpu/easybuild-logs/Bar-2.0-foss-2025a\n",
+            "# [checks] not configured\n",
+            "# [caches] not configured\n",
+            "# [logs] not configured\n",
+        ),
+        keep_logs = keep_logs,
+        root = root,
+    )
+}
+
+#[test]
+fn plan_out_records_the_run_plan_without_changing_dry_run_output() {
+    let env = setup("");
+    let plan = env.dir.path().join("run-plan.json");
+    let o = driver(
+        &env,
+        LIST,
+        &[],
+        &["--dry-run", "--plan-out", plan.to_str().unwrap()],
+    )
+    .wait_with_output()
+    .unwrap();
+    assert_eq!(o.status.code(), Some(0));
+    assert_eq!(o.stdout, historical_dry_run(&env).as_bytes());
+    assert_eq!(o.stderr, b"INFO [run] cpu: dry run: nothing executed\n");
+    assert!(calls(&env, "eb.calls").is_empty());
+    let bytes = std::fs::read(&plan).unwrap();
+    assert!(bytes.ends_with(b"\n"));
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["kind"], "plan");
+    assert_eq!(value["target"], "cpu");
+    assert_eq!(value["run_id"], "r1");
+    assert_eq!(value["lines"], 2);
+    assert_eq!(
+        value["log_dir"],
+        env.dir
+            .path()
+            .join("logs/20260101_000000/cpu")
+            .display()
+            .to_string()
+    );
+}
+
+#[test]
+fn plan_out_failure_starts_no_phase_command() {
+    let env = setup("");
+    let plan = env.dir.path().join("absent/run-plan.json");
+    let o = finish(
+        &env,
+        driver(&env, LIST, &[], &["--plan-out", plan.to_str().unwrap()]),
+    );
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    assert!(o.stderr.contains("cannot write plan"), "{}", o.stderr);
+    assert!(calls(&env, "eb.calls").is_empty());
+}
+
+#[test]
+fn a_real_run_writes_its_plan() {
+    let env = setup("");
+    let plan = env.dir.path().join("run-plan.json");
+    let o = finish(
+        &env,
+        driver(&env, LIST, &[], &["--plan-out", plan.to_str().unwrap()]),
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(calls(&env, "eb.calls").len(), 2);
+    let value: Value = serde_json::from_slice(&std::fs::read(plan).unwrap()).unwrap();
+    assert_eq!(value["kind"], "plan");
+    assert_eq!(value["target"], "cpu");
+    assert_eq!(value["run_id"], "r1");
 }
 
 #[test]

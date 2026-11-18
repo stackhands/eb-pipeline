@@ -38,8 +38,9 @@ file.
 
 Output streams: stdout carries plan, explain, schema, init, status, targets and
 metrics, and verify, and run --dry-run or watch --dry-run output only. Events go to stderr
-as `LEVEL [phase] target: message`. The result JSON goes to --result, and each
-run's summary to summary.json and summary.html in its run directory,
+as `LEVEL [phase] target: message`. The result JSON goes to --result, a run's
+requested plan JSON to --plan-out, and each run's summary to summary.json and
+summary.html in its run directory,
 <log_root>/<log-stamp>/. Run --metrics-file atomically replaces a Prometheus
 text file when the run ends. `metrics` exits 0 when it can read the file,
 including when the run itself failed.
@@ -205,6 +206,9 @@ enum Cmd {
         /// Write the result JSON here.
         #[arg(long)]
         result: Option<PathBuf>,
+        /// Write the plan computed by this run before starting any phase command.
+        #[arg(long)]
+        plan_out: Option<PathBuf>,
         /// Atomically write Prometheus metrics here when the run ends.
         ///
         /// Must differ from `--result` and `--resume-result`.
@@ -754,6 +758,7 @@ fn timestamp_id() -> String {
 struct Mode<'a> {
     out: Option<&'a Path>,
     result: Option<&'a Path>,
+    plan_out: Option<&'a Path>,
     metrics_file: Option<&'a Path>,
     shard_plan: Option<&'a Path>,
     dry: bool,
@@ -795,6 +800,7 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
     let Mode {
         out,
         result,
+        plan_out,
         metrics_file,
         shard_plan,
         dry,
@@ -802,6 +808,25 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         oom_node,
         resume_result,
     } = m;
+    if let Some(plan_out) = plan_out {
+        if plan_out == Path::new("-") {
+            return Err(Fail::usage("--plan-out must name a file"));
+        }
+        for (other_option, other_path) in [
+            ("--result", result),
+            ("--metrics-file", metrics_file),
+            ("--resume-result", resume_result),
+        ] {
+            if let Some(other_path) = other_path {
+                if same_output(other_path, plan_out) {
+                    return Err(Fail::usage(format!(
+                        "{other_option} and --plan-out must name different files, both resolve to {}",
+                        resolved_output(other_path).display()
+                    )));
+                }
+            }
+        }
+    }
     if let Some(metrics_file) = metrics_file {
         for (json_option, json_path) in [("--result", result), ("--resume-result", resume_result)] {
             if let Some(json_path) = json_path {
@@ -991,6 +1016,7 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
             oom_node,
             resume: prior.as_ref(),
             resume_refused: resume_refused.as_deref(),
+            plan_out,
         },
     );
     if let Some(m) = &res.message {
@@ -1430,6 +1456,7 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             oom_node: None,
             resume: None,
             resume_refused: None,
+            plan_out: None,
         },
     );
     if let Some(m) = &res.message {
@@ -1614,6 +1641,7 @@ fn main() {
             Mode {
                 out: out.as_deref(),
                 result: None,
+                plan_out: None,
                 metrics_file: None,
                 shard_plan: shard_plan.as_deref(),
                 dry: false,
@@ -1625,6 +1653,7 @@ fn main() {
         Cmd::Run {
             common,
             result,
+            plan_out,
             metrics_file,
             shard_plan,
             dry_run,
@@ -1636,6 +1665,7 @@ fn main() {
             Mode {
                 out: None,
                 result: result.as_deref(),
+                plan_out: plan_out.as_deref(),
                 metrics_file: metrics_file.as_deref(),
                 shard_plan: shard_plan.as_deref(),
                 dry: *dry_run,

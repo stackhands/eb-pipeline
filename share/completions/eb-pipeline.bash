@@ -607,7 +607,7 @@ _eb__pipeline() {
             return 0
             ;;
         eb__subcmd__pipeline__subcmd__run)
-            opts="-h --site --list --package-plan --verify-package-plan --target --build-type --run-id --log-stamp --offline-bundle --require-offline --result --metrics-file --shard-plan --dry-run --oom-preflight --node --resume-result --help"
+            opts="-h --site --list --package-plan --verify-package-plan --target --build-type --run-id --log-stamp --offline-bundle --require-offline --result --plan-out --metrics-file --shard-plan --dry-run --oom-preflight --node --resume-result --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -646,6 +646,10 @@ _eb__pipeline() {
                     return 0
                     ;;
                 --result)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --plan-out)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;

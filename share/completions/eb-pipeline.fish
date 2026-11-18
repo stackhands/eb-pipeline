@@ -109,6 +109,7 @@ complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand run" -l run-id -
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand run" -l log-stamp -d 'Timestamp directory under the log root: a UTC time as `YYYYMMDD_HHMMSS`, the name `eb-keep-logs rotate` ages. Default: the current UTC time, taken once per run; `<log-stamp>` for `plan`' -r
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand run" -l offline-bundle -d 'Build a checksum-indexed bundle of prefetched and configured assets' -r -F
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand run" -l result -d 'Write the result JSON here' -r -F
+complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand run" -l plan-out -d 'Write the plan computed by this run before starting any phase command' -r -F
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand run" -l metrics-file -d 'Atomically write Prometheus metrics here when the run ends' -r -F
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand run" -l shard-plan -d 'Directory written by `stack shard`; reuse its units without replanning' -r -F
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand run" -l node -d 'Node size for `--oom-preflight`, as `CORES:MEMORY_MIB[:TARGET]`' -r

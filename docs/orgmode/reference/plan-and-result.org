@@ -4,13 +4,19 @@
 
 * The plan and result files
 
-=eb-pipeline plan= writes the plan of a run, and =eb-pipeline run --result FILE= the result of one.
+=eb-pipeline plan= writes a proposed plan, =eb-pipeline run --plan-out FILE= writes the plan computed by that invocation, and =eb-pipeline run --result FILE= writes its result.
 Both are objects in JavaScript Object Notation (JSON), with the keys of every object in sorted order, and both have =schema_version= 1.
 The examples on this page come from =docs/examples/files.sh=, which plans and runs a two-line list on a site with the =local= scheduler, kept logs and rotation, with stand-ins for =eb= and =eb-keep-logs= that print their arguments.
 
 ** The plan file
 
-=plan --out FILE= writes the plan to =FILE=, and =plan= without =--out= prints it.
+=plan --out FILE= writes a proposed plan to =FILE=, and =plan= without =--out= prints it.
+=run --plan-out FILE= writes the plan after the run computes it, before it starts any phase command.
+A dry run writes the plan too.
+The file uses the run's actual default run id and log stamp.
+A real run includes its input attestation when =[attest]= is enabled; a dry run does not append an attestation.
+An existing file is replaced.
+If the plan cannot be written, no phase command starts and the run exits 1.
 A plan holds every phase, planned or not, in the order a run goes through them, and every command a run would start, with its whole argument vector and environment.
 
 #+begin_src bash
