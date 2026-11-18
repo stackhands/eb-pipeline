@@ -79,8 +79,10 @@ fn retry_etxtbsy<T>(mut run: impl FnMut() -> std::io::Result<T>) -> std::io::Res
 }
 
 pub trait CommandSyncExt {
+    #[allow(dead_code)]
     fn sync_spawn(&mut self) -> Child;
     fn sync_output(&mut self) -> Output;
+    #[allow(dead_code)]
     fn sync_status(&mut self) -> ExitStatus;
 }
 
