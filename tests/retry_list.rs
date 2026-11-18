@@ -1406,3 +1406,94 @@ src/fft.c:12:5: error: 'plan' undeclared (first use in this function)
         "NoEstimate-1.0.0-GCC-15.2.0.eb --robot\n"
     );
 }
+
+#[test]
+fn duplicate_single_value_flags_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = dir.path().join("list.txt");
+    std::fs::write(&list, "Want.eb\n").unwrap();
+    let first = dir.path().join("first.json");
+    std::fs::write(
+        &first,
+        r#"{"kind":"result","exit_code":1,"lines":[{"easyconfig":"Wrong.eb","status":"failed"}]}"#,
+    )
+    .unwrap();
+    let second = dir.path().join("second.json");
+    std::fs::write(
+        &second,
+        r#"{"kind":"result","exit_code":1,"lines":[{"easyconfig":"Want.eb","status":"failed"}]}"#,
+    )
+    .unwrap();
+
+    for (flag, args) in [
+        (
+            "--result",
+            vec![
+                "--result".to_string(),
+                first.display().to_string(),
+                "--result".to_string(),
+                second.display().to_string(),
+                "--list".to_string(),
+                list.display().to_string(),
+            ],
+        ),
+        (
+            "--list",
+            vec![
+                "--result".to_string(),
+                second.display().to_string(),
+                "--list".to_string(),
+                list.display().to_string(),
+                format!("--list={}", list.display()),
+            ],
+        ),
+        (
+            "--out",
+            vec![
+                "--result".to_string(),
+                second.display().to_string(),
+                "--list".to_string(),
+                list.display().to_string(),
+                "--out".to_string(),
+                dir.path().join("a.list").display().to_string(),
+                "--out".to_string(),
+                dir.path().join("b.list").display().to_string(),
+            ],
+        ),
+        (
+            "--target",
+            vec![
+                "--summary".to_string(),
+                second.display().to_string(),
+                "--target".to_string(),
+                "cpu".to_string(),
+                "--target".to_string(),
+                "gpu".to_string(),
+            ],
+        ),
+        (
+            "--summary",
+            vec![
+                "--summary".to_string(),
+                first.display().to_string(),
+                "--summary".to_string(),
+                second.display().to_string(),
+                "--target".to_string(),
+                "cpu".to_string(),
+            ],
+        ),
+    ] {
+        let o = bin().args(&args).output().unwrap();
+        assert_eq!(
+            o.status.code(),
+            Some(2),
+            "{flag}: stderr={}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&o.stderr).contains("was given twice"),
+            "{flag}: stderr={}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    }
+}

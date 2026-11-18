@@ -139,8 +139,8 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut last: Option<usize> = None;
     let mut target = None;
     let mut existing = None;
-    let mut min_samples = 1usize;
-    let mut mode = Mode::Max;
+    let mut min_samples: Option<usize> = None;
+    let mut mode: Option<Mode> = None;
     let mut out = None;
     let mut words = words.peekable();
 
@@ -225,10 +225,18 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
         last,
         target,
         existing,
-        min_samples,
-        mode,
+        min_samples: min_samples.unwrap_or(1),
+        mode: mode.unwrap_or(Mode::Max),
         out,
     })
+}
+
+fn assign_once<T>(slot: &mut Option<T>, flag: &str, value: T) -> Result<(), String> {
+    if slot.is_some() {
+        return Err(format!("{flag} was given twice"));
+    }
+    *slot = Some(value);
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -241,27 +249,33 @@ fn assign_flag(
     last: &mut Option<usize>,
     target: &mut Option<String>,
     existing: &mut Option<String>,
-    min_samples: &mut usize,
-    mode: &mut Mode,
+    min_samples: &mut Option<usize>,
+    mode: &mut Option<Mode>,
     out: &mut Option<String>,
 ) -> Result<(), String> {
     match flag {
         "--result" => results.push(value),
         "--summary" => summaries.push(value),
-        "--log-root" => *log_root = Some(value),
-        "--target" => *target = Some(value),
-        "--existing" => *existing = Some(value),
+        "--log-root" => assign_once(log_root, flag, value)?,
+        "--target" => assign_once(target, flag, value)?,
+        "--existing" => assign_once(existing, flag, value)?,
         "--min-samples" => {
+            if min_samples.is_some() {
+                return Err(format!("{flag} was given twice"));
+            }
             let n: u16 = value.parse().map_err(|_| {
                 format!("--min-samples `{value}` must be an integer from 1 to 65535")
             })?;
             if n == 0 {
                 return Err("--min-samples must be at least 1".into());
             }
-            *min_samples = usize::from(n);
+            *min_samples = Some(usize::from(n));
         }
-        "--out" => *out = Some(value),
+        "--out" => assign_once(out, flag, value)?,
         "--last" => {
+            if last.is_some() {
+                return Err(format!("{flag} was given twice"));
+            }
             let n: u16 = value
                 .parse()
                 .map_err(|_| format!("--last `{value}` must be an integer from 1 to 65535"))?;
@@ -271,7 +285,10 @@ fn assign_flag(
             *last = Some(usize::from(n));
         }
         "--mode" => {
-            *mode = match value.as_str() {
+            if mode.is_some() {
+                return Err(format!("{flag} was given twice"));
+            }
+            let parsed = match value.as_str() {
                 "max" => Mode::Max,
                 "latest" => Mode::Latest,
                 "mean" => Mode::Mean,
@@ -281,6 +298,7 @@ fn assign_flag(
                     ))
                 }
             };
+            *mode = Some(parsed);
         }
         _ => unreachable!(),
     }

@@ -498,3 +498,79 @@ fn version_flags_write_to_stdout_and_exit_zero() {
         assert!(o.stderr.is_empty(), "{flag}: {:?}", o.stderr);
     }
 }
+
+#[test]
+fn duplicate_single_value_flags_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let map = dir.path().join("map.tsv");
+    std::fs::write(&map, "G g\n").unwrap();
+    let list1 = dir.path().join("l1.txt");
+    std::fs::write(&list1, "G-1.0.eb\n").unwrap();
+    let list2 = dir.path().join("l2.txt");
+    std::fs::write(&list2, "Missing-1.0.eb\n").unwrap();
+    let res = dir.path().join("result.json");
+    std::fs::write(
+        &res,
+        r#"{"kind":"result","exit_code":0,"lines":[{"easyconfig":"G-1.0.eb","status":"success"}]}"#,
+    )
+    .unwrap();
+
+    for (flag, args) in [
+        (
+            "--map",
+            vec![
+                "--map".to_string(),
+                map.display().to_string(),
+                format!("--map={}", map.display()),
+                "--list".to_string(),
+                list1.display().to_string(),
+            ],
+        ),
+        (
+            "--list",
+            vec![
+                "--map".to_string(),
+                map.display().to_string(),
+                "--list".to_string(),
+                list1.display().to_string(),
+                "--list".to_string(),
+                list2.display().to_string(),
+            ],
+        ),
+        (
+            "--result",
+            vec![
+                "--map".to_string(),
+                map.display().to_string(),
+                "--result".to_string(),
+                res.display().to_string(),
+                format!("--result={}", res.display()),
+            ],
+        ),
+        (
+            "--format",
+            vec![
+                "--map".to_string(),
+                map.display().to_string(),
+                "--list".to_string(),
+                list1.display().to_string(),
+                "--format".to_string(),
+                "text".to_string(),
+                "--format=reframe".to_string(),
+            ],
+        ),
+    ] {
+        let o = bin().args(&args).output().unwrap();
+        assert_eq!(
+            o.status.code(),
+            Some(2),
+            "{flag}: stderr={}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&o.stderr).contains("was given twice"),
+            "{flag}: stderr={}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    }
+}
