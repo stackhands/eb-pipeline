@@ -1531,6 +1531,35 @@ fn sigterm_is_forwarded_and_exit_is_143() {
 }
 
 #[test]
+fn sigterm_during_source_prefetch_records_every_line() {
+    let env = setup("[sources]\n");
+    let mut child = driver(&env, LIST, &[("STUB_EB_SLEEP", "1")], &[]);
+    let started = env.dir.path().join("started");
+    let t0 = Instant::now();
+    while !started.exists() {
+        assert!(t0.elapsed() < Duration::from_secs(20), "stub never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // SAFETY: the pid is the driver child this test started.
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+    }
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(143));
+    let result: Value =
+        serde_json::from_str(&std::fs::read_to_string(env.dir.path().join("result.json")).unwrap())
+            .unwrap();
+    let lines = result["lines"].as_array().unwrap();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines[0]["easyconfig"], "Foo-1.0-foss-2025a.eb");
+    assert_eq!(lines[0]["phase"], "sources");
+    assert_eq!(lines[0]["status"], "failed");
+    assert_eq!(lines[0]["exit_code"], 143);
+    assert_eq!(lines[1]["easyconfig"], "Bar-2.0-foss-2025a.eb");
+    assert_eq!(lines[1]["status"], "skipped");
+}
+
+#[test]
 fn sigterm_reaches_descendants_of_the_running_command() {
     let env = setup("");
     write_exec(
@@ -2551,6 +2580,34 @@ fn selected_list_feeds_the_shard_planner() {
 }
 
 #[test]
+fn selected_list_atomically_replaces_prior_materialization() {
+    let env = setup("[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n");
+    with_cpu_target(
+        &env,
+        "[targets.select]\noption = \"--only-targets\"\nvalue = \"cpu\"\nstrip = true\nwhen_absent = \"none\"\n",
+    );
+    let selected = env
+        .dir
+        .path()
+        .join("logs/20260101_000000/cpu/selected-cpu.list");
+    std::fs::create_dir_all(selected.parent().unwrap()).unwrap();
+    std::fs::write(&selected, "stale partial bytes\n").unwrap();
+    let old_inode = std::fs::metadata(&selected).unwrap().ino();
+
+    let output = go(
+        &env,
+        "Foo-1.0-foss-2025a.eb --only-targets=cpu --rebuild\n",
+        &[("STUB_SHARD", "fromlist")],
+    );
+    assert_eq!(output.code, 0, "{}", output.stderr);
+    assert_eq!(
+        std::fs::read_to_string(&selected).unwrap(),
+        "Foo-1.0-foss-2025a.eb --rebuild\n"
+    );
+    assert_ne!(std::fs::metadata(&selected).unwrap().ino(), old_inode);
+}
+
+#[test]
 fn run_can_reuse_a_saved_shard_plan() {
     let env = setup(&format!(
         "[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n{ADMISSION}"
@@ -2602,6 +2659,59 @@ fn run_can_reuse_a_saved_shard_plan() {
         ]
     );
     assert_eq!(o.result.unwrap()["sharded"], true);
+}
+
+#[test]
+fn dry_run_and_plan_out_use_the_saved_shard_units() {
+    let env = setup("[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n");
+    let saved = env.dir.path().join("saved-shards");
+    std::fs::create_dir(&saved).unwrap();
+    std::fs::write(
+        saved.join("plan.json"),
+        r#"{"shards":[{"name":"saved-01","file":"saved-01.list","inode_footprint":111}]}"#,
+    )
+    .unwrap();
+    std::fs::write(saved.join("saved-01.list"), "Foo-1.0-foss-2025a.eb\n").unwrap();
+    let plan_out = env.dir.path().join("run-plan.json");
+
+    let output = finish(
+        &env,
+        driver(
+            &env,
+            LIST,
+            &[],
+            &[
+                "--shard-plan",
+                saved.to_str().unwrap(),
+                "--plan-out",
+                plan_out.to_str().unwrap(),
+                "--dry-run",
+            ],
+        ),
+    );
+    assert_eq!(output.code, 0, "{}", output.stderr);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Foo-1.0-foss-2025a.eb"), "{stdout}");
+    assert!(!stdout.contains("Bar-2.0-foss-2025a.eb"), "{stdout}");
+    assert!(!stdout.contains("stack shard"), "{stdout}");
+    let plan: Value = serde_json::from_str(&std::fs::read_to_string(plan_out).unwrap()).unwrap();
+    let build = plan["phases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|phase| phase["name"] == "build")
+        .unwrap();
+    let builds = build["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|command| {
+            command["name"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("build:"))
+        })
+        .count();
+    assert_eq!(builds, 1, "{build}");
 }
 
 #[test]
