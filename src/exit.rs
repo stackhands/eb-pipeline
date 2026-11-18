@@ -29,8 +29,10 @@ Exit codes:
  143  interrupted by SIGTERM, after the running child ended
 
 Sibling tool codes are mapped explicitly:
-  eb-stack admit    0 admitted, 78 refused, 1 failed, 2 usage
-  eb-stack shard    the code in shards.planner_exit_unsharded (default 3) means
+  eb-stack stack admit
+                    0 admitted, 78 refused, 1 failed, 2 usage
+  eb-stack stack shard
+                    the code in shards.planner_exit_unsharded (default 3) means
                     unsharded; the run continues
   eb-staged-rebuild 2 is a refusal there; the driver records it as refused
                     (exit 78), 75 as pending (exit 75), any other non-zero as failed
