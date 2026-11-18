@@ -78,11 +78,14 @@ pub fn store(site: &Site, sbom: &Sbom, run_dir: &Path) -> Result<PathBuf, Fail> 
             ),
         ));
     }
-    if !out.is_file() {
+    let wrote_document =
+        std::fs::metadata(&out).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0);
+    if !wrote_document {
+        let _ = std::fs::remove_file(&out);
         return Err(Fail::new(
             exit::FAILED,
             format!(
-                "eb-stack stack sbom --lock {lock} wrote no {}",
+                "eb-stack stack sbom --lock {lock} wrote no non-empty {}",
                 out.display()
             ),
         ));
