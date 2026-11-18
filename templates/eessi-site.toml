@@ -91,8 +91,8 @@ kind = "command"
 command = "/opt/eb-tools/bin/cpu-route"
 args = ["--runtime", "{runtime_root}", "--ro", "{shares_ro}", "--rw", "{shares_rw}", "--tag", "{target}-{phase}"]
 runtime_root = "/opt/eb-tools/route-runtime"
-shares_ro = ["{work_dir}"]
-shares_rw = ["{phase_dir}", "{log_dir}"]
+shares_ro = []
+shares_rw = ["{work_dir}", "{phase_dir}", "{log_dir}"]
 receipt_digest_env = "ROUTE_RECEIPT_DIGEST"
 phases = ["build", "sources"]
 
