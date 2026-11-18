@@ -1,11 +1,13 @@
 //! `eb-cvmfs` brackets one configured synchronization in a CVMFS transaction.
 
-use std::io::Write;
+#[path = "common/exec_stub.rs"]
+mod exec_stub;
+
+use exec_stub::CommandSyncExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Output, Stdio};
-use std::sync::RwLock;
+use std::process::{Command, Output};
 
 const CVMFS_SERVER: &str = r#"#!/bin/sh
 echo "$*" >> "$CALLS"
@@ -50,49 +52,8 @@ esac
 exit 99
 "#;
 
-static EXEC_FORK_LOCK: RwLock<()> = RwLock::new(());
-
 fn write_exec(path: &Path, text: &str) {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let _guard = EXEC_FORK_LOCK.write().unwrap_or_else(|e| e.into_inner());
-    let mut temp = tempfile::NamedTempFile::new_in(parent).unwrap();
-    temp.write_all(text.as_bytes()).unwrap();
-    temp.as_file().flush().unwrap();
-    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
-    let persisted = temp.persist(path).unwrap();
-    drop(persisted);
-}
-
-trait CommandSyncExt {
-    fn sync_spawn(&mut self) -> Child;
-    fn sync_output(&mut self) -> Output;
-    fn sync_status(&mut self) -> ExitStatus;
-}
-
-impl CommandSyncExt for Command {
-    fn sync_spawn(&mut self) -> Child {
-        for attempt in 0..20 {
-            let _guard = EXEC_FORK_LOCK.read().unwrap_or_else(|e| e.into_inner());
-            match self.spawn() {
-                Ok(child) => return child,
-                Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) && attempt < 19 => {
-                    drop(_guard);
-                    std::thread::sleep(std::time::Duration::from_millis(5));
-                }
-                Err(error) => panic!("failed to spawn {self:?}: {error}"),
-            }
-        }
-        unreachable!()
-    }
-
-    fn sync_output(&mut self) -> Output {
-        self.stdout(Stdio::piped()).stderr(Stdio::piped());
-        self.sync_spawn().wait_with_output().unwrap()
-    }
-
-    fn sync_status(&mut self) -> ExitStatus {
-        self.sync_spawn().wait().unwrap()
-    }
+    exec_stub::write_exec(path, text);
 }
 
 struct Fixture {

@@ -1,5 +1,8 @@
+#[path = "common/exec_stub.rs"]
+mod exec_stub;
+
+use exec_stub::CommandSyncExt;
 use sha2::{Digest, Sha256};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -11,8 +14,7 @@ struct Fixture {
 }
 
 fn executable(path: &Path, text: &str) {
-    std::fs::write(path, text).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    exec_stub::write_exec(path, text);
 }
 
 fn fixture(origin: &str, package: &str, recipe: &str) -> Fixture {
@@ -113,7 +115,7 @@ fn command(fixture: &Fixture, subcommand: &str) -> Command {
 #[test]
 fn plan_builds_declared_recipes_and_records_the_manifest_digest() {
     let fixture = fixture("pypi", "demo", "demo-1.0-GCCcore-15.2.0.eb");
-    let output = command(&fixture, "plan").output().unwrap();
+    let output = command(&fixture, "plan").sync_output();
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -159,8 +161,7 @@ fn verification_is_opt_in_and_runs_pip_check_with_the_product_module() {
         .arg("--verify-package-plan")
         .arg("--result")
         .arg(&result)
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -198,8 +199,7 @@ fn a_cran_plan_uses_the_r_description_dependency_check() {
     let fixture = fixture("cran", "DemoR", "DemoR-2.0-GCCcore-15.2.0.eb");
     let output = command(&fixture, "plan")
         .arg("--verify-package-plan")
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(output.status.code(), Some(0));
     let plan: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let verification = plan["phases"]
@@ -247,8 +247,7 @@ fn default_list_plan_is_byte_identical_to_main() {
             "--log-stamp",
             "20261117_120000",
         ])
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(output.status.code(), Some(0));
     let normalized = String::from_utf8(output.stdout)
         .unwrap()

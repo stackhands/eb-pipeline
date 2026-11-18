@@ -1,8 +1,11 @@
 //! Observable behavior of opt-in offline bundles.
 
+#[path = "common/exec_stub.rs"]
+mod exec_stub;
+
+use exec_stub::CommandSyncExt;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -78,8 +81,7 @@ struct Fixture {
 }
 
 fn executable(path: &Path, text: &str) {
-    std::fs::write(path, text).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    exec_stub::write_exec(path, text);
 }
 
 fn digest(bytes: &[u8]) -> String {
@@ -202,8 +204,7 @@ fn run(f: &Fixture, extra: &[&str]) -> Output {
         .current_dir(root)
         .env("PATH", path)
         .env("STUB_DIR", root)
-        .output()
-        .unwrap()
+        .sync_output()
 }
 
 fn plan(f: &Fixture) -> Output {
@@ -225,8 +226,7 @@ fn plan(f: &Fixture) -> Output {
             "-",
         ])
         .current_dir(f.dir.path())
-        .output()
-        .unwrap()
+        .sync_output()
 }
 
 fn calls(f: &Fixture, name: &str) -> String {

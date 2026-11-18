@@ -1,7 +1,11 @@
 //! `run --resume-result` against stub `eb` and `eb-stack` programs.
 
+#[path = "common/exec_stub.rs"]
+mod exec_stub;
+
+use exec_stub::CommandSyncExt;
 use serde_json::Value;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -94,8 +98,7 @@ fn world(extra: impl FnOnce(&Path) -> String) -> World {
     std::fs::create_dir(&stubs).unwrap();
     for (name, text) in [("eb-stack", EB_STACK), ("eb", EB)] {
         let path = stubs.join(name);
-        std::fs::write(&path, text).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        exec_stub::write_exec(&path, text);
     }
     std::fs::create_dir(root.join("easyconfigs")).unwrap();
     let site = root.join("site.toml");
@@ -175,7 +178,7 @@ fn invoke(w: &World, cmd: &str, list: Option<&str>, vars: &[(&str, &str)], extra
     for (k, v) in vars {
         c.env(k, v);
     }
-    let o = c.output().unwrap();
+    let o = c.sync_output();
     let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
     let stdout = String::from_utf8_lossy(&o.stdout).into_owned();
     let result = extra
