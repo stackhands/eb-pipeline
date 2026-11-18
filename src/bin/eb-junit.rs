@@ -13,6 +13,7 @@ use std::process::ExitCode;
 struct Args {
     results: Vec<String>,
     reframe_reports: Vec<String>,
+    properties: BTreeMap<String, String>,
     out: Option<String>,
     fail_on_failure: bool,
 }
@@ -66,7 +67,7 @@ fn run() -> Result<ExitCode, String> {
         let value = serde_json::from_str(&text).map_err(|e| format!("cannot parse {path}: {e}"))?;
         reframe.push((path.clone(), value));
     }
-    let (report, failures) = render_labeled_counted(&labeled, &reframe)?;
+    let (report, failures) = render_labeled_counted(&labeled, &reframe, &args.properties)?;
     match args.out.as_deref() {
         Some(path) if path != "-" => {
             fs::write(path, &report).map_err(|e| format!("cannot write {path}: {e}"))?;
@@ -87,6 +88,7 @@ fn run() -> Result<ExitCode, String> {
 fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut results = Vec::new();
     let mut reframe_reports = Vec::new();
+    let mut properties = BTreeMap::new();
     let mut out = None;
     let mut fail_on_failure = false;
     let mut words = words.peekable();
@@ -101,16 +103,26 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 std::process::exit(0);
             }
             "--fail-on-failure" => fail_on_failure = true,
-            "--result" | "--reframe-report" | "--out" => {
+            "--result" | "--reframe-report" | "--property" | "--out" => {
                 let value = words
                     .next()
                     .filter(|v| !v.is_empty())
                     .ok_or_else(|| format!("{word} needs a value"))?;
-                assign(&word, value, &mut results, &mut reframe_reports, &mut out)?;
+                assign(
+                    &word,
+                    value,
+                    &mut results,
+                    &mut reframe_reports,
+                    &mut properties,
+                    &mut out,
+                )?;
             }
             _ => {
                 if let Some((flag, value)) = word.split_once('=') {
-                    if matches!(flag, "--result" | "--reframe-report" | "--out") {
+                    if matches!(
+                        flag,
+                        "--result" | "--reframe-report" | "--property" | "--out"
+                    ) {
                         if value.is_empty() {
                             return Err(format!("{flag} needs a value"));
                         }
@@ -119,6 +131,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                             value.to_string(),
                             &mut results,
                             &mut reframe_reports,
+                            &mut properties,
                             &mut out,
                         )?;
                         continue;
@@ -134,6 +147,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     Ok(Args {
         results,
         reframe_reports,
+        properties,
         out,
         fail_on_failure,
     })
@@ -144,11 +158,21 @@ fn assign(
     value: String,
     results: &mut Vec<String>,
     reframe_reports: &mut Vec<String>,
+    properties: &mut BTreeMap<String, String>,
     out: &mut Option<String>,
 ) -> Result<(), String> {
     match flag {
         "--result" => results.push(value),
         "--reframe-report" => reframe_reports.push(value),
+        "--property" => {
+            let (name, value) = value
+                .split_once('=')
+                .ok_or("--property expects NAME=VALUE")?;
+            if name.is_empty() {
+                return Err("--property name must not be empty".into());
+            }
+            properties.insert(name.to_string(), value.to_string());
+        }
         "--out" => {
             if out.is_some() {
                 return Err("--out given twice".into());
@@ -167,12 +191,13 @@ fn render_labeled(
     items: &[(String, Value)],
     reframe_reports: &[(String, Value)],
 ) -> Result<String, String> {
-    render_labeled_counted(items, reframe_reports).map(|(report, _)| report)
+    render_labeled_counted(items, reframe_reports, &BTreeMap::new()).map(|(report, _)| report)
 }
 
 fn render_labeled_counted(
     items: &[(String, Value)],
     reframe_reports: &[(String, Value)],
+    properties: &BTreeMap<String, String>,
 ) -> Result<(String, usize), String> {
     let mut suites = Vec::with_capacity(items.len() + reframe_reports.len());
     for (label, value) in items {
@@ -181,6 +206,15 @@ fn render_labeled_counted(
     for (label, value) in reframe_reports {
         let parsed = parse_reframe_report(value, label).map_err(|e| format!("{label}: {e}"))?;
         suites.extend(parsed);
+    }
+    for suite in &mut suites {
+        for (name, value) in properties {
+            if let Some((_, current)) = suite.props.iter_mut().find(|(key, _)| key == name) {
+                *current = value.clone();
+            } else {
+                suite.props.push((name.clone(), value.clone()));
+            }
+        }
     }
     let failures = failure_count(&suites);
     Ok((document(&suites), failures))
