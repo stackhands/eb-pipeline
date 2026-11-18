@@ -24,7 +24,8 @@ struct Args {
     result: Option<String>,
     summary: Option<String>,
     target: Option<String>,
-    list: String,
+    list: Option<String>,
+    recorded_list: bool,
     statuses: Option<BTreeSet<String>>,
     out: Option<String>,
     classify: bool,
@@ -43,6 +44,7 @@ struct Outcome {
 
 struct RunOutcomes {
     exit_code: i64,
+    list: Option<String>,
     outcomes: BTreeMap<String, VecDeque<Outcome>>,
     deselected: BTreeMap<String, usize>,
 }
@@ -59,22 +61,21 @@ fn main() -> ExitCode {
 
 fn run() -> Result<ExitCode, String> {
     let args = parse(env::args().skip(1))?;
-    let list_path = Path::new(&args.list);
-    let list_text = fs::read_to_string(list_path)
-        .map_err(|e| format!("cannot read list {}: {e}", args.list))?;
-    let lines = if easystack::is_easystack(list_path) {
-        easystack::parse(&list_text).map_err(|e| format!("easystack {}: {e}", args.list))?
-    } else {
-        util::parse_list(&list_text).map_err(|f| f.msg)?
-    };
-    if lines.is_empty() {
-        return Err(format!("list {} holds no lines", args.list));
-    }
-
-    let recorded = match (&args.result, &args.summary, &args.target) {
-        (Some(path), None, None) => read_result(Path::new(path))?,
-        (None, Some(path), Some(target)) => read_summary(Path::new(path), target)?,
+    let read_recorded = || match (&args.result, &args.summary, &args.target) {
+        (Some(path), None, None) => read_result(Path::new(path)),
+        (None, Some(path), Some(target)) => read_summary(Path::new(path), target),
         _ => unreachable!("validated in parse"),
+    };
+    let (lines, recorded) = if args.recorded_list {
+        let recorded = read_recorded()?;
+        let list = recorded
+            .list
+            .as_deref()
+            .ok_or_else(|| "the selected record has no string `list`".to_string())?;
+        (read_list(list)?, recorded)
+    } else {
+        let list = args.list.as_deref().expect("validated in parse");
+        (read_list(list)?, read_recorded()?)
     };
 
     let mut selected = select_retry_lines(&lines, &recorded, args.statuses.as_ref());
@@ -109,11 +110,27 @@ fn run() -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+fn read_list(path: &str) -> Result<Vec<ListLine>, String> {
+    let list_path = Path::new(path);
+    let list_text =
+        fs::read_to_string(list_path).map_err(|e| format!("cannot read list {path}: {e}"))?;
+    let lines = if easystack::is_easystack(list_path) {
+        easystack::parse(&list_text).map_err(|e| format!("easystack {path}: {e}"))?
+    } else {
+        util::parse_list(&list_text).map_err(|f| f.msg)?
+    };
+    if lines.is_empty() {
+        return Err(format!("list {path} holds no lines"));
+    }
+    Ok(lines)
+}
+
 struct Parsed {
     result: Option<String>,
     summary: Option<String>,
     target: Option<String>,
     list: Option<String>,
+    recorded_list: bool,
     statuses: Option<BTreeSet<String>>,
     out: Option<String>,
     classify: bool,
@@ -130,6 +147,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
         summary: None,
         target: None,
         list: None,
+        recorded_list: false,
         statuses: None,
         out: None,
         classify: false,
@@ -152,6 +170,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 std::process::exit(0);
             }
             "--classify" => parsed.classify = true,
+            "--recorded-list" => parsed.recorded_list = true,
             "--drop-oom" => parsed.drop_oom = true,
             "--result" | "--summary" | "--target" | "--list" | "--status" | "--out" | "--class"
             | "--node" | "--easyconfigs" | "--arch" => {
@@ -225,13 +244,18 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     if let Some(node) = &parsed.node {
         check_node(node)?;
     }
+    if parsed.list.is_some() && parsed.recorded_list {
+        return Err("pass either --list or --recorded-list, not both".into());
+    }
+    if parsed.list.is_none() && !parsed.recorded_list {
+        return Err("--list is required".into());
+    }
     Ok(Args {
         result: parsed.result,
         summary: parsed.summary,
         target: parsed.target,
-        list: parsed
-            .list
-            .ok_or_else(|| "--list is required".to_string())?,
+        list: parsed.list,
+        recorded_list: parsed.recorded_list,
         statuses: parsed.statuses,
         out: parsed.out,
         classify: parsed.classify,
@@ -367,6 +391,7 @@ fn read_result(path: &Path) -> Result<RunOutcomes, String> {
     }
     Ok(RunOutcomes {
         exit_code,
+        list: obj.get("list").and_then(Value::as_str).map(str::to_string),
         outcomes,
         deselected,
     })
@@ -431,6 +456,10 @@ fn read_summary(path: &Path, target: &str) -> Result<RunOutcomes, String> {
     }
     Ok(RunOutcomes {
         exit_code,
+        list: t_obj
+            .get("list")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         outcomes,
         deselected,
     })
@@ -774,6 +803,7 @@ mod tests {
         deselected.insert("Skip.eb".into(), 1);
         let rec = RunOutcomes {
             exit_code: 1,
+            list: None,
             outcomes,
             deselected,
         };
@@ -800,6 +830,7 @@ mod tests {
         outcomes.insert("B.eb".into(), VecDeque::from([outcome("skipped")]));
         let rec = RunOutcomes {
             exit_code: 1,
+            list: None,
             outcomes,
             deselected: BTreeMap::new(),
         };

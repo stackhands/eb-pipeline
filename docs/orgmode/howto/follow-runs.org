@@ -167,6 +167,14 @@ fi
 
 Lines recorded as =success= and lines deselected by =[targets.select]= are left out, so =--rebuild= lines that already succeeded are not rebuilt.
 Use =--result result.json= in place of =--summary= and =--target=, and =--status failed= to narrow to specific line statuses.
+When the build-list path recorded in the result or selected target is still readable, reuse it instead of naming it again:
+
+#+begin_src bash
+eb-retry-list --result result.json --recorded-list --out retry.list
+#+end_src
+
+The recorded path is used as written.
+Keep =--list= when the list moved or when you run the command from another working directory.
 
 To retry only failures that =eb-stack= identifies as transient, add =--classify=:
 

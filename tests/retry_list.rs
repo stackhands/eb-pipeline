@@ -13,7 +13,7 @@ fn write_exec(path: &Path, text: &str) {
 }
 
 #[test]
-fn failed_refused_pending_and_skipped_lines_keep_their_options_in_list_order() {
+fn explicit_result_list_keeps_default_stdout_stderr_and_status_bytes() {
     let dir = tempfile::tempdir().unwrap();
     let list = dir.path().join("build.list");
     let result = dir.path().join("result.json");
@@ -79,7 +79,7 @@ Tail-1.0-foss-2025a.eb --from-pr=123
 }
 
 #[test]
-fn summary_json_selects_one_target_and_easystack_preserves_options() {
+fn explicit_summary_list_keeps_default_output_file_and_stream_bytes() {
     let dir = tempfile::tempdir().unwrap();
     let stack = dir.path().join("stack.yml");
     let summary = dir.path().join("summary.json");
@@ -138,6 +138,7 @@ easyconfigs:
         "{}",
         String::from_utf8_lossy(&o.stderr)
     );
+    assert_eq!(o.stderr, b"");
     assert!(o.stdout.is_empty());
     assert_eq!(
         std::fs::read_to_string(&out).unwrap(),
@@ -154,7 +155,112 @@ easyconfigs:
         .output()
         .unwrap();
     assert_eq!(o.status.code(), Some(0));
+    assert_eq!(o.stdout, b"");
+    assert_eq!(o.stderr, b"");
     assert_eq!(std::fs::read_to_string(&out).unwrap(), "");
+}
+
+#[test]
+fn recorded_list_reads_the_path_from_a_result_or_summary_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = dir.path().join("build list.txt");
+    let result = dir.path().join("result.json");
+    let summary = dir.path().join("summary.json");
+    std::fs::write(&list, "Done.eb --robot\nRetry.eb --rebuild\n").unwrap();
+    let list_path = list.display().to_string();
+    let packages = serde_json::json!([
+        {"easyconfig": "Done.eb", "status": "success"},
+        {"easyconfig": "Retry.eb", "status": "failed"}
+    ]);
+    std::fs::write(
+        &result,
+        serde_json::to_vec(&serde_json::json!({
+            "kind": "result",
+            "exit_code": 1,
+            "list": &list_path,
+            "lines": &packages
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        &summary,
+        serde_json::to_vec(&serde_json::json!({
+            "kind": "summary",
+            "targets": [{
+                "name": "cpu",
+                "exit_code": 1,
+                "list": &list_path,
+                "packages": &packages
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    for args in [
+        vec!["--result", result.to_str().unwrap(), "--recorded-list"],
+        vec![
+            "--summary",
+            summary.to_str().unwrap(),
+            "--target",
+            "cpu",
+            "--recorded-list",
+        ],
+    ] {
+        let o = bin().args(args).output().unwrap();
+        assert_eq!(o.status.code(), Some(0));
+        assert_eq!(o.stdout, b"Retry.eb --rebuild\n");
+        assert_eq!(o.stderr, b"");
+    }
+}
+
+#[test]
+fn explicit_list_defaults_keep_their_error_bytes() {
+    let o = bin().args(["--result", "result.json"]).output().unwrap();
+    assert_eq!(o.status.code(), Some(2));
+    assert_eq!(o.stdout, b"");
+    assert_eq!(o.stderr, b"eb-retry-list: --list is required\n");
+}
+
+#[test]
+fn recorded_list_refuses_an_explicit_list_or_a_record_without_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = dir.path().join("build.list");
+    let result = dir.path().join("result.json");
+    std::fs::write(&list, "Retry.eb\n").unwrap();
+    std::fs::write(
+        &result,
+        r#"{"kind":"result","exit_code":1,"lines":[{"easyconfig":"Retry.eb","status":"failed"}]}"#,
+    )
+    .unwrap();
+
+    let o = bin()
+        .args(["--result"])
+        .arg(&result)
+        .args(["--list"])
+        .arg(&list)
+        .arg("--recorded-list")
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(2));
+    assert_eq!(
+        o.stderr,
+        b"eb-retry-list: pass either --list or --recorded-list, not both\n"
+    );
+
+    let o = bin()
+        .args(["--result"])
+        .arg(&result)
+        .arg("--recorded-list")
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(2));
+    assert_eq!(o.stdout, b"");
+    assert_eq!(
+        o.stderr,
+        b"eb-retry-list: the selected record has no string `list`\n"
+    );
 }
 
 #[test]
@@ -497,6 +603,7 @@ fn docs_name_eb_retry_list() {
         assert!(page.contains("--result"), "{rel}");
         assert!(page.contains("--summary"), "{rel}");
         assert!(page.contains("--list"), "{rel}");
+        assert!(page.contains("--recorded-list"), "{rel}");
         assert!(page.contains("--classify"), "{rel}");
         assert!(page.contains("sub_class"), "{rel}");
         assert!(page.contains("--node"), "{rel}");
@@ -963,6 +1070,7 @@ fn help_names_class_and_node() {
     assert!(stdout.contains("--class"));
     assert!(stdout.contains("--node"));
     assert!(stdout.contains("--drop-oom"));
+    assert!(stdout.contains("--recorded-list"));
     assert!(stdout.contains("does not classify"));
 }
 
