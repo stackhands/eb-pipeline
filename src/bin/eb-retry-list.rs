@@ -28,6 +28,7 @@ struct Args {
     recorded_list: bool,
     statuses: Option<BTreeSet<String>>,
     out: Option<String>,
+    require_lines: bool,
     classify: bool,
     classes: Option<BTreeSet<String>>,
     node: Option<String>,
@@ -107,7 +108,11 @@ fn run() -> Result<ExitCode, String> {
                 .map_err(|e| format!("cannot write retry list: {e}"))?;
         }
     }
-    Ok(ExitCode::SUCCESS)
+    if args.require_lines && selected.is_empty() {
+        Ok(ExitCode::from(1))
+    } else {
+        Ok(ExitCode::SUCCESS)
+    }
 }
 
 fn read_list(path: &str) -> Result<Vec<ListLine>, String> {
@@ -133,6 +138,7 @@ struct Parsed {
     recorded_list: bool,
     statuses: Option<BTreeSet<String>>,
     out: Option<String>,
+    require_lines: bool,
     classify: bool,
     classes: Option<BTreeSet<String>>,
     node: Option<String>,
@@ -150,6 +156,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
         recorded_list: false,
         statuses: None,
         out: None,
+        require_lines: false,
         classify: false,
         classes: None,
         node: None,
@@ -171,6 +178,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
             }
             "--classify" => parsed.classify = true,
             "--recorded-list" => parsed.recorded_list = true,
+            "--require-lines" => parsed.require_lines = true,
             "--drop-oom" => parsed.drop_oom = true,
             "--result" | "--summary" | "--target" | "--list" | "--status" | "--out" | "--class"
             | "--node" | "--easyconfigs" | "--arch" => {
@@ -258,6 +266,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
         recorded_list: parsed.recorded_list,
         statuses: parsed.statuses,
         out: parsed.out,
+        require_lines: parsed.require_lines,
         classify: parsed.classify,
         classes: parsed.classes,
         node: parsed.node,
