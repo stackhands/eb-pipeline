@@ -51,6 +51,8 @@ logs/20261117_090000/summary.json
 | =LOG_DIR/rotate.log=            | =logs=             | The output of =eb-keep-logs rotate=.                                                                       |
 | =LOG_DIR/PHASE/=                | routed             | The directory ={phase_dir}= names, made before a command whose route arguments or shares use it.           |
 
+The complete selected or easystack list atomically replaces an earlier materialization before =stack shard= reads it.
+
 =STEM= is the easyconfig file name without =.eb=, with =.2=, =.3= and so on added when the list repeats a line, and =UNIT= is =all=, =cpu-prerequisites=, =prelude= or the name of a shard.
 Each log holds the standard output and the standard error of its command, which starts with no standard input, and =run= creates it anew when the command starts.
 A command that cannot start leaves one line in its log, =cannot start PROGRAM: ERROR=, and counts as exit 127.

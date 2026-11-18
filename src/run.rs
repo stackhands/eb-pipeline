@@ -957,7 +957,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
         let written = path
             .parent()
             .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|()| std::fs::write(&path, text));
+            .and_then(|()| util::write_atomic(&path, text.as_bytes()));
         if let Err(e) = written {
             let msg = format!("cannot write {}: {e}", path.display());
             log("ERROR", "preflight", &target, &msg);

@@ -2442,6 +2442,34 @@ fn selected_list_feeds_the_shard_planner() {
 }
 
 #[test]
+fn selected_list_atomically_replaces_prior_materialization() {
+    let env = setup("[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n");
+    with_cpu_target(
+        &env,
+        "[targets.select]\noption = \"--only-targets\"\nvalue = \"cpu\"\nstrip = true\nwhen_absent = \"none\"\n",
+    );
+    let selected = env
+        .dir
+        .path()
+        .join("logs/20260101_000000/cpu/selected-cpu.list");
+    std::fs::create_dir_all(selected.parent().unwrap()).unwrap();
+    std::fs::write(&selected, "stale partial bytes\n").unwrap();
+    let old_inode = std::fs::metadata(&selected).unwrap().ino();
+
+    let output = go(
+        &env,
+        "Foo-1.0-foss-2025a.eb --only-targets=cpu --rebuild\n",
+        &[("STUB_SHARD", "fromlist")],
+    );
+    assert_eq!(output.code, 0, "{}", output.stderr);
+    assert_eq!(
+        std::fs::read_to_string(&selected).unwrap(),
+        "Foo-1.0-foss-2025a.eb --rebuild\n"
+    );
+    assert_ne!(std::fs::metadata(&selected).unwrap().ino(), old_inode);
+}
+
+#[test]
 fn run_can_reuse_a_saved_shard_plan() {
     let env = setup(&format!(
         "[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n{ADMISSION}"
