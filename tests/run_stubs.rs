@@ -1531,6 +1531,35 @@ fn sigterm_is_forwarded_and_exit_is_143() {
 }
 
 #[test]
+fn sigterm_during_source_prefetch_records_every_line() {
+    let env = setup("[sources]\n");
+    let mut child = driver(&env, LIST, &[("STUB_EB_SLEEP", "1")], &[]);
+    let started = env.dir.path().join("started");
+    let t0 = Instant::now();
+    while !started.exists() {
+        assert!(t0.elapsed() < Duration::from_secs(20), "stub never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // SAFETY: the pid is the driver child this test started.
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+    }
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(143));
+    let result: Value =
+        serde_json::from_str(&std::fs::read_to_string(env.dir.path().join("result.json")).unwrap())
+            .unwrap();
+    let lines = result["lines"].as_array().unwrap();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines[0]["easyconfig"], "Foo-1.0-foss-2025a.eb");
+    assert_eq!(lines[0]["phase"], "sources");
+    assert_eq!(lines[0]["status"], "failed");
+    assert_eq!(lines[0]["exit_code"], 143);
+    assert_eq!(lines[1]["easyconfig"], "Bar-2.0-foss-2025a.eb");
+    assert_eq!(lines[1]["status"], "skipped");
+}
+
+#[test]
 fn sigterm_reaches_descendants_of_the_running_command() {
     let env = setup("");
     write_exec(
@@ -2548,6 +2577,34 @@ fn selected_list_feeds_the_shard_planner() {
     let d = r["deselected"].as_array().unwrap();
     assert_eq!(d.len(), 2);
     assert_eq!(d[0]["easyconfig"], "Bar-2.0-foss-2025a.eb");
+}
+
+#[test]
+fn selected_list_atomically_replaces_prior_materialization() {
+    let env = setup("[shards]\ncount = 2\neasyconfigs = [\"/opt/ec\"]\n");
+    with_cpu_target(
+        &env,
+        "[targets.select]\noption = \"--only-targets\"\nvalue = \"cpu\"\nstrip = true\nwhen_absent = \"none\"\n",
+    );
+    let selected = env
+        .dir
+        .path()
+        .join("logs/20260101_000000/cpu/selected-cpu.list");
+    std::fs::create_dir_all(selected.parent().unwrap()).unwrap();
+    std::fs::write(&selected, "stale partial bytes\n").unwrap();
+    let old_inode = std::fs::metadata(&selected).unwrap().ino();
+
+    let output = go(
+        &env,
+        "Foo-1.0-foss-2025a.eb --only-targets=cpu --rebuild\n",
+        &[("STUB_SHARD", "fromlist")],
+    );
+    assert_eq!(output.code, 0, "{}", output.stderr);
+    assert_eq!(
+        std::fs::read_to_string(&selected).unwrap(),
+        "Foo-1.0-foss-2025a.eb --rebuild\n"
+    );
+    assert_ne!(std::fs::metadata(&selected).unwrap().ino(), old_inode);
 }
 
 #[test]
