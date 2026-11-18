@@ -134,6 +134,7 @@ _arguments "${_arguments_options[@]}" : \
 '--log-stamp=[Timestamp directory under the log root\: a UTC time as \`YYYYMMDD_HHMMSS\`, the name \`eb-keep-logs rotate\` ages. Default\: the current UTC time, taken once per run; \`<log-stamp>\` for \`plan\`]:LOG_STAMP:_default' \
 '--offline-bundle=[Build a checksum-indexed bundle of prefetched and configured assets]:OFFLINE_BUNDLE:_files' \
 '--result=[Write the result JSON here]:RESULT:_files' \
+'--plan-out=[Write the plan computed by this run before starting any phase command]:PLAN_OUT:_files' \
 '--metrics-file=[Atomically write Prometheus metrics here when the run ends]:METRICS_FILE:_files' \
 '--shard-plan=[Directory written by \`stack shard\`; reuse its units without replanning]:SHARD_PLAN:_files' \
 '--node=[Node size for \`--oom-preflight\`, as \`CORES\:MEMORY_MIB\[\:TARGET\]\`]:NODE:_default' \

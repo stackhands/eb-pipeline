@@ -78,8 +78,9 @@ file.
 
 Output streams: stdout carries plan, explain, schema, init, status, targets and
 metrics, and verify, and run \-\-dry\-run or watch \-\-dry\-run output only. Events go to stderr
-as `LEVEL [phase] target: message`. The result JSON goes to \-\-result, and each
-run\*(Aqs summary to summary.json and summary.html in its run directory,
+as `LEVEL [phase] target: message`. The result JSON goes to \-\-result, a run\*(Aqs
+requested plan JSON to \-\-plan\-out, and each run\*(Aqs summary to summary.json and
+summary.html in its run directory,
 <log_root>/<log\-stamp>/. Run \-\-metrics\-file atomically replaces a Prometheus
 text file when the run ends. `metrics` exits 0 when it can read the file,
 including when the run itself failed.

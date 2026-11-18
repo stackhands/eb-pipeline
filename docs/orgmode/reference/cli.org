@@ -77,8 +77,9 @@ file.
 
 Output streams: stdout carries plan, explain, schema, init, status, targets and
 metrics, and verify, and run --dry-run or watch --dry-run output only. Events go to stderr
-as `LEVEL [phase] target: message`. The result JSON goes to --result, and each
-run's summary to summary.json and summary.html in its run directory,
+as `LEVEL [phase] target: message`. The result JSON goes to --result, a run's
+requested plan JSON to --plan-out, and each run's summary to summary.json and
+summary.html in its run directory,
 <log_root>/<log-stamp>/. Run --metrics-file atomically replaces a Prometheus
 text file when the run ends. `metrics` exits 0 when it can read the file,
 including when the run itself failed.
@@ -294,6 +295,7 @@ Exit 2 means the file is missing, is not JSON, or its =kind= is not =result=.
 | Option                 | Meaning                                                                                                                                                                                                                         |
 |------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | =--result FILE=        | Write the result file to =FILE= when the run ends. Without it, no result file is written. An error in the input, which stops the run before it starts, leaves an existing =FILE= as it was. It must differ from =--metrics-file=.   |
+| =--plan-out FILE=      | Write the plan computed by this invocation before any phase command starts. A dry run writes it too. =FILE= must differ from every result and metrics path.                                                                       |
 | =--metrics-file FILE=  | Atomically replace =FILE= with Prometheus text when the run ends. Without it, no metrics file is written. A dry run does not write it. It must differ from =--result= and =--resume-result=.                                             |
 | =--resume-result FILE= | Continue from =FILE= when =[resume] enabled= is true and the input digest still matches. Without that, exit 2 and no result file. A mismatch, a missing =input_digest=, or an incomplete identity exits 78 and writes the result. |
 | =--shard-plan DIR=     | Read the units from a plan previously written by =eb-stack stack shard=. The run does not call the shard planner or require its installed-module-directory environment variables.                                             |
@@ -303,6 +305,7 @@ Exit 2 means the file is missing, is not JSON, or its =kind= is not =result=.
 
 =--run-id= defaults to the log stamp, and =--log-stamp= to the UTC time at which the run starts, taken once.
 A metrics file records the final result, end time and duration after post-run work such as Software Bill of Materials (SBOM) generation.
+If the plan file cannot be written, =run= exits 1 before starting a phase command.
 When both output files are requested, =run= attempts =--result= first and =--metrics-file= second even if the first write fails, then reports every output failure and exits 1.
 If =--metrics-file= resolves to the same file as either JSON option, =run= exits 2 before it starts work or changes any of those files.
 =--result= may name the same file as =--resume-result=: the complete prior result is read before the completed run atomically replaces it.

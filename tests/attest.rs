@@ -558,10 +558,13 @@ fn a_dry_run_does_not_append_and_a_real_run_stores_the_proof() {
         ("EB_IMAGE_DIGEST", "sha256:abc"),
         ("EB_ROUTE_RECEIPT", "receipt-1"),
     ];
+    let dry_plan = root.join("dry-plan.json");
     let dry = tree.run(
         &[
             "run",
             "--dry-run",
+            "--plan-out",
+            dry_plan.to_str().unwrap(),
             "--site",
             root.join("site.toml").to_str().unwrap(),
             "--list",
@@ -582,11 +585,17 @@ fn a_dry_run_does_not_append_and_a_real_run_stores_the_proof() {
         String::from_utf8_lossy(&dry.stderr)
     );
     assert!(!root.join("sidecar.calls").exists());
+    let dry_doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dry_plan).unwrap()).unwrap();
+    assert!(dry_doc.get("input_attestation").is_none());
 
     let result = root.join("result.json");
+    let run_plan = root.join("run-plan.json");
     let ran = tree.run(
         &[
             "run",
+            "--plan-out",
+            run_plan.to_str().unwrap(),
             "--site",
             root.join("site.toml").to_str().unwrap(),
             "--list",
@@ -611,6 +620,9 @@ fn a_dry_run_does_not_append_and_a_real_run_stores_the_proof() {
     let doc: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&result).unwrap()).unwrap();
     assert!(doc["input_attestation"]["record_sha256"].is_string());
+    let plan_doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(run_plan).unwrap()).unwrap();
+    assert_eq!(plan_doc["input_attestation"], doc["input_attestation"]);
     let record = std::fs::read_to_string(
         std::fs::read_dir(root.join("log/inputs"))
             .unwrap()

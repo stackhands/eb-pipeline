@@ -2,8 +2,8 @@
 
 use crate::exit::{self, Fail};
 use crate::plan::{
-    build_plan, read_units, shell_line, valid_job_id, Cmd, Deselected, Planner, StemSeq, Unit,
-    PHASES,
+    build_plan, read_units, shell_line, valid_job_id, Cmd, Deselected, Plan, Planner, StemSeq,
+    Unit, PHASES,
 };
 use crate::resolve::Role;
 use crate::resume::{self, Prior};
@@ -515,11 +515,24 @@ pub struct Options<'a> {
     pub resume: Option<&'a Prior>,
     /// Why `--resume-result` is refused before any command, when it is.
     pub resume_refused: Option<&'a str>,
+    /// File that receives the plan before any phase command starts.
+    pub plan_out: Option<&'a Path>,
 }
 
 #[derive(Serialize)]
 struct OomPlan<'a> {
     easyconfigs: Vec<&'a str>,
+}
+
+fn write_plan(path: &Path, plan: &Plan) -> Result<(), Fail> {
+    let value = serde_json::to_value(plan).expect("plan is serializable");
+    let text = serde_json::to_string_pretty(&value).expect("plan is serializable") + "\n";
+    std::fs::write(path, text).map_err(|e| {
+        Fail::new(
+            exit::FAILED,
+            format!("cannot write plan {}: {e}", path.display()),
+        )
+    })
 }
 
 fn parse_oom_count(stdout: &str) -> Result<usize, Fail> {
@@ -696,7 +709,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
         return finish(st, Some(exit::REFUSED));
     }
 
-    let plan = match build_plan(p, lines, None) {
+    let mut plan = match build_plan(p, lines, None) {
         Ok(pl) => pl,
         Err(f) => {
             st.res.message = Some(f.msg.clone());
@@ -705,6 +718,12 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
     };
 
     if opts.dry_run {
+        if let Some(path) = opts.plan_out {
+            if let Err(f) = write_plan(path, &plan) {
+                st.res.message = Some(f.msg);
+                return finish(st, Some(f.code));
+            }
+        }
         for ph in &plan.phases {
             if ph.status != "planned" {
                 println!("# [{}] {}", ph.name, ph.status);
@@ -735,11 +754,20 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
             lines,
             target: &target,
         }) {
-            Ok(att) => st.res.input_attestation = Some(att),
+            Ok(att) => {
+                plan.input_attestation = Some(att.clone());
+                st.res.input_attestation = Some(att);
+            }
             Err(f) => {
                 st.res.message = Some(f.msg);
                 return finish(st, Some(f.code));
             }
+        }
+    }
+    if let Some(path) = opts.plan_out {
+        if let Err(f) = write_plan(path, &plan) {
+            st.res.message = Some(f.msg);
+            return finish(st, Some(f.code));
         }
     }
 
