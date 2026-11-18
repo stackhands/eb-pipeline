@@ -347,6 +347,26 @@ fn failed_sync_preserves_the_last_publish_and_records_its_completed_abort() {
 }
 
 #[test]
+fn signaled_sync_preserves_128_plus_signal_exit_code() {
+    let fixture = Fixture::new();
+    let metrics = fixture.dir.path().join("cvmfs.prom");
+    write_exec(
+        &fixture.sync,
+        "#!/bin/sh\necho \"sync $*\" >> \"$CALLS\"\nkill -TERM \"$$\"\n",
+    );
+
+    let output = fixture.command_with_metrics(Some(&metrics)).sync_output();
+
+    assert_eq!(code(&output), 143, "{}", stderr(&output));
+    assert_eq!(
+        fixture.calls(),
+        "list\ntransaction repo.example\nsync --delete\nabort -f repo.example\n"
+    );
+    let text = std::fs::read_to_string(metrics).unwrap();
+    assert_eq!(sample(&text, "eb_cvmfs_exit_code"), Some(143.0));
+}
+
+#[test]
 fn an_abort_that_cannot_start_is_not_counted_or_called_complete() {
     let fixture = Fixture::new();
     let metrics = fixture.dir.path().join("cvmfs.prom");
@@ -1387,4 +1407,134 @@ fn concurrent_fixture_exec_writes_do_not_hit_text_file_busy() {
     for worker in workers {
         worker.join().unwrap();
     }
+}
+
+#[test]
+fn cvmfs_dry_run_succeeds_when_stdout_consumer_closes() {
+    let mut fds = [0; 2];
+    unsafe {
+        assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+        assert_eq!(libc::close(fds[0]), 0);
+    }
+    let closed = unsafe { <std::process::Stdio as std::os::fd::FromRawFd>::from_raw_fd(fds[1]) };
+    let o = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
+        .args(["--dry-run", "repo.example", "--", "sync"])
+        .stdout(closed)
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+}
+
+#[test]
+fn archive_manifest_accepts_equals_form_and_rejects_empty_or_duplicate() {
+    let fixture = Fixture::new();
+    let tree = fixture.dir.path().join("tree");
+    std::fs::create_dir_all(tree.join("pkg")).unwrap();
+    std::fs::write(tree.join("pkg/file"), b"hi\n").unwrap();
+    let ingest = fixture.dir.path().join("ingest");
+    std::fs::create_dir(&ingest).unwrap();
+    let archive = ingest.join("cache.tar");
+    let status = Command::new("tar")
+        .args(["--format=ustar", "-cf"])
+        .arg(&archive)
+        .arg("-C")
+        .arg(&tree)
+        .arg("pkg")
+        .sync_status();
+    assert!(status.success());
+    let manifest = manifest_for(&fixture, "cache.tar", "i32");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
+        .env("PATH", &fixture.bin)
+        .arg(format!("--archive-manifest={}", manifest.display()))
+        .args(["--dry-run", "repo.example", "--"])
+        .arg(&fixture.sync)
+        .sync_output();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let empty = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
+        .env("PATH", &fixture.bin)
+        .args(["--archive-manifest=", "--dry-run", "repo.example", "--"])
+        .arg(&fixture.sync)
+        .sync_output();
+    assert_eq!(code(&empty), 2);
+    assert!(stderr(&empty).contains("`--archive-manifest` needs a path"));
+
+    let dup = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
+        .env("PATH", &fixture.bin)
+        .args([
+            &format!("--archive-manifest={}", manifest.display()),
+            "--archive-manifest",
+            "other.json",
+            "repo.example",
+            "--",
+        ])
+        .arg(&fixture.sync)
+        .sync_output();
+    assert_eq!(code(&dup), 2);
+    assert!(stderr(&dup).contains("`--archive-manifest` was given twice"));
+}
+
+#[test]
+fn value_options_do_not_consume_the_next_long_option() {
+    let fixture = Fixture::new();
+    let cases = [
+        (
+            &["--metrics-file", "--check"][..],
+            "--metrics-file requires PATH",
+        ),
+        (&["--tag", "--check"][..], "`--tag` requires NAME"),
+        (
+            &["--tag", "release", "--tag-description", "--check"][..],
+            "`--tag-description` requires TEXT",
+        ),
+        (
+            &["--verify-cmd", "--check"][..],
+            "`--verify-cmd` requires CMD",
+        ),
+        (
+            &["--archive-manifest", "--check"][..],
+            "`--archive-manifest` needs a path",
+        ),
+        (
+            &["--sync-timeout", "--check"][..],
+            "`--sync-timeout` requires SEC",
+        ),
+        (
+            &["--verify-timeout", "--check"][..],
+            "`--verify-timeout` requires SEC",
+        ),
+        (
+            &["--publish-timeout", "--check"][..],
+            "`--publish-timeout` requires SEC",
+        ),
+        (
+            &["--check-timeout", "--check"][..],
+            "`--check-timeout` requires SEC",
+        ),
+    ];
+
+    for (args, message) in cases {
+        let output = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
+            .env("PATH", &fixture.bin)
+            .current_dir(fixture.dir.path())
+            .arg("--dry-run")
+            .args(args)
+            .args(["repo.example", "--"])
+            .arg(&fixture.sync)
+            .sync_output();
+        assert_eq!(code(&output), 2, "{args:?}: {}", stderr(&output));
+        assert_eq!(output.stdout, b"", "{args:?}");
+        assert_eq!(
+            output.stderr,
+            format!("eb-cvmfs: {message}\n").as_bytes(),
+            "{args:?}"
+        );
+    }
+    assert!(!fixture.dir.path().join("--check").exists());
 }

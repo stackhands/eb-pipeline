@@ -71,6 +71,7 @@ It gives two files that eb-stack 0.7.4 wrote, kept in =tests/fixtures/eb-stack/=
    | =rebuild: yes=                              | =--rebuild=                                       |
    | =rebuild:=                                  | =--rebuild=                                       |
    | =rebuild: 1=                                | =--rebuild=                                       |
+   | =rebuild: 1.0=                              | =--rebuild=                                       |
    | =robot: false=                              | =--disable-robot=                                 |
    | =f: true=                                   | =-f=                                              |
    | =parallel: 4=                               | =--parallel=4=                                    |
@@ -79,12 +80,12 @@ It gives two files that eb-stack 0.7.4 wrote, kept in =tests/fixtures/eb-stack/=
    | =include-easyblocks: [a.py, b.py]=          | =--include-easyblocks=a.py,b.py=                  |
    | =amend: [versionsuffix=foo, toolchain=bar]= | =--amend=versionsuffix=foo --amend=toolchain=bar= |
 
-   A plain =1= gives the bare option, as =true= does, since EasyBuild takes it for true, as Python does: =parallel: 1= is =--parallel= without its value, which =eb= refuses.
+   A plain =1= or =1.0= gives the bare option, as =true= does, since EasyBuild takes it for true, as Python does: =parallel: 1= is =--parallel= without its value, which =eb= refuses.
    Write the value 1 in quotes, as in =parallel: '1'=.
    On a target that takes staged rebuilds, a =--rebuild= line whose module is installed goes through eb-staged-rebuild, as in [[file:staged-rebuilds.org][Rebuild installed software through eb-staged-rebuild]].
    eb-pipeline reads an easystack as YAML 1.2, and EasyBuild as YAML 1.1, so write values that the two read differently as both read them alike:
    - =yes=, =on=, =no= and =off= are booleans to both; eb-pipeline cannot tell a quoted value from a plain one, so a quoted =yes= is a boolean to it too.
-   - A number with a point, such as =8.0=, goes in quotes, as eb-stack writes it; eb-pipeline refuses it without them, as Python and eb-pipeline write such a number differently.
+   - A number with a point other than =1.0=, such as =8.0=, goes in quotes, as eb-stack writes it; eb-pipeline refuses it without them, as Python and eb-pipeline write such a number differently.
    - A value with a leading zero, an underscore or a colon, such as =umask: '022'=, goes in quotes: EasyBuild reads a plain =022= as the number 18, and eb-pipeline as the text =022=.
 4. A build list of eb-stack needs nothing more:
 
@@ -148,7 +149,7 @@ Without =[shards]= the build keeps the argument, space included.
 |----------------------------------------------------------------------------------------------------------------------------+-------------------------------------------------------------------------------------+----------------------------------------------------------------------|
 | =ERROR [main] -: easystack typo.yml: entry 1: pigz-2.8-GCCcore-15.2.0.eb: only `options` can follow the name, not option=  | A key other than =options= under the name, here a typing error.                     | Write =options:=.                                                    |
 | =ERROR [main] -: easystack FILE: entry N: the entry has 2 keys, NAME, options: indent `options` under the easyconfig name= | =options:= starts as far in as the name, which makes it a second key of the entry.  | Indent =options:= further than the name.                             |
-| =ERROR [main] -: easystack FILE: entry N: NAME: the option `OPTION`: put `8.0` in quotes; ...=                             | A number with a point without quotes.                                               | Write it in quotes, such as ='8.0'=.                                 |
+| =ERROR [main] -: easystack FILE: entry N: NAME: the option `OPTION`: put `8.0` in quotes; ...=                             | A number with a point other than =1.0= without quotes.                              | Write it in quotes, such as ='8.0'=.                                 |
 | =ERROR [main] -: easystack FILE: `easyconfigs` is not a list; start each entry with `- `=                                  | The entries under =easyconfigs:= do not start with a dash.                          | Start each entry with a dash.                                        |
 | =ERROR [main] -: easystack FILE: there is no top-level `easyconfigs` key=                                                  | A build list whose name ends in =.yml= or =.yaml=, or an easystack of another form. | Name a build list otherwise; write the entries under =easyconfigs:=. |
 | =ERROR [main] -: build list line LINE: stack shard reads words split on white space, and those words are not this line's arguments= | A word holds a space or a quote, and =[shards]= is on. =stack shard= would not read the arguments the build runs. | Write the value without a space or a quote, or run without =[shards]=. |

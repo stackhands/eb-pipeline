@@ -9,7 +9,6 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::env;
 use std::fs;
-use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -75,17 +74,17 @@ fn run() -> Result<ExitCode, String> {
         (None, Some(path), Some(target)) => read_summary(Path::new(path), target),
         _ => unreachable!("validated in parse"),
     };
-    let (lines, recorded) = if args.recorded_list {
+    let (lines, recorded, list_source) = if args.recorded_list {
         let recorded = read_recorded()?;
         let list = recorded
             .list
-            .as_deref()
+            .clone()
             .ok_or_else(|| "the selected record has no string `list`".to_string())?;
-        check_output_alias(args.out.as_deref(), &[("--list", Some(list))])?;
-        (read_list(list)?, recorded)
+        check_output_alias(args.out.as_deref(), &[("--list", Some(&list))])?;
+        (read_list(&list)?, recorded, list)
     } else {
         let list = args.list.as_deref().expect("validated in parse");
-        (read_list(list)?, read_recorded()?)
+        (read_list(list)?, read_recorded()?, list.to_string())
     };
 
     let mut selected = select_retry_lines(&lines, &recorded, args.statuses.as_ref());
@@ -100,6 +99,7 @@ fn run() -> Result<ExitCode, String> {
             args.drop_oom,
             &args.easyconfigs,
             &args.arches,
+            &list_source,
         )?,
         None => selected.into_iter().map(|line| line.raw).collect(),
     };
@@ -113,8 +113,7 @@ fn run() -> Result<ExitCode, String> {
                 .map_err(|e| format!("cannot write {path}: {e}"))?;
         }
         _ => {
-            let mut out = io::stdout().lock();
-            out.write_all(text.as_bytes())
+            util::write_stdout(text.as_bytes())
                 .map_err(|e| format!("cannot write retry list: {e}"))?;
         }
     }
@@ -135,11 +134,11 @@ fn check_output_alias(out: Option<&str>, inputs: &[(&str, Option<&str>)]) -> Res
 
 fn read_list(path: &str) -> Result<Vec<ListLine>, String> {
     let list_path = Path::new(path);
-    let list_text =
-        fs::read_to_string(list_path).map_err(|e| format!("cannot read list {path}: {e}"))?;
     let lines = if easystack::is_easystack(list_path) {
-        easystack::parse(&list_text).map_err(|e| format!("easystack {path}: {e}"))?
+        easystack::read(list_path)?
     } else {
+        let list_text =
+            fs::read_to_string(list_path).map_err(|e| format!("cannot read list {path}: {e}"))?;
         util::parse_list(&list_text).map_err(|f| f.msg)?
     };
     if lines.is_empty() {
@@ -233,6 +232,16 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
         }
     }
 
+    if parsed.result.is_none() && parsed.summary.is_none() {
+        parsed.result = util::env_value("EB_PIPELINE_RESULT");
+    }
+    if parsed.target.is_none() && parsed.summary.is_some() {
+        parsed.target = util::env_value("EB_PIPELINE_TARGET");
+    }
+    if parsed.list.is_none() && !parsed.recorded_list {
+        parsed.list = util::env_value("EB_PIPELINE_LIST");
+    }
+
     if parsed.result.is_some() && parsed.summary.is_some() {
         return Err("pass either --result or --summary, not both".into());
     }
@@ -294,19 +303,22 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     })
 }
 
+fn assign_once(slot: &mut Option<String>, flag: &str, value: String) -> Result<(), String> {
+    if slot.is_some() {
+        return Err(format!("{flag} was given twice"));
+    }
+    *slot = Some(value);
+    Ok(())
+}
+
 fn assign_flag(flag: &str, value: String, parsed: &mut Parsed) -> Result<(), String> {
     match flag {
-        "--result" => parsed.result = Some(value),
-        "--summary" => parsed.summary = Some(value),
-        "--target" => parsed.target = Some(value),
-        "--list" => parsed.list = Some(value),
-        "--out" => parsed.out = Some(value),
-        "--node" => {
-            if parsed.node.is_some() {
-                return Err("--node was given twice".into());
-            }
-            parsed.node = Some(value);
-        }
+        "--result" => assign_once(&mut parsed.result, flag, value)?,
+        "--summary" => assign_once(&mut parsed.summary, flag, value)?,
+        "--target" => assign_once(&mut parsed.target, flag, value)?,
+        "--list" => assign_once(&mut parsed.list, flag, value)?,
+        "--out" => assign_once(&mut parsed.out, flag, value)?,
+        "--node" => assign_once(&mut parsed.node, flag, value)?,
         "--easyconfigs" => parsed.easyconfigs.push(value),
         "--arch" => parsed.arches.push(value),
         "--class" => {
@@ -527,6 +539,7 @@ fn collect_outcomes(
 struct RetryLine {
     raw: String,
     easyconfig: String,
+    args: Vec<String>,
     log: Option<String>,
 }
 
@@ -551,6 +564,7 @@ fn select_retry_lines(
                 out.push(RetryLine {
                     raw: line.raw.clone(),
                     easyconfig: line.easyconfig.clone(),
+                    args: line.args.clone(),
                     log: outcome.log,
                 });
             }
@@ -569,6 +583,7 @@ fn select_retry_lines(
                 out.push(RetryLine {
                     raw: line.raw.clone(),
                     easyconfig: line.easyconfig.clone(),
+                    args: line.args.clone(),
                     log: None,
                 });
             }
@@ -667,6 +682,7 @@ fn filter_oom(
     drop: bool,
     easyconfigs: &[String],
     arches: &[String],
+    list_source: &str,
 ) -> Result<Vec<String>, String> {
     if lines.is_empty() {
         return Ok(Vec::new());
@@ -698,7 +714,9 @@ fn filter_oom(
             .code()
             .map_or_else(|| output.status.to_string(), |code| code.to_string());
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let detail = stderr.trim();
+        let generated = temp.0.to_string_lossy();
+        let source = format!("generated retry easystack from {list_source}");
+        let detail = stderr.trim().replace(generated.as_ref(), &source);
         let detail = if detail.is_empty() {
             String::new()
         } else {
@@ -727,17 +745,78 @@ fn filter_oom(
 }
 
 fn write_easystack(path: &Path, lines: &[RetryLine]) -> Result<(), String> {
-    let mut seen = BTreeSet::new();
+    let mut seen = BTreeMap::new();
     let mut easyconfigs = Vec::new();
     for line in lines {
         let name = basename(&line.easyconfig).to_string();
-        if seen.insert(name.clone()) {
-            easyconfigs.push(name);
+        if let Some(previous) = seen.get(&name) {
+            if previous != &line.raw {
+                return Err(format!(
+                    "cannot check `{name}` for memory with more than one set of eb options"
+                ));
+            }
+            continue;
         }
+        seen.insert(name.clone(), line.raw.clone());
+        easyconfigs.push(easystack_entry(&name, &line.args)?);
     }
-    let value = serde_json::json!({ "easyconfigs": easyconfigs });
+    let mut document = serde_yaml::Mapping::new();
+    document.insert(
+        serde_yaml::Value::String("easyconfigs".into()),
+        serde_yaml::Value::Sequence(easyconfigs),
+    );
+    let value = serde_yaml::Value::Mapping(document);
     let text = serde_yaml::to_string(&value).map_err(|e| format!("cannot make easystack: {e}"))?;
     fs::write(path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+fn easystack_entry(name: &str, args: &[String]) -> Result<serde_yaml::Value, String> {
+    if args.is_empty() {
+        return Ok(serde_yaml::Value::String(name.to_string()));
+    }
+    let mut options = serde_yaml::Mapping::new();
+    let mut index = 0;
+    while index < args.len() {
+        let argument = &args[index];
+        let Some(long) = argument.strip_prefix("--") else {
+            return Err(format!(
+                "cannot represent eb option `{argument}` in the generated easystack"
+            ));
+        };
+        let (key, value, consumed) = if let Some((key, value)) = long.split_once('=') {
+            (key, serde_yaml::Value::String(value.to_string()), 1)
+        } else if args
+            .get(index + 1)
+            .is_some_and(|value| !value.starts_with('-'))
+        {
+            (long, serde_yaml::Value::String(args[index + 1].clone()), 2)
+        } else {
+            (long, serde_yaml::Value::Bool(true), 1)
+        };
+        if key.is_empty() {
+            return Err("cannot represent an empty eb option in the generated easystack".into());
+        }
+        if options
+            .insert(serde_yaml::Value::String(key.to_string()), value)
+            .is_some()
+        {
+            return Err(format!(
+                "cannot represent repeated eb option `--{key}` in the generated easystack"
+            ));
+        }
+        index += consumed;
+    }
+    let mut spec = serde_yaml::Mapping::new();
+    spec.insert(
+        serde_yaml::Value::String("options".into()),
+        serde_yaml::Value::Mapping(options),
+    );
+    let mut entry = serde_yaml::Mapping::new();
+    entry.insert(
+        serde_yaml::Value::String(name.to_string()),
+        serde_yaml::Value::Mapping(spec),
+    );
+    Ok(serde_yaml::Value::Mapping(entry))
 }
 
 fn parse_oom_report(stdout: &str) -> Result<Vec<OomHit>, String> {

@@ -57,7 +57,11 @@ pub fn store(site: &Site, sbom: &Sbom, run_dir: &Path) -> Result<PathBuf, Fail> 
         })?;
     if !status.success() {
         let _ = std::fs::remove_file(&out);
-        let code = status.code().unwrap_or(exit::FAILED);
+        use std::os::unix::process::ExitStatusExt;
+        let code = status
+            .code()
+            .or_else(|| status.signal().map(|signal| 128 + signal))
+            .unwrap_or(exit::FAILED);
         return Err(Fail::new(
             code,
             format!(

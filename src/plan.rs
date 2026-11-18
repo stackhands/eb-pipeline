@@ -271,7 +271,7 @@ impl<'a> Planner<'a> {
         let mut kept = Vec::new();
         let mut out = Vec::new();
         for l in lines {
-            let r = crate::select::select_line(sel, l);
+            let r = crate::select::select_line(sel, l)?;
             if r.planned {
                 let raw = if sel.strip {
                     let mut words = Vec::new();
