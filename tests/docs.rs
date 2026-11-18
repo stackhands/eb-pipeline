@@ -116,3 +116,23 @@ fn run_tests_howto_matches_eb_test_map_cli() {
     assert!(howto.contains("=--list or --result is required="));
     assert!(howto.contains("`text`, `reframe`, or `eessi-modules`"));
 }
+
+#[test]
+fn publish_junit_howto_matches_eb_junit_cli() {
+    let missing = Command::new(env!("CARGO_BIN_EXE_eb-junit"))
+        .env_remove("EB_PIPELINE_RESULT")
+        .output()
+        .unwrap();
+    assert_eq!(missing.status.code(), Some(2));
+    let err = String::from_utf8_lossy(&missing.stderr);
+    assert!(
+        err.contains("eb-junit: --result or --reframe-report is required"),
+        "{err}"
+    );
+
+    let howto_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("docs/orgmode/howto/publish-a-junit-report.org");
+    let howto = std::fs::read_to_string(&howto_path).unwrap();
+    assert!(!howto.contains("=eb-junit: --result is required="));
+    assert!(howto.contains("=eb-junit: --result or --reframe-report is required="));
+}
