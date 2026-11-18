@@ -343,6 +343,18 @@ fn easystack_parse_errors_name_the_source_line_and_column() {
         "{duplicate}"
     );
 
+    let nested_duplicate = plan_error(
+        &site,
+        &list,
+        b"easyconfigs:\n  - First-1.0.eb:\n      options:\n        rebuild: true\n  - Second-2.0.eb:\n      options:\n        rebuild: true\n        rebuild: false\n",
+    );
+    assert_eq!(
+        nested_duplicate,
+        format!(
+            "{prefix}8:9: easyconfigs[1].Second-2.0.eb.options: duplicate entry with key \"rebuild\"\n"
+        )
+    );
+
     let malformed_crlf = plan_error(
         &site,
         &list,

@@ -153,6 +153,37 @@ fn gap_options_require_each_other() {
 }
 
 #[test]
+fn a_missing_eb_stack_is_a_usage_error() {
+    let t = configured();
+    let mut site = std::fs::read_to_string(&t.site).unwrap();
+    site.push_str(&format!(
+        "\n[site.tools.eb_stack]\nbin = \"{}/missing-eb-stack\"\n",
+        t.root().display()
+    ));
+    std::fs::write(&t.site, site).unwrap();
+    let out_dir = t.root().join("gap-report");
+    let output = eb_pipeline(
+        &t,
+        &[
+            "check",
+            "--site",
+            &t.site.display().to_string(),
+            "--gap-out",
+            &out_dir.display().to_string(),
+            "--generation",
+            "2026.1",
+        ],
+        &[("GAP_BASE", "/base/accel")],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("cannot run"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
 fn shadow_failure_is_returned_after_its_json_is_written() {
     let t = configured();
     let out_dir = t.root().join("gap-report");

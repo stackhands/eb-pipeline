@@ -240,8 +240,13 @@ fn run_eb_stack(planner: &Planner<'_>, tail: &[String], log_path: &Path) -> Resu
     let cmd = planner.plan_role_cmd(PHASE, argv)?;
     let code = exec_logged(&cmd, &planner.scope.env(), log_path)?;
     if code != 0 {
+        let exit_code = match code {
+            exit::USAGE => exit::USAGE,
+            exit::SIGINT | exit::SIGTERM => code,
+            _ => exit::FAILED,
+        };
         return Err(Fail::new(
-            exit::FAILED,
+            exit_code,
             format!(
                 "eb-stack {} exited {code}; its output is in {}",
                 tail.join(" "),
