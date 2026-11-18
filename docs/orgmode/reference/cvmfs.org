@@ -108,7 +108,8 @@ The manifest itself must sit outside that directory, because the directory is re
 
 A =.tar= name is an uncompressed ustar or pax archive.
 A =.tar.gz= or =.tgz= name is one gzip member around that archive, with no bytes after the gzip member.
-The check refuses a directory that is empty, that contains more than one entry, or whose single entry has a different name, is empty, is not a regular file, or is a symbolic link.
+The ingest directory may be a symbolic link to a directory.
+The check refuses a directory that is empty, that contains more than one entry, or whose single entry has a different name, is empty, is not a regular file, or is itself a symbolic link.
 It then refuses a digest mismatch, an unrecognized archive, and an archive with no members.
 
 Every member path must already be normalized: UTF-8, at most 4096 bytes, relative, with no empty, =.=, or =..= component, no backslash, and no trailing slash.
