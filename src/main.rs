@@ -680,7 +680,14 @@ fn cmd_init(
                 .write(true)
                 .create_new(true)
                 .open(p)
-                .map_err(|e| Fail::usage(format!("cannot create {}: {e}", p.display())))?;
+                .map_err(|e| {
+                    let message = format!("cannot create {}: {e}", p.display());
+                    if e.kind() == std::io::ErrorKind::AlreadyExists {
+                        Fail::usage(message)
+                    } else {
+                        Fail::new(exit::FAILED, message)
+                    }
+                })?;
             f.write_all(t.text.as_bytes()).map_err(|e| {
                 Fail::new(exit::FAILED, format!("cannot write {}: {e}", p.display()))
             })?;
