@@ -10,7 +10,7 @@ use std::env;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::fd::AsRawFd;
-use std::os::unix::process::CommandExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitCode, ExitStatus};
 use std::time::{Duration, Instant};
@@ -783,6 +783,7 @@ fn command_start_exit(error: &io::Error) -> u8 {
 fn exit_code(status: ExitStatus) -> u8 {
     status
         .code()
+        .or_else(|| status.signal().map(|signal| 128 + signal))
         .and_then(|code| u8::try_from(code).ok())
         .unwrap_or(1)
 }
