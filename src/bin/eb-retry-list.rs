@@ -62,6 +62,14 @@ fn main() -> ExitCode {
 
 fn run() -> Result<ExitCode, String> {
     let args = parse(env::args().skip(1))?;
+    check_output_alias(
+        args.out.as_deref(),
+        &[
+            ("--result", args.result.as_deref()),
+            ("--summary", args.summary.as_deref()),
+            ("--list", args.list.as_deref()),
+        ],
+    )?;
     let read_recorded = || match (&args.result, &args.summary, &args.target) {
         (Some(path), None, None) => read_result(Path::new(path)),
         (None, Some(path), Some(target)) => read_summary(Path::new(path), target),
@@ -73,6 +81,7 @@ fn run() -> Result<ExitCode, String> {
             .list
             .as_deref()
             .ok_or_else(|| "the selected record has no string `list`".to_string())?;
+        check_output_alias(args.out.as_deref(), &[("--list", Some(list))])?;
         (read_list(list)?, recorded)
     } else {
         let list = args.list.as_deref().expect("validated in parse");
@@ -113,6 +122,26 @@ fn run() -> Result<ExitCode, String> {
     } else {
         Ok(ExitCode::SUCCESS)
     }
+}
+
+fn check_output_alias(out: Option<&str>, inputs: &[(&str, Option<&str>)]) -> Result<(), String> {
+    let Some(out) = out.filter(|path| *path != "-") else {
+        return Ok(());
+    };
+    let out = Path::new(out);
+    for (option, path) in inputs {
+        let Some(path) = path else {
+            continue;
+        };
+        let path = Path::new(path);
+        if util::paths_alias(path, out) {
+            return Err(format!(
+                "{option} and --out must name different files, both resolve to {}",
+                util::resolved_path(path).display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn read_list(path: &str) -> Result<Vec<ListLine>, String> {

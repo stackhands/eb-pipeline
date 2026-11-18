@@ -10,7 +10,6 @@ use eb_pipeline::{
     summary, templates, tools, util, watch,
 };
 use serde::Serialize;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -785,35 +784,6 @@ struct Mode<'a> {
     resume_result: Option<&'a Path>,
 }
 
-fn same_output(path_a: &Path, path_b: &Path) -> bool {
-    if resolved_output(path_a) == resolved_output(path_b) {
-        return true;
-    }
-    match (std::fs::metadata(path_a), std::fs::metadata(path_b)) {
-        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
-        _ => false,
-    }
-}
-
-fn resolved_output(path: &Path) -> PathBuf {
-    if let Ok(path) = std::fs::canonicalize(path) {
-        return path;
-    }
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let parent = if parent.as_os_str().is_empty() {
-        Path::new(".")
-    } else {
-        parent
-    };
-    match (
-        std::fs::canonicalize(parent),
-        path.file_name().map(ToOwned::to_owned),
-    ) {
-        (Ok(parent), Some(name)) => parent.join(name),
-        _ => std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()),
-    }
-}
-
 fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
     let Mode {
         out,
@@ -836,10 +806,10 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
             ("--resume-result", resume_result),
         ] {
             if let Some(other_path) = other_path {
-                if same_output(other_path, plan_out) {
+                if util::paths_alias(other_path, plan_out) {
                     return Err(Fail::usage(format!(
                         "{other_option} and --plan-out must name different files, both resolve to {}",
-                        resolved_output(other_path).display()
+                        util::resolved_path(other_path).display()
                     )));
                 }
             }
@@ -848,10 +818,10 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
     if let Some(metrics_file) = metrics_file {
         for (json_option, json_path) in [("--result", result), ("--resume-result", resume_result)] {
             if let Some(json_path) = json_path {
-                if same_output(json_path, metrics_file) {
+                if util::paths_alias(json_path, metrics_file) {
                     return Err(Fail::usage(format!(
                         "{json_option} and --metrics-file must name different files, both resolve to {}",
-                        resolved_output(json_path).display()
+                        util::resolved_path(json_path).display()
                     )));
                 }
             }

@@ -161,6 +161,118 @@ easyconfigs:
 }
 
 #[test]
+fn output_aliases_are_refused_before_an_input_can_be_overwritten() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = dir.path().join("build.list");
+    let result = dir.path().join("result.json");
+    let summary = dir.path().join("summary.json");
+    let list_bytes = b"Retry-1.0.eb --rebuild\n";
+    let result_bytes =
+        br#"{"kind":"result","exit_code":1,"lines":[{"easyconfig":"Retry-1.0.eb","status":"failed"}]}"#;
+    let summary_bytes = br#"{"kind":"summary","targets":[{"name":"cpu","exit_code":1,"packages":[{"easyconfig":"Retry-1.0.eb","status":"failed"}]}]}"#;
+    std::fs::write(&list, list_bytes).unwrap();
+    std::fs::write(&result, result_bytes).unwrap();
+    std::fs::write(&summary, summary_bytes).unwrap();
+
+    let default = bin()
+        .args(["--result"])
+        .arg(&result)
+        .args(["--list"])
+        .arg(&list)
+        .output()
+        .unwrap();
+    assert_eq!(default.status.code(), Some(0));
+    assert_eq!(default.stdout, list_bytes);
+    assert_eq!(default.stderr, b"");
+
+    let result_alias = bin()
+        .args(["--result"])
+        .arg(&result)
+        .args(["--list"])
+        .arg(&list)
+        .args(["--out"])
+        .arg(&result)
+        .output()
+        .unwrap();
+    assert_eq!(result_alias.status.code(), Some(2));
+    assert_eq!(result_alias.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&result_alias.stderr)
+            .contains("--result and --out must name different files"),
+        "{}",
+        String::from_utf8_lossy(&result_alias.stderr)
+    );
+    assert_eq!(std::fs::read(&result).unwrap(), result_bytes);
+
+    let list_link = dir.path().join("retry.list");
+    std::os::unix::fs::symlink(&list, &list_link).unwrap();
+    let list_alias = bin()
+        .args(["--result"])
+        .arg(&result)
+        .args(["--list"])
+        .arg(&list)
+        .args(["--out"])
+        .arg(&list_link)
+        .output()
+        .unwrap();
+    assert_eq!(list_alias.status.code(), Some(2));
+    assert_eq!(list_alias.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&list_alias.stderr)
+            .contains("--list and --out must name different files"),
+        "{}",
+        String::from_utf8_lossy(&list_alias.stderr)
+    );
+    assert_eq!(std::fs::read(&list).unwrap(), list_bytes);
+
+    let summary_link = dir.path().join("summary.out");
+    std::fs::hard_link(&summary, &summary_link).unwrap();
+    let summary_alias = bin()
+        .args(["--summary"])
+        .arg(&summary)
+        .args(["--target", "cpu", "--list"])
+        .arg(&list)
+        .args(["--out"])
+        .arg(&summary_link)
+        .output()
+        .unwrap();
+    assert_eq!(summary_alias.status.code(), Some(2));
+    assert_eq!(summary_alias.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&summary_alias.stderr)
+            .contains("--summary and --out must name different files"),
+        "{}",
+        String::from_utf8_lossy(&summary_alias.stderr)
+    );
+    assert_eq!(std::fs::read(&summary).unwrap(), summary_bytes);
+
+    let recorded = serde_json::json!({
+        "kind": "result",
+        "exit_code": 1,
+        "list": list.display().to_string(),
+        "lines": [{"easyconfig": "Retry-1.0.eb", "status": "failed"}]
+    });
+    std::fs::write(&result, serde_json::to_vec(&recorded).unwrap()).unwrap();
+    let recorded_alias = bin()
+        .args(["--result"])
+        .arg(&result)
+        .arg("--recorded-list")
+        .args(["--out"])
+        .arg(&list)
+        .output()
+        .unwrap();
+    assert_eq!(recorded_alias.status.code(), Some(2));
+    assert_eq!(recorded_alias.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&recorded_alias.stderr)
+            .contains("--list and --out must name different files"),
+        "{}",
+        String::from_utf8_lossy(&recorded_alias.stderr)
+    );
+    assert_eq!(std::fs::read(&list).unwrap(), list_bytes);
+}
+
+#[test]
 fn require_lines_reports_an_empty_selection_after_writing_it() {
     let dir = tempfile::tempdir().unwrap();
     let list = dir.path().join("build.list");
