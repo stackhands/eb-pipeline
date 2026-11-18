@@ -5,6 +5,7 @@ use crate::plan::module_rel;
 use crate::util::{list_word, ListLine};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
 /// One ecosystem-native check associated with an emitted recipe.
@@ -89,7 +90,7 @@ fn safe_relative(bundle: &Path, raw: &str, what: &str) -> Result<PathBuf, Fail> 
             "{what} must be a non-empty bundle-relative path: {raw}"
         )));
     }
-    Ok(bundle.join(relative))
+    Ok(bundle.join(relative.components().collect::<PathBuf>()))
 }
 
 fn discover(root: &Path, extension: &str) -> Result<Vec<PathBuf>, Fail> {
@@ -127,22 +128,28 @@ fn declared_recipes(bundle: &Path) -> Result<Vec<PathBuf>, Fail> {
         .get("recipes")
         .and_then(Value::as_array)
         .ok_or_else(|| Fail::usage(format!("{} has no recipes array", order.display())))?;
-    recipes
-        .iter()
-        .map(|entry| {
-            let raw = entry.as_str().ok_or_else(|| {
-                Fail::usage(format!("{} recipes must be strings", order.display()))
-            })?;
-            let path = safe_relative(bundle, raw, "build-order recipe")?;
-            if !path.is_file() {
-                return Err(Fail::usage(format!(
-                    "build-order recipe does not exist: {}",
-                    path.display()
-                )));
-            }
-            Ok(path)
-        })
-        .collect()
+    let mut seen = BTreeSet::new();
+    let mut declared = Vec::with_capacity(recipes.len());
+    for entry in recipes {
+        let raw = entry
+            .as_str()
+            .ok_or_else(|| Fail::usage(format!("{} recipes must be strings", order.display())))?;
+        let path = safe_relative(bundle, raw, "build-order recipe")?;
+        if !path.is_file() {
+            return Err(Fail::usage(format!(
+                "build-order recipe does not exist: {}",
+                path.display()
+            )));
+        }
+        if !seen.insert(path.clone()) {
+            return Err(Fail::usage(format!(
+                "{} lists recipe more than once: {raw}",
+                order.display()
+            )));
+        }
+        declared.push(path);
+    }
+    Ok(declared)
 }
 
 fn plan_identity(path: &Path) -> Result<(String, String), Fail> {
@@ -352,5 +359,29 @@ mod tests {
         .unwrap();
         let error = load(root.path()).unwrap_err();
         assert!(error.msg.contains("bundle-relative"), "{}", error.msg);
+    }
+
+    #[test]
+    fn build_order_cannot_repeat_a_recipe() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("easyconfigs")).unwrap();
+        std::fs::write(
+            root.path().join("package.plan.json"),
+            r#"{"schema_version":1,"origin":"pypi","package":{"name":"demo"}}"#,
+        )
+        .unwrap();
+        std::fs::write(root.path().join("easyconfigs/demo.eb"), "name = 'demo'\n").unwrap();
+        std::fs::write(
+            root.path().join("build-order.json"),
+            r#"{"schema_version":1,"recipes":["easyconfigs/demo.eb","easyconfigs/demo.eb"]}"#,
+        )
+        .unwrap();
+
+        let error = load(root.path()).unwrap_err();
+        assert!(
+            error.msg.contains("lists recipe more than once"),
+            "{}",
+            error.msg
+        );
     }
 }
