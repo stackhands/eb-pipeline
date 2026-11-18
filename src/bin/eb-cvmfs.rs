@@ -1,4 +1,10 @@
 //! Publish one configured cache synchronization in a CVMFS transaction.
+//!
+//! `--archive-manifest` checks one ingest archive before any `cvmfs_server`
+//! command. `--metrics-file` records the invocation after it finishes.
+
+#[path = "../cvmfs_archive.rs"]
+mod archive_manifest;
 
 use std::env;
 use std::fs::{File, OpenOptions};
@@ -11,6 +17,7 @@ use std::time::Instant;
 struct Args {
     dry_run: bool,
     metrics_file: Option<PathBuf>,
+    archive_manifest: Option<PathBuf>,
     repository: String,
     verify_cmd: Option<String>,
     sync: Vec<String>,
@@ -70,6 +77,7 @@ fn main() -> ExitCode {
 fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut dry_run = false;
     let mut metrics_file = None;
+    let mut archive_manifest = None;
     let mut repository = None;
     let mut verify_cmd = None;
     let mut sync = Vec::new();
@@ -113,6 +121,18 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                         .ok_or_else(|| "`--verify-cmd` requires CMD".to_string())?,
                 );
             }
+            "--archive-manifest" => {
+                if archive_manifest.is_some() {
+                    return Err("`--archive-manifest` was given twice".into());
+                }
+                let path = words
+                    .next()
+                    .ok_or_else(|| "`--archive-manifest` needs a path".to_string())?;
+                if path.is_empty() || path == "--" {
+                    return Err("`--archive-manifest` needs a path".into());
+                }
+                archive_manifest = Some(PathBuf::from(path));
+            }
             "--" => after_separator = true,
             _ if word.starts_with("--metrics-file=") => {
                 if metrics_file.is_some() {
@@ -146,6 +166,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     Ok(Args {
         dry_run,
         metrics_file,
+        archive_manifest,
         repository,
         verify_cmd,
         sync,
@@ -269,6 +290,9 @@ fn escape_label(value: &str) -> String {
 }
 
 fn run(args: &Args, facts: &mut Facts) -> Result<u8, String> {
+    if let Some(path) = &args.archive_manifest {
+        archive_manifest::check(path)?;
+    }
     let verify = args
         .verify_cmd
         .as_deref()
