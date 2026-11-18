@@ -5,6 +5,7 @@ use crate::run::log;
 use crate::schema::Site;
 use crate::tools::Tool;
 use std::io::Write;
+use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -79,7 +80,10 @@ pub fn run(site: Option<&Site>, list: &Path, opts: &Options<'_>) -> Result<i32, 
         })?;
     let _ = std::io::stdout().write_all(&output.stdout);
     let _ = std::io::stderr().write_all(&output.stderr);
-    let code = output.status.code().unwrap_or(1);
+    let code = output
+        .status
+        .code()
+        .unwrap_or_else(|| 128 + output.status.signal().unwrap_or(0));
     if output.status.success() {
         log("INFO", "from-commit", label, "from-commit passed");
         Ok(exit::OK)
