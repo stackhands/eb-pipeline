@@ -1513,6 +1513,12 @@ pub fn read_units(dir: &Path) -> Result<Vec<Unit>, Fail> {
     add("prelude".into(), Role::Build, &v["prelude"])?;
     if let Some(shards) = v["shards"].as_array() {
         for (i, s) in shards.iter().enumerate() {
+            if !s["file"].is_string() {
+                return Err(Fail::new(
+                    exit::FAILED,
+                    format!("{}: shards[{i}].file must be a string", plan_path.display()),
+                ));
+            }
             let name = s["name"]
                 .as_str()
                 .map(str::to_string)
@@ -1594,6 +1600,20 @@ mod read_tests {
         assert_eq!(units.len(), 1);
         assert_eq!(units[0].lines[0].easyconfig, "Foo-1.0.eb");
         assert_eq!(units[0].footprint, Some(3));
+    }
+
+    #[test]
+    fn a_shard_plan_cannot_silently_drop_a_shard_without_a_file() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("one.list"), "Foo-1.0.eb\n").unwrap();
+        std::fs::write(
+            root.path().join("plan.json"),
+            r#"{"shards":[{"name":"one","file":"one.list"},{"name":"two"}]}"#,
+        )
+        .unwrap();
+
+        let error = read_units(root.path()).unwrap_err();
+        assert!(error.msg.contains("shards[1].file"), "{}", error.msg);
     }
 }
 
