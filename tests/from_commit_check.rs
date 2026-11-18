@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{code, eb_pipeline, setup, stderr};
+use common::{code, eb_pipeline, setup, stderr, write_exec};
 
 #[test]
 fn ordinary_check_matches_main_and_starts_no_from_commit_process() {
@@ -76,6 +76,52 @@ fn from_commit_propagates_eb_stack_failure() {
     assert_eq!(code(&out), 1, "{}", stderr(&out));
     let err = stderr(&out);
     assert!(err.contains("from-commit failed with status 1"), "{err}");
+}
+
+#[test]
+fn from_commit_preserves_an_eb_stack_signal_exit_code() {
+    let t = setup("");
+    write_exec(&t.stubs.join("eb-stack"), "#!/bin/sh\nkill -TERM $$\n");
+    let list = t.root().join("stack.yaml");
+    std::fs::write(&list, "easyconfigs: []\n").unwrap();
+    let list = list.display().to_string();
+    let out = eb_pipeline(&t, &["check", "--list", &list, "--check-from-commit"], &[]);
+    assert_eq!(code(&out), 143, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("from-commit failed with status 143"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn a_missing_eb_stack_is_a_usage_error() {
+    let t = setup(
+        r#"
+[site.tools.eb_stack]
+bin = "@ROOT@/missing-eb-stack"
+"#,
+    );
+    let list = t.root().join("stack.yaml");
+    std::fs::write(&list, "easyconfigs: []\n").unwrap();
+    let output = eb_pipeline(
+        &t,
+        &[
+            "check",
+            "--site",
+            &t.site.display().to_string(),
+            "--list",
+            &list.display().to_string(),
+            "--check-from-commit",
+        ],
+        &[],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("cannot run"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]

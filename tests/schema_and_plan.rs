@@ -658,6 +658,35 @@ fn plan_of(site_text: &str, list: &str, target: &str) -> serde_json::Value {
     serde_json::from_slice(&o.stdout).unwrap()
 }
 
+#[cfg(unix)]
+#[test]
+fn plan_refuses_a_list_path_that_json_cannot_represent() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let d = tempfile::tempdir().unwrap();
+    let site = d.path().join("site.toml");
+    let list = d
+        .path()
+        .join(std::ffi::OsString::from_vec(b"list-\xff.txt".to_vec()));
+    std::fs::write(&site, MINIMAL).unwrap();
+    std::fs::write(&list, "Foo-1.0.eb\n").unwrap();
+    let output = bin()
+        .args(["plan", "--site"])
+        .arg(site)
+        .arg("--list")
+        .arg(list)
+        .args(["--target", "other", "--build-type", "production"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        output.stderr,
+        b"ERROR [main] -: --list path is not valid UTF-8 and cannot be represented in JSON\n"
+    );
+    assert_eq!(output.stdout, b"");
+}
+
 fn phase(v: &serde_json::Value, name: &str) -> serde_json::Value {
     v["phases"]
         .as_array()
@@ -1263,8 +1292,7 @@ fn only_prefetch_and_build_commands_carry_the_hardware_class() {
             "fetch",
             "keep-failed",
             "probe",
-            "rotate",
-            "shard"
+            "rotate"
         ]
     );
     let model = |n: &str| models.get(n).map(String::as_str);
@@ -2120,6 +2148,44 @@ fn eessi_site_prefix_follows_the_install_prefix() {
     assert!(phase(&v, "build")["env"]
         .get("EESSI_SITE_SOFTWARE_PREFIX")
         .is_none());
+}
+
+#[test]
+fn plan_and_run_refuse_a_saved_shard_plan_without_units() {
+    let d = tempfile::tempdir().unwrap();
+    let list = d.path().join("l.txt");
+    std::fs::write(&list, "Foo-1.0-foss-2025a.eb\n").unwrap();
+    let sp = d.path().join("shards");
+    std::fs::create_dir(&sp).unwrap();
+    std::fs::write(sp.join("plan.json"), b"{\"shards\":[]}\n").unwrap();
+
+    for command in ["plan", "run"] {
+        let mut process = bin();
+        process
+            .arg(command)
+            .arg("--site")
+            .arg(example("eessi-site.toml"))
+            .arg("--list")
+            .arg(&list)
+            .args(["--target", "cpu-a", "--build-type", "production"])
+            .arg("--shard-plan")
+            .arg(&sp);
+        if command == "run" {
+            process.arg("--dry-run");
+        }
+        let output = process.output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{command}");
+        assert_eq!(output.stdout, b"", "{command}");
+        assert_eq!(
+            output.stderr,
+            format!(
+                "ERROR [main] -: {} contains no build units\n",
+                sp.join("plan.json").display()
+            )
+            .as_bytes(),
+            "{command}"
+        );
+    }
 }
 
 #[test]

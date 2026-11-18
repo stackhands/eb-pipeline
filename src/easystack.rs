@@ -81,33 +81,49 @@ fn parse_diagnostic(text: &str) -> Result<Vec<ListLine>, Diagnostic> {
 }
 
 fn yaml_diagnostic(text: &str, error: serde_yaml::Error) -> Diagnostic {
-    let mut location = error
+    let parser_location = error
         .location()
         .map(|location| (location.line(), location.column()));
     let mut message = error.to_string();
+    if let Some((line, column)) = parser_location {
+        message = message
+            .strip_suffix(&format!(" at line {line} column {column}"))
+            .unwrap_or(&message)
+            .to_string();
+    }
+    let mut location = parser_location;
     if let Some(duplicate) = duplicate_key_location(text, &message) {
         location = Some(duplicate);
-    }
-    if let Some((line, column)) = location {
-        message = message.replace(&format!(" at line {line} column {column}"), "");
     }
     Diagnostic { message, location }
 }
 
 fn duplicate_key_location(text: &str, message: &str) -> Option<(usize, usize)> {
-    let encoded = message.strip_prefix("duplicate entry with key ")?;
+    let encoded = message
+        .rsplit(": ")
+        .next()?
+        .strip_prefix("duplicate entry with key ")?;
     let key: String = serde_json::from_str(encoded).ok()?;
-    let mut indents = std::collections::BTreeSet::new();
+    let mut scopes = Vec::<(usize, usize)>::new();
+    let mut seen = std::collections::BTreeSet::new();
     for (index, line) in text.lines().enumerate() {
         let line = line.trim_end_matches('\r');
         let indent = line.len() - line.trim_start_matches(' ').len();
-        let Some((token, _)) = line[indent..].split_once(':') else {
+        let content = &line[indent..];
+        if content.is_empty() || content.starts_with('#') {
             continue;
-        };
-        let token = token.trim();
-        if token.trim_matches(['\'', '"']) == key && !indents.insert(indent) {
-            return Some((index + 1, indent + 1));
         }
+        while scopes.last().is_some_and(|(level, _)| *level >= indent) {
+            scopes.pop();
+        }
+        let parent = scopes.last().map(|(_, line)| *line);
+        if let Some((token, _)) = content.split_once(':') {
+            let token = token.trim();
+            if token.trim_matches(['\'', '"']) == key && !seen.insert((parent, indent)) {
+                return Some((index + 1, indent + 1));
+            }
+        }
+        scopes.push((indent, index));
     }
     None
 }
@@ -267,13 +283,13 @@ fn eb_args(options: &Mapping) -> Result<Vec<String>, String> {
 /// `Some(true)` for a value that gives the bare option, and `Some(false)`
 /// for false. EasyBuild reads YAML 1.1, where yes, on, no and off are
 /// booleans too, and gives the bare option for each value in `[True,
-/// None]`, which in Python holds the number 1 as well.
+/// None]`, which in Python holds the numbers 1 and 1.0 as well.
 fn flag(v: &Value) -> Option<bool> {
     match v {
         Value::Null => Some(true),
         Value::Bool(b) => Some(*b),
         Value::String(s) => yaml11_bool(s),
-        Value::Number(n) if n.as_u64() == Some(1) => Some(true),
+        Value::Number(n) if n.as_f64() == Some(1.0) => Some(true),
         _ => None,
     }
 }
@@ -337,6 +353,13 @@ mod tests {
             lines("easyconfigs:\n  - b-1.0\n  - a-1.0.eb\n  - c-1.0.eb:\n"),
             ["b-1.0.eb", "a-1.0.eb", "c-1.0.eb"]
         );
+    }
+
+    #[test]
+    fn ordinary_easyconfig_bytes_stay_unchanged() {
+        let line = &parse("easyconfigs:\n  - Foo-1.0-foss-2025a.eb\n").unwrap()[0];
+        assert_eq!(line.raw.as_bytes(), b"Foo-1.0-foss-2025a.eb");
+        assert_eq!(line.easyconfig.as_bytes(), b"Foo-1.0-foss-2025a.eb");
     }
 
     #[test]
@@ -434,6 +457,25 @@ easyconfigs:
                 "--parallel=1",
                 "--rebuild"
             ]
+        );
+    }
+
+    #[test]
+    fn a_floating_one_gives_the_bare_option_as_in_easybuild() {
+        let l = &parse("easyconfigs:\n  - x.eb: {options: {rebuild: 1.0, parallel: '1.0'}}\n")
+            .unwrap()[0];
+        assert_eq!(l.args, ["--parallel=1.0", "--rebuild"]);
+    }
+
+    #[test]
+    fn ordinary_option_output_keeps_its_exact_bytes() {
+        let l = &parse(
+            "easyconfigs:\n  - x.eb: {options: {rebuild: true, parallel: 4, robot: false}}\n",
+        )
+        .unwrap()[0];
+        assert_eq!(
+            l.raw.as_bytes(),
+            b"x.eb --parallel=4 --rebuild --disable-robot"
         );
     }
 

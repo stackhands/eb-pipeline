@@ -66,6 +66,19 @@ fn an_sbom_command_that_fails_fails_the_run_and_leaves_no_document() {
 }
 
 #[test]
+fn a_success_without_a_new_document_does_not_accept_a_stale_one() {
+    let t = setup("[sbom]\nlock = \"@ROOT@/stack.lock.json\"\n");
+    let document = t.run_dir(STAMP).join("sbom.cdx.json");
+    std::fs::create_dir_all(document.parent().unwrap()).unwrap();
+    std::fs::write(&document, "stale\n").unwrap();
+    let output = run(&t, "cpu", STAMP, LIST, &[("STUB_SBOM_SKIP_WRITE", "1")]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(stderr(&output).contains("wrote no"), "{}", stderr(&output));
+    assert!(!document.exists());
+    assert_eq!(t.summary(STAMP)["exit_code"], 1);
+}
+
+#[test]
 fn a_signalled_sbom_command_preserves_the_signal_exit_code() {
     let t = setup("[sbom]\nlock = \"@ROOT@/stack.lock.json\"\n");
     std::fs::write(t.root().join("stack.lock.json"), "{}\n").unwrap();

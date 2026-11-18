@@ -1,0 +1,7 @@
+#+title: Init command
+
+* Exit status
+
+=eb-pipeline init= exits 0 after printing or writing a template. It exits 2 for an unknown template or when the destination already exists.
+
+An operating-system error while creating or writing the destination exits 1. The diagnostic names the destination.

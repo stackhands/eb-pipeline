@@ -130,7 +130,7 @@ So every job that a run or =watch= starts needs the directory, whatever its phas
 | Key           | Type   | Default                                  | Meaning                                                                                                                                                                                                                                                      |
 |---------------+--------+------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | =bin=         | string | the tool's own name, looked up on =PATH= | The program: a path, or a name to look up on =PATH=.                                                                                                                                                                                                         |
-| =min_version= | string | none                                     | The lowest version accepted, as dotted numbers such as =0.7.4=. When a phase that calls the tool is on, =run= starts =BIN --version= before any other command, and exits 2 when the tool cannot start, prints no dotted number, or prints a lower one first. |
+| =min_version= | string | none                                     | The lowest version accepted, as dotted numbers such as =0.7.4=. When a phase that calls the tool is on, =run= starts =BIN --version= before any other command, and exits 2 when the tool cannot start, exits nonzero, prints no dotted number, or prints a lower one first. |
 
 ** =[scheduler]=
 
@@ -317,8 +317,8 @@ A record that another writer has replaced since, such as a =forecast= or =waitin
 | =lift_cpu_prerequisites=          | boolean         | =false= | =true= passes =--lift-cpu-prerequisites=, which makes the CPU-only prerequisites a unit of their own.                                                                                           |
 | =easyconfigs=                     | array of string | =[]=    | The easyconfig trees to resolve the list in: =stack shard --easyconfigs=, once each; at least one when =count= is 2 or more.                                                                    |
 | =weights=                         | string          | none    | A table of build times: =stack shard --weights=.                                                                                                                                                |
-| =installed_modules_dirs=          | array of string | =[]=    | Module trees whose modules count as installed: =stack shard --installed-modules-dir=, once each. =run= leaves out a tree that does not exist yet, with a =WARN= line.                           |
-| =installed_modules_dirs_from_env= | array of string | =[]=    | Names of variables whose values, separated by =:=, =run= adds to =installed_modules_dirs=. =run= refuses with exit 78 when one is unset, an empty one adds nothing, and =plan= shows =${NAME}=. |
+| =installed_modules_dirs=          | array of string | =[]=    | Unique module trees whose modules count as installed: =stack shard --installed-modules-dir=, once each. =run= leaves out a tree that does not exist yet, with a =WARN= line.                    |
+| =installed_modules_dirs_from_env= | array of string | =[]=    | Unique variable names whose values, separated by =:=, =run= adds to =installed_modules_dirs=. =run= refuses with exit 78 when one is unset, an empty one adds nothing, and =plan= shows =${NAME}=. |
 
 =stack shard= runs inside the module wrapper, so what the modules of =[modules] init= set reaches it, such as the =EASYBUILD_FILTER_DEPS= of EESSI-extend.
 It writes its plan to =SHARD_DIR/RUN_ID/plan.json=, and =plan --shard-plan DIR= reads such a plan.
@@ -396,6 +396,7 @@ The route receipt is the value of the target's =receipt_digest_env= when that va
 
 A prefetch command gets the options of its line, except those that start with =--rebuild=.
 A line whose prefetch fails is =failed= and is not built.
+A signal during prefetch records the active line as =failed= in =sources= and every other unbuilt line as =skipped= before the run exits 130 or 143.
 =--fetch= takes no account of installed modules, so =--robot= fetches the sources of every dependency, those EESSI provides included.
 With =--disable-robot= in =extra_args=, a line fetches its own sources only: the prefetch command has no =--robot=, the line's =--robot= is dropped, and the paths of the line's =--robot=PATH= go first in =--robot-paths=, so that its easyconfig is still found.
 

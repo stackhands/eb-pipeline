@@ -21,7 +21,8 @@ eb-junit [--result FILE]... [--reframe-report FILE]... [--out FILE]
 | =--property NAME=VALUE= | Add the property to every suite. NAME must not be empty; VALUE may be empty. Repeat for more properties. |
 | =--fail-on-failure= | After writing the complete document, exit 1 when it contains at least one =failure= case. |
 
-At least one of =--result= or =--reframe-report= is required.
+At least one of =--result= or =--reframe-report= is required unless =EB_PIPELINE_RESULT= is set.
+When neither input option is present, =EB_PIPELINE_RESULT= supplies one =--result= file; a command-line input wins.
 
 Exit 0 means the document was written, including when =exit_code= in a result is not 0.
 With =--fail-on-failure=, exit 1 means the document was written and contains at least one failure.
@@ -78,7 +79,7 @@ Phases are not cases.
 
 | Attribute | Value |
 |-----------+-------|
-| =name= | =TARGET/EASYCONFIG=. A later line with the same easyconfig in that result is =TARGET/EASYCONFIG #2=, then =#3=, and so on. GitLab keeps the first case of a repeated name and drops the rest, including across the reports of one pipeline, so the target is part of the name and a repeated line is numbered. The name does not include the run id, so the same line has the same name on the next run. |
+| =name= | =TARGET/EASYCONFIG=. A later line with the same XML-safe name in that result is =TARGET/EASYCONFIG #2=, then =#3=, and so on. Names are compared after XML 1.0 character removal, so distinct recorded names cannot collapse into one displayed case. GitLab keeps the first case of a repeated name and drops the rest, including across the reports of one pipeline, so the target is part of the name and a repeated line is numbered. The name does not include the run id, so the same line has the same name on the next run. |
 | =classname= | =SITE/TARGET=. GitLab shows this as the suite. |
 | =file= | The easyconfig, as recorded. |
 | =time= | =duration_seconds=, to the millisecond. Absent when the line did not start. |

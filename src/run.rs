@@ -308,7 +308,9 @@ fn last_json_line(path: &Path) -> Option<String> {
     text.lines()
         .rev()
         .map(str::trim)
-        .find(|l| l.starts_with('{') && l.ends_with('}'))
+        .find(|line| {
+            serde_json::from_str::<serde_json::Value>(line).is_ok_and(|value| value.is_object())
+        })
         .map(str::to_string)
 }
 
@@ -708,7 +710,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
         return finish(st, Some(exit::REFUSED));
     }
 
-    let mut plan = match build_plan(p, lines, None) {
+    let mut plan = match build_plan(p, lines, opts.shard_units) {
         Ok(pl) => pl,
         Err(f) => {
             st.res.message = Some(f.msg.clone());
@@ -944,7 +946,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
         let written = path
             .parent()
             .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|()| std::fs::write(&path, text));
+            .and_then(|()| util::write_atomic(&path, text.as_bytes()));
         if let Err(e) = written {
             let msg = format!("cannot write {}: {e}", path.display());
             log("ERROR", "preflight", &target, &msg);
@@ -1370,6 +1372,21 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                     }
                 };
                 if let Some(c) = stop_if_signalled(&mut st, "sources") {
+                    st.res.lines.push(LineResult {
+                        easyconfig: l.easyconfig.clone(),
+                        unit: u.name.clone(),
+                        phase: "sources".into(),
+                        status: "failed".into(),
+                        exit_code: Some(c),
+                        translated_from: None,
+                        log: ex.log.display().to_string(),
+                        note: Some("source fetch interrupted".into()),
+                        duration_seconds: Some(seconds(ex.elapsed)),
+                        outputs: Vec::new(),
+                    });
+                    st.failed = true;
+                    fetch_failed.push(s.clone());
+                    note_skipped(&mut st, &units, &unit_stems, &fetch_failed, 0, 0, p);
                     return finish(st, Some(c));
                 }
                 if ex.code != 0 {
