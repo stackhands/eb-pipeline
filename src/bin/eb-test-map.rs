@@ -8,10 +8,10 @@
 //! `--setvar modules=Name/Version,...` argument for the applications in
 //! the list.
 
+use eb_pipeline::util;
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
-use std::io::{self, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -110,15 +110,18 @@ fn text_names(args: &Args) -> Result<ExitCode, String> {
             eprintln!("eb-test-map: {name} has no test in {map_path}; allowed");
         }
     }
-    let mut out = io::stdout().lock();
+    let mut out_text = String::new();
     for test in &tests {
         let line = match args.format {
             OutputFormat::Plain => test.clone(),
             OutputFormat::Reframe => format!("-n ^{}$", escape_regex_literal(test)),
             OutputFormat::EessiModules => unreachable!(),
         };
-        writeln!(out, "{line}").map_err(|e| format!("cannot write the test names: {e}"))?;
+        out_text.push_str(&line);
+        out_text.push('\n');
     }
+    util::write_stdout(out_text.as_bytes())
+        .map_err(|e| format!("cannot write the test names: {e}"))?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -139,8 +142,8 @@ fn eessi_modules(args: &Args) -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
     let joined = modules.into_iter().collect::<Vec<_>>().join(",");
-    let mut out = io::stdout().lock();
-    writeln!(out, "--setvar modules={joined}")
+    let line = format!("--setvar modules={joined}\n");
+    util::write_stdout(line.as_bytes())
         .map_err(|e| format!("cannot write the module list: {e}"))?;
     Ok(ExitCode::SUCCESS)
 }
@@ -152,12 +155,16 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut extra_toolchains = BTreeSet::new();
     let mut allow_unmapped = false;
     let mut include_resumed = false;
-    let mut format = OutputFormat::Plain;
+    let mut format: Option<OutputFormat> = None;
     let mut words = words.peekable();
     while let Some(word) = words.next() {
         match word.as_str() {
             "-h" | "--help" => {
                 print!("{}", include_str!("eb-test-map-help.txt"));
+                std::process::exit(0);
+            }
+            "-V" | "--version" => {
+                println!("eb-test-map {}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
             }
             "--allow-unmapped" => allow_unmapped = true,
@@ -168,34 +175,43 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                     .filter(|v| !v.is_empty())
                     .ok_or_else(|| format!("{word} needs a value"))?;
                 match word.as_str() {
-                    "--map" => map = Some(value),
-                    "--list" => list = Some(value),
-                    "--result" => result = Some(value),
+                    "--map" => assign_once(&mut map, "--map", value)?,
+                    "--list" => assign_once(&mut list, "--list", value)?,
+                    "--result" => assign_once(&mut result, "--result", value)?,
                     "--toolchain" => {
                         extra_toolchains.insert(value);
                     }
-                    "--format" => format = parse_format(&value)?,
+                    "--format" => assign_once(&mut format, "--format", parse_format(&value)?)?,
                     _ => unreachable!(),
                 }
             }
             _ if word.starts_with("--map=") => {
-                map = Some(need_value("--map", &word["--map=".len()..])?)
+                let value = need_value("--map", &word["--map=".len()..])?;
+                assign_once(&mut map, "--map", value)?;
             }
             _ if word.starts_with("--list=") => {
-                list = Some(need_value("--list", &word["--list=".len()..])?)
+                let value = need_value("--list", &word["--list=".len()..])?;
+                assign_once(&mut list, "--list", value)?;
             }
             _ if word.starts_with("--result=") => {
-                result = Some(need_value("--result", &word["--result=".len()..])?)
+                let value = need_value("--result", &word["--result=".len()..])?;
+                assign_once(&mut result, "--result", value)?;
             }
             _ if word.starts_with("--toolchain=") => {
                 extra_toolchains.insert(need_value("--toolchain", &word["--toolchain=".len()..])?);
             }
             _ if word.starts_with("--format=") => {
-                format = parse_format(need_value("--format", &word["--format=".len()..])?.as_str())?
+                let value = need_value("--format", &word["--format=".len()..])?;
+                assign_once(&mut format, "--format", parse_format(&value)?)?;
             }
             _ => return Err(format!("does not know `{word}`")),
         }
     }
+    if list.is_none() && result.is_none() {
+        list = eb_pipeline::util::env_value("EB_PIPELINE_LIST");
+        result = eb_pipeline::util::env_value("EB_PIPELINE_RESULT");
+    }
+    let format = format.unwrap_or(OutputFormat::Plain);
     if list.is_some() && result.is_some() {
         return Err("pass either --list or --result, not both".into());
     }
@@ -217,6 +233,14 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
         include_resumed,
         format,
     })
+}
+
+fn assign_once<T>(slot: &mut Option<T>, flag: &str, value: T) -> Result<(), String> {
+    if slot.is_some() {
+        return Err(format!("{flag} was given twice"));
+    }
+    *slot = Some(value);
+    Ok(())
 }
 
 fn need_value(flag: &str, value: &str) -> Result<String, String> {
@@ -275,20 +299,16 @@ fn package_names_from_list(path: &str) -> Result<Vec<String>, String> {
 }
 
 fn easyconfigs_from_list(path: &str) -> Result<Vec<String>, String> {
-    let list_text = fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
     if easystack::is_easystack(Path::new(path)) {
-        let lines = easystack::parse(&list_text).map_err(|e| format!("easystack {path}: {e}"))?;
+        let lines = easystack::read(Path::new(path))?;
         Ok(lines.into_iter().map(|line| line.easyconfig).collect())
     } else {
-        let mut out = Vec::new();
-        for line in list_text.lines() {
-            let line = strip_comment(line);
-            if line.is_empty() {
-                continue;
-            }
-            out.push(line.to_string());
-        }
-        Ok(out)
+        let list_text = fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+        Ok(util::parse_list(&list_text)
+            .map_err(|error| format!("{path}: {}", error.msg))?
+            .into_iter()
+            .map(|line| line.easyconfig)
+            .collect())
     }
 }
 

@@ -8,6 +8,20 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
+/// Write all bytes to standard output, treating a closed pipeline consumer as
+/// successful completion.
+pub fn write_stdout(bytes: &[u8]) -> std::io::Result<()> {
+    match std::io::stdout().lock().write_all(bytes) {
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        result => result,
+    }
+}
+
+/// A non-empty Unicode value from the process environment.
+pub fn env_value(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.is_empty())
+}
+
 /// Whether two paths name the same file, including through a symbolic or
 /// hard link. A path that does not exist is resolved through its parent.
 pub fn paths_alias(path_a: &Path, path_b: &Path) -> bool {

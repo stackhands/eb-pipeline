@@ -4,7 +4,9 @@ use std::os::unix::fs::MetadataExt;
 use std::process::Command;
 
 fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_eb-junit"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_eb-junit"));
+    command.env_remove("EB_PIPELINE_RESULT");
+    command
 }
 
 fn result(exit_code: i32, lines: &str) -> String {
@@ -80,6 +82,25 @@ fn default_stdout_and_status_remain_byte_for_byte_unchanged() {
 }
 
 #[test]
+fn result_environment_falls_back_and_the_flag_wins() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("result.json");
+    std::fs::write(&path, result(0, "")).unwrap();
+    let from_env = bin().env("EB_PIPELINE_RESULT", &path).output().unwrap();
+    let from_flag = bin()
+        .args(["--result"])
+        .arg(&path)
+        .env("EB_PIPELINE_RESULT", dir.path().join("wrong.json"))
+        .output()
+        .unwrap();
+    assert_eq!(from_env.status.code(), Some(0));
+    assert_eq!(from_flag.status.code(), Some(0));
+    assert_eq!(from_env.stdout, from_flag.stdout);
+    assert!(from_env.stderr.is_empty());
+    assert!(from_flag.stderr.is_empty());
+}
+
+#[test]
 fn default_reframe_output_and_status_remain_byte_for_byte_unchanged() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -100,6 +121,7 @@ fn default_reframe_output_and_status_remain_byte_for_byte_unchanged() {
     let output = bin()
         .current_dir(dir.path())
         .args(["--reframe-report", "reframe.json"])
+        .env("EB_PIPELINE_RESULT", "wrong.json")
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(0));
@@ -414,4 +436,33 @@ fn the_pages_name_eb_junit() {
     assert!(howto.contains("publish-a-junit-report"), "{howto}");
     let reference = std::fs::read_to_string(root.join("reference/index.org")).unwrap();
     assert!(reference.contains("\n   junit\n"), "{reference}");
+}
+
+#[test]
+fn junit_succeeds_when_stdout_consumer_closes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("result.json");
+    std::fs::write(
+        &path,
+        r#"{"kind":"result","schema_version":1,"site":"s","target":"t","build_type":"b","run_id":"r","exit_code":0,"lines":[]}"#,
+    )
+    .unwrap();
+    let mut fds = [0; 2];
+    unsafe {
+        assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+        assert_eq!(libc::close(fds[0]), 0);
+    }
+    let closed = unsafe { <std::process::Stdio as std::os::fd::FromRawFd>::from_raw_fd(fds[1]) };
+    let o = bin()
+        .args(["--result"])
+        .arg(&path)
+        .stdout(closed)
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
 }

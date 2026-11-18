@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="435" height="120" viewBox="0 0 435 120" fill="none" role="img" aria-labelledby="eb-pipeline-logo-light">
+  <title id="eb-pipeline-logo-light">eb-pipeline</title>
+  <desc>eb-pipeline logo (light theme): three build stages run in order, with the wordmark eb-pipeline.</desc>
+  <g transform="translate(8,14)">
+    <path d="M24 40 H36 M58 40 H70" stroke="#0F766E" stroke-width="3" stroke-linecap="round"/>
+    <path d="M32 36 l4 4 l-4 4 M66 36 l4 4 l-4 4" stroke="#0F766E" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <rect x="2" y="22" width="22" height="36" rx="5" fill="#CCFBF1" stroke="#0F766E" stroke-width="2.5"/>
+    <rect x="36" y="22" width="22" height="36" rx="5" fill="#99F6E4" stroke="#0F766E" stroke-width="2.5"/>
+    <rect x="70" y="22" width="22" height="36" rx="5" fill="#F8FAFC" stroke="#0F172A" stroke-width="2.5"/>
+    <rect x="7" y="31" width="12" height="4" rx="1.5" fill="#0F766E"/>
+    <rect x="7" y="40" width="8" height="4" rx="1.5" fill="#0F766E" opacity="0.6"/>
+    <rect x="41" y="31" width="12" height="4" rx="1.5" fill="#0F766E"/>
+    <rect x="41" y="40" width="8" height="4" rx="1.5" fill="#0F766E" opacity="0.6"/>
+    <rect x="75" y="31" width="12" height="4" rx="1.5" fill="#94A3B8"/>
+    <circle cx="78" cy="64" r="15" fill="#EA580C" stroke="#0F172A" stroke-width="2"/>
+    <path d="M73 56.5 v15 l12 -7.5 z" fill="#FFF7ED" stroke="#FFF7ED" stroke-width="1.5" stroke-linejoin="round"/>
+  </g>
+  <text x="120" y="78" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="48" font-weight="800" letter-spacing="-1.5" fill="#0F172A">eb-pipeline</text>
+</svg>
