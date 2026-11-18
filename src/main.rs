@@ -170,6 +170,9 @@ enum Cmd {
         /// How many runs.
         #[arg(long, default_value_t = 10, value_parser = clap::value_parser!(u16).range(1..))]
         last: u16,
+        /// Keep only nonzero runs and runs without a readable summary.
+        #[arg(long)]
+        problems_only: bool,
         /// `text`: a line per run and per target; `json`: one JSON document.
         #[arg(long, value_enum, default_value_t = TextOrJson::Text)]
         format: TextOrJson,
@@ -541,6 +544,7 @@ fn cmd_status(
     site_path: &Path,
     target: Option<&str>,
     last: u16,
+    problems_only: bool,
     format: TextOrJson,
 ) -> Result<i32, Fail> {
     let s = load_valid(site_path, None)?;
@@ -548,13 +552,23 @@ fn cmd_status(
         s.target(t)?;
     }
     let root = Path::new(&s.filesystems.log_root);
-    let runs = summary::runs(root, target, last.into()).map_err(|e| Fail::new(exit::FAILED, e))?;
+    let runs = if problems_only {
+        summary::problem_runs(root, target, last.into())
+    } else {
+        summary::runs(root, target, last.into())
+    }
+    .map_err(|e| Fail::new(exit::FAILED, e))?;
     if runs.is_empty() {
+        let what = if problems_only {
+            "no problematic runs under"
+        } else {
+            "no runs under"
+        };
         log(
             "INFO",
             "status",
             target.unwrap_or("-"),
-            &format!("no runs under {}", root.display()),
+            &format!("{what} {}", root.display()),
         );
     }
     match format {
@@ -1587,8 +1601,9 @@ fn main() {
             site,
             target,
             last,
+            problems_only,
             format,
-        } => cmd_status(site, target.as_deref(), *last, *format),
+        } => cmd_status(site, target.as_deref(), *last, *problems_only, *format),
         Cmd::Metrics { result, format } => cmd_metrics(result, *format),
         Cmd::Plan {
             common,

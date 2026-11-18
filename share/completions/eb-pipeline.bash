@@ -687,7 +687,7 @@ _eb__pipeline() {
             return 0
             ;;
         eb__subcmd__pipeline__subcmd__status)
-            opts="-h --site --target --last --format --help"
+            opts="-h --site --target --last --problems-only --format --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

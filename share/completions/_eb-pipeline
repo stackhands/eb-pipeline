@@ -92,6 +92,7 @@ _arguments "${_arguments_options[@]}" : \
 '--target=[Only the runs of this target, with only its entry]:TARGET:_default' \
 '--last=[How many runs]:LAST:_default' \
 '--format=[\`text\`\: a line per run and per target; \`json\`\: one JSON document]:FORMAT:(text json)' \
+'--problems-only[Keep only nonzero runs and runs without a readable summary]' \
 '-h[Print help]' \
 '--help[Print help]' \
 && ret=0

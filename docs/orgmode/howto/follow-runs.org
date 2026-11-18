@@ -42,6 +42,15 @@ The output on this page comes from =docs/examples/summary.sh=, which runs both t
    The command is =watch= for a rebuild that [[file:rebuild-when-eessi-changes.org][Rebuild what an EESSI change reaches]] sets up.
    Without =--last=, =status= lists 10 runs; =--target zen4= keeps the runs of one target, and =--format json= prints their summaries.
 
+   To focus on runs that need attention:
+
+   #+begin_src bash
+   eb-pipeline status --site site.toml --problems-only --last 5
+   #+end_src
+
+   This view includes failed runs and runs without a readable =summary.json=.
+   =--last= counts matching runs, so newer successful runs do not hide an older failure.
+
 3. List the lines of a run that did not succeed, with their logs, from its =summary.json=:
 
    #+begin_src bash

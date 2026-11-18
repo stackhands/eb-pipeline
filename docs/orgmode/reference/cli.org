@@ -233,14 +233,17 @@ It shows =<run-id>= and =<log-stamp>= where a run puts its own.
 
 *** status
 
-| Option            | Variable             | Meaning                                                                                             |
-|-------------------+----------------------+-----------------------------------------------------------------------------------------------------|
-| =--site FILE=     | =EB_PIPELINE_SITE=   | The site file; required.                                                                            |
-| =--target NAME=   | =EB_PIPELINE_TARGET= | Only the runs that have a log directory for the target, with only its entry; every run when absent. |
-| =--last N=        |                      | How many runs to print, from 1 to 65535; 10 when absent. Any other value is refused, with exit 2.   |
-| =--format FORMAT= |                      | =text=, the default, prints a line per run and a line per target; =json= prints one JSON document.  |
+| Option              | Variable             | Meaning                                                                                             |
+|---------------------+----------------------+-----------------------------------------------------------------------------------------------------|
+| =--site FILE=       | =EB_PIPELINE_SITE=   | The site file; required.                                                                            |
+| =--target NAME=     | =EB_PIPELINE_TARGET= | Only the runs that have a log directory for the target, with only its entry; every run when absent. |
+| =--last N=          |                      | How many matching runs to print, from 1 to 65535; 10 when absent. Other values exit 2.               |
+| =--problems-only=   |                      | Keep failed runs and runs without a readable =summary.json=; keep every run when absent.             |
+| =--format FORMAT=   |                      | =text=, the default, prints a line per run and a line per target; =json= prints one JSON document.  |
 
 =status= reads the directories under =filesystems.log_root= whose names are log stamps, newest first, and leaves out every other entry.
+With =--problems-only=, =--last= counts runs after filtering.
+With =--target=, the selected target's exit code decides whether a run is problematic.
 [[file:run-summary.org][The run summary]] shows what it prints.
 
 *** metrics
