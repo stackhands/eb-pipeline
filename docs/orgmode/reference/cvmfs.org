@@ -10,6 +10,7 @@ It is a companion command, not a phase that =eb-pipeline run= enables by default
 #+begin_example
 eb-cvmfs [--dry-run] [--metrics-file PATH] [--archive-manifest FILE]
          [--sync-timeout SEC] [--verify-cmd CMD] [--verify-timeout SEC]
+         [--publish-timeout SEC]
          [--tag NAME] [--tag-description TEXT] [--check]
          REPOSITORY -- COMMAND [ARG...]
 #+end_example
@@ -20,6 +21,7 @@ eb-cvmfs [--dry-run] [--metrics-file PATH] [--archive-manifest FILE]
 | =--sync-timeout SEC= | Give synchronization a positive, whole-second deadline. |
 | =--verify-cmd CMD= | After synchronization, run CMD inside the open transaction and publish only when it succeeds. |
 | =--verify-timeout SEC= | Give verification a positive, whole-second deadline; requires =--verify-cmd=. |
+| =--publish-timeout SEC= | Give =cvmfs_server publish= a positive, whole-second deadline. |
 | =--tag NAME= | Pass =-a NAME= to =cvmfs_server publish= for a named rollback tag. |
 | =--tag-description TEXT= | Pass =-m TEXT= to =cvmfs_server publish=; requires =--tag=. |
 | =--check= | After a successful publish, run =cvmfs_server check REPOSITORY=. |
@@ -53,18 +55,20 @@ Without =--dry-run=, =eb-cvmfs=:
 6. runs =cvmfs_server publish= with optional =-a= and =-m= when every requested command exits 0, or =cvmfs_server abort -f REPOSITORY= when synchronization or verification does not;
 7. when =--check= was given and publish succeeded, runs =cvmfs_server check REPOSITORY= and returns its status.
 
-An abort failure is reported, but does not replace the synchronization or verification command's exit status.
+An abort failure is reported, but does not replace the command failure or timeout status that caused it.
 A synchronization command that cannot be found is treated as exit 127; another failure to start it is exit 126.
 A verification command that cannot start uses the same statuses.
 Command output is inherited, including output from a failed verification.
 =eb-cvmfs= performs no tarball build or packaging step.
 It does not ingest an archive itself: the synchronization command remains responsible for any ingest, and only after the optional check has passed.
 
-When its timeout option is present, =COMMAND= or CMD starts in a new process group.
+When its timeout option is present, =COMMAND=, CMD or =cvmfs_server publish= starts in a new process group.
 Without that option, the command remains in the caller's process group.
 When a deadline expires, =eb-cvmfs= sends =TERM= to that command's process group, waits a fixed grace period of one second, and sends =KILL= to the group.
 It then runs =cvmfs_server abort -f REPOSITORY= once and exits 124.
-It does not retry the timed-out command, start the next command, or publish the transaction.
+It does not retry the timed-out command or start the next command.
+A synchronization or verification timeout does not publish the transaction.
+A publish timeout does not start the optional integrity check.
 
 =--dry-run= still performs step 1 when the option is set.
 A passed check adds no line to the preview.
@@ -129,7 +133,7 @@ The metrics file contains these gauges, all labelled with =repository=:
 | =eb_cvmfs_last_publish_timestamp_seconds= | Unix time of the latest successful publish known in this file. It is absent until a publish succeeds. A later failure preserves it. |
 | =eb_cvmfs_last_transaction_duration_seconds= | Seconds from starting the successful =transaction= command through a =publish= or =abort= command that reached an exit status. It is absent when no transaction opened or the final command could not start. |
 | =eb_cvmfs_aborts= | Abort commands that started during the latest invocation: 0 or 1. This is an invocation gauge, not a cumulative counter. |
-| =eb_cvmfs_timeout= | Present with value 1 when synchronization or verification timed out. Its =phase= label is =sync= or =verify=. |
+| =eb_cvmfs_timeout= | Present with value 1 when synchronization, verification or publish timed out. Its =phase= label is =sync=, =verify= or =publish=. |
 
 The file describes one repository.
 Invocations using the same path take an exclusive sibling lock before checking the repository and hold it through the atomic metrics replacement.
@@ -152,7 +156,7 @@ It changes a successful invocation to exit 1, but does not mask an existing tran
 | transaction status | =cvmfs_server transaction= failed. |
 | synchronization status | The synchronization failed; =eb-cvmfs= attempted =abort -f=. |
 | verification status | Verification failed; =eb-cvmfs= attempted =abort -f=. |
-| =124= | Synchronization or verification exceeded its configured deadline; =eb-cvmfs= terminated the process group and attempted =abort -f=. |
+| =124= | Synchronization, verification or publish exceeded its configured deadline; =eb-cvmfs= terminated the process group and attempted =abort -f=. |
 | publish status | Synchronization and optional verification succeeded and =cvmfs_server publish= failed. |
 | check status | Publish succeeded and =cvmfs_server check= failed. |
 | =126= or =127= | The synchronization or verification command could not start; =eb-cvmfs= attempted =abort -f=. |

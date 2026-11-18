@@ -30,6 +30,7 @@ struct Args {
     verify_cmd: Option<String>,
     sync_timeout: Option<Duration>,
     verify_timeout: Option<Duration>,
+    publish_timeout: Option<Duration>,
     sync: Vec<String>,
 }
 
@@ -95,6 +96,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut verify_cmd = None;
     let mut sync_timeout = None;
     let mut verify_timeout = None;
+    let mut publish_timeout = None;
     let mut sync = Vec::new();
     let mut after_separator = false;
     let mut words = words.peekable();
@@ -167,6 +169,9 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
             "--verify-timeout" => {
                 set_timeout(&mut verify_timeout, "--verify-timeout", words.next())?;
             }
+            "--publish-timeout" => {
+                set_timeout(&mut publish_timeout, "--publish-timeout", words.next())?;
+            }
             "--archive-manifest" => {
                 if archive_manifest.is_some() {
                     return Err("`--archive-manifest` was given twice".into());
@@ -230,6 +235,13 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                     Some(word["--verify-timeout=".len()..].to_string()),
                 )?;
             }
+            _ if word.starts_with("--publish-timeout=") => {
+                set_timeout(
+                    &mut publish_timeout,
+                    "--publish-timeout",
+                    Some(word["--publish-timeout=".len()..].to_string()),
+                )?;
+            }
             _ if word.starts_with('-') => return Err(format!("does not know `{word}`")),
             _ if repository.is_none() => repository = Some(word),
             _ => return Err("put `--` between REPOSITORY and the sync command".into()),
@@ -260,6 +272,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
         verify_cmd,
         sync_timeout,
         verify_timeout,
+        publish_timeout,
         sync,
     })
 }
@@ -566,7 +579,20 @@ fn run(args: &Args, facts: &mut Facts) -> Result<u8, String> {
     }
 
     let mut publish = configure_publish(args);
-    let published = status(&mut publish, "cvmfs_server publish")?;
+    let published = match grouped_status(&mut publish, args.publish_timeout) {
+        Ok(GroupStatus::Exited(status)) => status,
+        Ok(GroupStatus::TimedOut) => {
+            timeout_message("publish", args.publish_timeout.unwrap());
+            facts.timed_out = Some("publish");
+            let completed = abort(&args.repository, facts);
+            if completed {
+                facts.transaction_duration_seconds =
+                    Some(eb_pipeline::run::seconds(transaction_started.elapsed()));
+            }
+            return Ok(TIMEOUT_EXIT);
+        }
+        Err(error) => return Err(start_error("cvmfs_server publish", error)),
+    };
     facts.transaction_duration_seconds =
         Some(eb_pipeline::run::seconds(transaction_started.elapsed()));
     if !published.success() {

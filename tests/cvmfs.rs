@@ -17,7 +17,19 @@ case "$1" in
     exit "${STUB_LIST_EXIT:-0}"
     ;;
   transaction) [ -n "${STUB_TRANSACTION_DELAY:-}" ] && /bin/sleep "$STUB_TRANSACTION_DELAY"; exit "${STUB_TRANSACTION_EXIT:-0}" ;;
-  publish) [ -n "${STUB_PUBLISH_DELAY:-}" ] && /bin/sleep "$STUB_PUBLISH_DELAY"; exit "${STUB_PUBLISH_EXIT:-0}" ;;
+  publish)
+    if [ -n "${STUB_PUBLISH_GROUP:-}" ]; then
+      set -- $(/bin/cat /proc/$$/stat)
+      echo "$$ ${5}" > "$STUB_PUBLISH_GROUP"
+    fi
+    if [ -n "${STUB_PUBLISH_CHILD_IDENTITY:-}" ]; then
+      trap '' TERM
+      /bin/sh -c 'trap "" TERM; set -- $(/bin/cat /proc/$$/stat); echo "$$ ${22}" > "$STUB_PUBLISH_CHILD_IDENTITY"; exec /bin/sleep 30' &
+      wait
+    fi
+    [ -n "${STUB_PUBLISH_DELAY:-}" ] && /bin/sleep "$STUB_PUBLISH_DELAY"
+    exit "${STUB_PUBLISH_EXIT:-0}"
+    ;;
   check) exit "${STUB_CHECK_EXIT:-0}" ;;
   abort) [ -n "${STUB_ABORT_DELAY:-}" ] && /bin/sleep "$STUB_ABORT_DELAY"; exit "${STUB_ABORT_EXIT:-0}" ;;
 esac
@@ -159,6 +171,25 @@ fn sync_without_a_timeout_stays_in_the_callers_process_group() {
     assert_eq!(process_group, current_process_group());
     assert_eq!(output.stdout, b"");
     assert_eq!(output.stderr, b"");
+}
+
+#[test]
+fn publish_without_a_timeout_stays_in_the_callers_process_group() {
+    let fixture = Fixture::new();
+    let group = fixture.dir.path().join("publish-group");
+    let output = fixture
+        .command()
+        .env("STUB_PUBLISH_GROUP", &group)
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let identity = std::fs::read_to_string(group).unwrap();
+    let (pid, process_group) = identity.trim().split_once(' ').unwrap();
+    assert_ne!(pid, process_group);
+    assert_eq!(process_group, current_process_group());
+    assert_eq!(output.stdout, b"");
+    assert_eq!(output.stderr, b"");
+    assert_eq!(fixture.calls().as_bytes(), HISTORICAL_CALLS);
 }
 
 fn current_process_group() -> String {
@@ -575,6 +606,57 @@ fn a_verification_timeout_aborts_without_retrying_or_publishing() {
     assert_eq!(sample(&text, "eb_cvmfs_exit_code"), Some(124.0));
     assert!(
         text.contains("eb_cvmfs_timeout{repository=\"repo.example\",phase=\"verify\"} 1"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_publish_timeout_kills_its_process_group_aborts_once_and_skips_check() {
+    let fixture = Fixture::new();
+    let child_identity = fixture.dir.path().join("publish-child.identity");
+    let metrics = fixture.dir.path().join("cvmfs.prom");
+    let output = fixture
+        .command_with_options(
+            None,
+            Some(&metrics),
+            None,
+            &["--publish-timeout", "1", "--check"],
+        )
+        .env("STUB_PUBLISH_CHILD_IDENTITY", &child_identity)
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 124, "{}", stderr(&output));
+    assert!(output.stdout.is_empty());
+    assert!(
+        stderr(&output).contains(
+            "publish command timed out after 1 second; sent TERM, waited 1 second, then sent KILL"
+        ),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(
+        fixture.calls(),
+        "list\ntransaction repo.example\nsync --delete\npublish repo.example\nabort -f repo.example\n"
+    );
+    let identity = std::fs::read_to_string(child_identity).unwrap();
+    let (pid, start_time) = identity.trim().split_once(' ').unwrap();
+    let pid: i32 = pid.parse().unwrap();
+    let start_time: u64 = start_time.parse().unwrap();
+    assert!(
+        !same_live_process(pid, start_time),
+        "publish descendant {pid} survived timeout"
+    );
+
+    let text = std::fs::read_to_string(metrics).unwrap();
+    assert_eq!(sample(&text, "eb_cvmfs_last_result"), Some(0.0));
+    assert_eq!(sample(&text, "eb_cvmfs_exit_code"), Some(124.0));
+    assert_eq!(sample(&text, "eb_cvmfs_aborts"), Some(1.0));
+    assert!(
+        sample(&text, "eb_cvmfs_last_publish_timestamp_seconds").is_none(),
+        "{text}"
+    );
+    assert!(
+        text.contains("eb_cvmfs_timeout{repository=\"repo.example\",phase=\"publish\"} 1"),
         "{text}"
     );
 }
@@ -1145,6 +1227,16 @@ fn invalid_arguments_are_usage_errors() {
             "--sync-timeout",
             "1",
             "--sync-timeout=2",
+            "repo.example",
+            "--",
+            "sync",
+        ],
+        vec!["--publish-timeout"],
+        vec!["--publish-timeout=0", "repo.example", "--", "sync"],
+        vec![
+            "--publish-timeout",
+            "1",
+            "--publish-timeout=2",
             "repo.example",
             "--",
             "sync",
