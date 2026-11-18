@@ -108,6 +108,167 @@ fn the_how_to_shows_the_command_the_checks_phase_can_run() {
     assert!(page.contains("[checks]"));
     assert!(page.contains("has no test"));
     assert!(page.contains("--format reframe"));
+    assert!(page.contains("--format eessi-modules"));
+    assert!(page.contains("--setvar modules="));
+    let reference = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/docs/orgmode/reference/test-map.org"
+    ))
+    .unwrap();
+    assert!(reference.contains("--format eessi-modules"));
+    assert!(reference.contains("--setvar modules="));
+    assert!(reference.contains("set_modules"));
+}
+
+#[test]
+fn the_default_format_still_requires_a_map() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("build.list"),
+        "GROMACS-2024.1-foss-2023b.eb\n",
+    )
+    .unwrap();
+    let o = bin()
+        .arg("--list")
+        .arg(dir.path().join("build.list"))
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(2));
+    assert!(o.stdout.is_empty());
+    let err = String::from_utf8(o.stderr).unwrap();
+    assert!(err.contains("--map is required"), "{err}");
+    assert!(!err.contains("--list is required"), "{err}");
+}
+
+#[test]
+fn eessi_modules_prints_one_setvar_argument_without_a_map() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("build.list"),
+        "\
+# comment
+GCCcore-13.2.0.eb
+GROMACS-2024.1-foss-2023b.eb
+/lists/Python-3.11.5-GCCcore-12.3.0.eb
+zlib-1.3.1.eb
+libfoo-bar-1.2.eb
+GROMACS-2024.1-foss-2023b.eb
+GROMACS-2024.1-foss-2023b-CUDA-12.1.0.eb
+foss-2023b.eb
+MyStack-2024a.eb
+",
+    )
+    .unwrap();
+    let o = bin()
+        .args(["--format", "eessi-modules", "--toolchain", "MyStack"])
+        .arg("--list")
+        .arg(dir.path().join("build.list"))
+        .arg("--map")
+        .arg(dir.path().join("missing.tsv"))
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(
+        o.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(o.stdout).unwrap(),
+        "--setvar modules=GROMACS/2024.1-foss-2023b,GROMACS/2024.1-foss-2023b-CUDA-12.1.0,Python/3.11.5-GCCcore-12.3.0,libfoo-bar/1.2,zlib/1.3.1\n"
+    );
+}
+
+#[test]
+fn eessi_modules_prints_nothing_when_the_list_has_no_application() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("build.list"),
+        "# only a toolchain\n\nGCC-13.2.0.eb\n",
+    )
+    .unwrap();
+    let o = bin()
+        .args(["--format=eessi-modules"])
+        .arg("--list")
+        .arg(dir.path().join("build.list"))
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(o.stdout.is_empty());
+    assert!(o.stderr.is_empty());
+}
+
+#[test]
+fn eessi_modules_refuses_a_name_that_cannot_be_one_list_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("build.list"), "Foo-bar.eb\n").unwrap();
+    let o = bin()
+        .args(["--format", "eessi-modules", "--list"])
+        .arg(dir.path().join("build.list"))
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(2));
+    assert!(o.stdout.is_empty());
+    let err = String::from_utf8(o.stderr).unwrap();
+    assert!(err.contains("has no version"), "{err}");
+
+    std::fs::write(dir.path().join("build.list"), "Foo-1,2.eb\n").unwrap();
+    let o = bin()
+        .args(["--format", "eessi-modules", "--list"])
+        .arg(dir.path().join("build.list"))
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(2));
+    let err = String::from_utf8(o.stderr).unwrap();
+    assert!(err.contains("comma or a space"), "{err}");
+}
+
+#[test]
+fn an_unknown_format_is_refused_and_text_matches_the_default() {
+    let dir = tempfile::tempdir().unwrap();
+    files(
+        dir.path(),
+        "GROMACS gromacs\n",
+        "GROMACS-2024.1-foss-2023b.eb\n",
+    );
+    let bad = bin()
+        .arg("--map")
+        .arg(dir.path().join("map.tsv"))
+        .arg("--list")
+        .arg(dir.path().join("build.list"))
+        .args(["--format", "nope"])
+        .output()
+        .unwrap();
+    assert_eq!(bad.status.code(), Some(2));
+    let err = String::from_utf8(bad.stderr).unwrap();
+    assert!(err.contains("unknown --format"), "{err}");
+    assert!(err.contains("eessi-modules"), "{err}");
+
+    let text = bin()
+        .arg("--map")
+        .arg(dir.path().join("map.tsv"))
+        .arg("--list")
+        .arg(dir.path().join("build.list"))
+        .args(["--format", "text"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        text.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&text.stderr)
+    );
+    assert_eq!(String::from_utf8(text.stdout).unwrap(), "gromacs\n");
 }
 
 #[test]
