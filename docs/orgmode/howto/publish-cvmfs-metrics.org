@@ -66,7 +66,7 @@ curl --fail --silent http://127.0.0.1:9100/metrics |
 =eb_cvmfs_last_publish_timestamp_seconds= changes only after a successful publish.
 =eb_cvmfs_last_transaction_duration_seconds= covers an opened transaction through a completed publish or abort command.
 =eb_cvmfs_aborts= is 0 or 1 for the latest invocation; it is not a cumulative counter.
-When a configured deadline expires, =eb_cvmfs_timeout= labels the phase as =sync=, =verify= or =publish=.
+When a configured deadline expires, =eb_cvmfs_timeout= labels the phase as =sync=, =verify=, =publish= or =check=.
 
 ** If it fails
 

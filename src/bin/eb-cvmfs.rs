@@ -31,6 +31,7 @@ struct Args {
     sync_timeout: Option<Duration>,
     verify_timeout: Option<Duration>,
     publish_timeout: Option<Duration>,
+    check_timeout: Option<Duration>,
     sync: Vec<String>,
 }
 
@@ -97,6 +98,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut sync_timeout = None;
     let mut verify_timeout = None;
     let mut publish_timeout = None;
+    let mut check_timeout = None;
     let mut sync = Vec::new();
     let mut after_separator = false;
     let mut words = words.peekable();
@@ -172,6 +174,9 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
             "--publish-timeout" => {
                 set_timeout(&mut publish_timeout, "--publish-timeout", words.next())?;
             }
+            "--check-timeout" => {
+                set_timeout(&mut check_timeout, "--check-timeout", words.next())?;
+            }
             "--archive-manifest" => {
                 if archive_manifest.is_some() {
                     return Err("`--archive-manifest` was given twice".into());
@@ -242,6 +247,13 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                     Some(word["--publish-timeout=".len()..].to_string()),
                 )?;
             }
+            _ if word.starts_with("--check-timeout=") => {
+                set_timeout(
+                    &mut check_timeout,
+                    "--check-timeout",
+                    Some(word["--check-timeout=".len()..].to_string()),
+                )?;
+            }
             _ if word.starts_with('-') => return Err(format!("does not know `{word}`")),
             _ if repository.is_none() => repository = Some(word),
             _ => return Err("put `--` between REPOSITORY and the sync command".into()),
@@ -261,6 +273,9 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     if verify_timeout.is_some() && verify_cmd.is_none() {
         return Err("`--verify-timeout` requires `--verify-cmd`".into());
     }
+    if check_timeout.is_some() && !check {
+        return Err("`--check-timeout` requires `--check`".into());
+    }
     Ok(Args {
         check,
         dry_run,
@@ -273,6 +288,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
         sync_timeout,
         verify_timeout,
         publish_timeout,
+        check_timeout,
         sync,
     })
 }
@@ -603,12 +619,20 @@ fn run(args: &Args, facts: &mut Facts) -> Result<u8, String> {
         return Ok(0);
     }
 
-    let checked = status(
+    let checked = match grouped_status(
         Command::new("cvmfs_server")
             .arg("check")
             .arg(&args.repository),
-        "cvmfs_server check",
-    )?;
+        args.check_timeout,
+    ) {
+        Ok(GroupStatus::Exited(status)) => status,
+        Ok(GroupStatus::TimedOut) => {
+            timeout_message("check", args.check_timeout.unwrap());
+            facts.timed_out = Some("check");
+            return Ok(TIMEOUT_EXIT);
+        }
+        Err(error) => return Err(start_error("cvmfs_server check", error)),
+    };
     Ok(exit_code(checked))
 }
 

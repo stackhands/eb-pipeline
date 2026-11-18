@@ -85,11 +85,16 @@ The tag name and description are passed to =cvmfs_server publish= as =-a= and =-
 Use =--check= when the published revision must pass =cvmfs_server check= before the command is considered successful:
 
 #+begin_src bash
-eb-cvmfs --dry-run --check repo.example -- /opt/site/bin/sync-module-cache
+eb-cvmfs --dry-run \
+  --check \
+  --check-timeout 300 \
+  repo.example -- /opt/site/bin/sync-module-cache
 #+end_src
 
 The integrity check runs only after publish succeeds.
 A failed check returns the check command's exit status and does not roll back the published revision.
+The optional deadline is a positive whole number of seconds.
+When it expires, =eb-cvmfs= terminates the check process group, returns 124 and leaves the published revision in place.
 
 ** 6. Put the bracket in =[caches]=
 
