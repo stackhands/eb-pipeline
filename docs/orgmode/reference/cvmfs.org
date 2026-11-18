@@ -4,17 +4,22 @@
 
 * The eb-cvmfs command
 
-=eb-cvmfs= brackets one synchronization command in a CVMFS transaction.
+=eb-cvmfs= brackets one synchronization command in a CernVM File System (CVMFS) transaction.
 It is a companion command, not a phase that =eb-pipeline run= enables by default.
 
 #+begin_example
-eb-cvmfs [--dry-run] [--metrics-file PATH] [--archive-manifest FILE] [--verify-cmd CMD] REPOSITORY -- COMMAND [ARG...]
+eb-cvmfs [--dry-run] [--metrics-file PATH] [--archive-manifest FILE]
+         [--verify-cmd CMD] [--tag NAME] [--tag-description TEXT] [--check]
+         REPOSITORY -- COMMAND [ARG...]
 #+end_example
 
 | Argument or option | Meaning |
 |--------------------+---------|
-| =REPOSITORY= | The CVMFS repository name passed to =cvmfs_server transaction=, =publish= and =abort=. |
+| =REPOSITORY= | The CVMFS repository name passed to =cvmfs_server transaction=, =publish=, =check= and =abort=. |
 | =--verify-cmd CMD= | After synchronization, run CMD inside the open transaction and publish only when it succeeds. |
+| =--tag NAME= | Pass =-a NAME= to =cvmfs_server publish= for a named rollback tag. |
+| =--tag-description TEXT= | Pass =-m TEXT= to =cvmfs_server publish=; requires =--tag=. |
+| =--check= | After a successful publish, run =cvmfs_server check REPOSITORY=. |
 | =--= | Ends =eb-cvmfs= options and starts the synchronization command. |
 | =COMMAND [ARG...]= | The site's synchronization command and its arguments. It is started directly, without a shell. |
 | =--dry-run= | Print every command in the bracket without checking, opening, changing, publishing or aborting the repository. When =--archive-manifest= is also set, the archive is still read. |
@@ -42,7 +47,8 @@ Without =--dry-run=, =eb-cvmfs=:
 3. runs =cvmfs_server transaction REPOSITORY=;
 4. starts =COMMAND [ARG...]=;
 5. when =--verify-cmd= was given, starts CMD after the synchronization exits 0;
-6. runs =cvmfs_server publish REPOSITORY= when every requested command exits 0, or =cvmfs_server abort -f REPOSITORY= when synchronization or verification does not.
+6. runs =cvmfs_server publish= with optional =-a= and =-m= when every requested command exits 0, or =cvmfs_server abort -f REPOSITORY= when synchronization or verification does not;
+7. when =--check= was given and publish succeeded, runs =cvmfs_server check REPOSITORY= and returns its status.
 
 An abort failure is reported, but does not replace the synchronization or verification command's exit status.
 A synchronization command that cannot be found is treated as exit 127; another failure to start it is exit 126.
@@ -130,13 +136,14 @@ It changes a successful invocation to exit 1, but does not mask an existing tran
 
 | Status | Meaning |
 |--------+---------|
-| =0= | Synchronization, optional verification and publish succeeded, or =--dry-run= printed the commands. |
+| =0= | Synchronization, optional verification, publish and optional check succeeded, or =--dry-run= printed the commands. |
 | =1= | The repository operation succeeded, but the requested metrics file could not be written. |
 | =2= | The arguments are invalid, the archive manifest is refused, =cvmfs_server list= cannot start or fails, or the repository is already in a transaction. |
 | transaction status | =cvmfs_server transaction= failed. |
 | synchronization status | The synchronization failed; =eb-cvmfs= attempted =abort -f=. |
 | verification status | Verification failed; =eb-cvmfs= attempted =abort -f=. |
 | publish status | Synchronization and optional verification succeeded and =cvmfs_server publish= failed. |
+| check status | Publish succeeded and =cvmfs_server check= failed. |
 | =126= or =127= | The synchronization or verification command could not start; =eb-cvmfs= attempted =abort -f=. |
 
 ** See also
