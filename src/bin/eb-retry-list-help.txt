@@ -40,3 +40,6 @@ memory itself.
 
 `--require-lines` exits 1 after writing when the retry list is empty. Without
 it, an empty retry list exits 0.
+
+`--out` must differ from the result or summary and from the explicit or
+recorded build list. Symbolic and hard-link aliases are refused.

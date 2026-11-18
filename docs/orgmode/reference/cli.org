@@ -438,12 +438,12 @@ eb-retry-list (--result FILE | --summary FILE --target NAME)
 | =--drop-oom= | Leave out every line =--node= warned about. Requires =--node=. |
 | =--easyconfigs DIR= | Robot tree passed through to =eb-stack stack oom --easyconfigs=. Repeatable. Requires =--node=. |
 | =--arch ARCH= | CPU target passed through to =eb-stack stack oom --arch=. Repeatable. Requires =--node=. |
-| =--out FILE= | Write the retry list to =FILE=; =-= or absent prints to stdout. |
+| =--out FILE= | Write the retry list to =FILE=; =-= or absent prints to stdout. It must differ from the result or summary and from the explicit or recorded build list, including through symbolic and hard links. |
 | =--require-lines= | Exit 1 after writing an empty retry list. Without it, an empty retry list exits 0. |
 
 Exit 0 means the retry list was written (empty when every line succeeded, was deselected, was not in a selected class, or was dropped by =--drop-oom=).
 With =--require-lines=, exit 1 means the retry list was written but is empty.
-Exit 2 is a missing or invalid input, an absent or unreadable recorded list, a selected line without a recorded log, an =eb-stack= that cannot start or fails, invalid classifier output, or =stack oom= output that has no single =oom=N= line matching its warnings.
+Exit 2 is a missing or invalid input, an output path that aliases an input, an absent or unreadable recorded list, a selected line without a recorded log, an =eb-stack= that cannot start or fails, invalid classifier output, or =stack oom= output that has no single =oom=N= line matching its warnings.
 Classification and the memory check never fall back to retaining a line that =eb-stack= did not accept.
 =eb-retry-list= does not classify a log or estimate memory itself.
 

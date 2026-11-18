@@ -1,6 +1,40 @@
 //! Small helpers.
 
 use crate::exit::Fail;
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
+
+/// Whether two paths name the same file, including through a symbolic or
+/// hard link. A path that does not exist is resolved through its parent.
+pub fn paths_alias(path_a: &Path, path_b: &Path) -> bool {
+    if resolved_path(path_a) == resolved_path(path_b) {
+        return true;
+    }
+    match (std::fs::metadata(path_a), std::fs::metadata(path_b)) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+        _ => false,
+    }
+}
+
+/// Resolve a path as far as the filesystem permits.
+pub fn resolved_path(path: &Path) -> PathBuf {
+    if let Ok(path) = std::fs::canonicalize(path) {
+        return path;
+    }
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
+    match (
+        std::fs::canonicalize(parent),
+        path.file_name().map(ToOwned::to_owned),
+    ) {
+        (Ok(parent), Some(name)) => parent.join(name),
+        _ => std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()),
+    }
+}
 
 /// Split a string on whitespace, honouring single and double quotes.
 pub fn split_args(s: &str) -> Result<Vec<String>, Fail> {
