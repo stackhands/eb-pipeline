@@ -269,7 +269,7 @@ fn read(file: &Path, name: &str) -> Option<Module> {
 /// The install root an EasyBuild module file sets: `local root = "..."` in
 /// Lua, `set root ...` in Tcl.
 fn root_of(text: &str) -> Option<String> {
-    text.lines().find_map(|l| {
+    text.lines().rev().find_map(|l| {
         let l = l.trim();
         if let Some(rest) = l.strip_prefix("local root") {
             let v = rest.trim_start().strip_prefix('=')?.trim();
@@ -386,6 +386,18 @@ mod tests {
             Some("/a d")
         );
         assert_eq!(root_of("setenv FOO 1\n"), None);
+    }
+
+    #[test]
+    fn the_last_module_root_assignment_is_effective() {
+        assert_eq!(
+            root_of("local root = \"/old\"\nlocal root = \"/new\"\n").as_deref(),
+            Some("/new")
+        );
+        assert_eq!(
+            root_of("#%Module\nset root /old\nset root /new\n").as_deref(),
+            Some("/new")
+        );
     }
 
     #[test]
