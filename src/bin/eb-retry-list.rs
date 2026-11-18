@@ -75,17 +75,17 @@ fn run() -> Result<ExitCode, String> {
         (None, Some(path), Some(target)) => read_summary(Path::new(path), target),
         _ => unreachable!("validated in parse"),
     };
-    let (lines, recorded) = if args.recorded_list {
+    let (lines, recorded, list_source) = if args.recorded_list {
         let recorded = read_recorded()?;
         let list = recorded
             .list
-            .as_deref()
+            .clone()
             .ok_or_else(|| "the selected record has no string `list`".to_string())?;
-        check_output_alias(args.out.as_deref(), &[("--list", Some(list))])?;
-        (read_list(list)?, recorded)
+        check_output_alias(args.out.as_deref(), &[("--list", Some(&list))])?;
+        (read_list(&list)?, recorded, list)
     } else {
         let list = args.list.as_deref().expect("validated in parse");
-        (read_list(list)?, read_recorded()?)
+        (read_list(list)?, read_recorded()?, list.to_string())
     };
 
     let mut selected = select_retry_lines(&lines, &recorded, args.statuses.as_ref());
@@ -100,6 +100,7 @@ fn run() -> Result<ExitCode, String> {
             args.drop_oom,
             &args.easyconfigs,
             &args.arches,
+            &list_source,
         )?,
         None => selected.into_iter().map(|line| line.raw).collect(),
     };
@@ -667,6 +668,7 @@ fn filter_oom(
     drop: bool,
     easyconfigs: &[String],
     arches: &[String],
+    list_source: &str,
 ) -> Result<Vec<String>, String> {
     if lines.is_empty() {
         return Ok(Vec::new());
@@ -698,7 +700,9 @@ fn filter_oom(
             .code()
             .map_or_else(|| output.status.to_string(), |code| code.to_string());
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let detail = stderr.trim();
+        let generated = temp.0.to_string_lossy();
+        let source = format!("generated retry easystack from {list_source}");
+        let detail = stderr.trim().replace(generated.as_ref(), &source);
         let detail = if detail.is_empty() {
             String::new()
         } else {

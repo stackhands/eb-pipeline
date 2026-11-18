@@ -1078,6 +1078,54 @@ fn drop_oom_removes_a_line_that_requires_a_build_eb_stack_warns_about() {
 }
 
 #[test]
+fn stack_oom_errors_name_the_source_list_instead_of_the_deleted_copy() {
+    let dir = tempfile::tempdir().unwrap();
+    let (list, result) = class_fixture(dir.path(), &[("Big.eb", "timeout")]);
+    let bin_dir = dir.path().join("bin");
+    std::fs::create_dir(&bin_dir).unwrap();
+    write_exec(
+        &bin_dir.join("eb-stack"),
+        r#"#!/bin/sh
+if [ "$2" = bot-classify ]; then
+  printf '{"jobs":[{"sub_class":"timeout"}]}\n'
+  exit 0
+fi
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --easystack ]; then
+    printf 'cannot parse %s: generated input is invalid\n' "$2" >&2
+    exit 2
+  fi
+  shift
+done
+exit 64
+"#,
+    );
+    let path = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let o = bin()
+        .args(["--result"])
+        .arg(&result)
+        .args(["--list"])
+        .arg(&list)
+        .args(["--classify", "--node", "8:1024"])
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(2));
+    assert_eq!(o.stdout, b"");
+    let stderr = String::from_utf8(o.stderr).unwrap();
+    assert!(stderr.contains(&list.display().to_string()), "{stderr}");
+    assert!(
+        stderr.contains("generated retry easystack from"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("/eb-retry-list-"), "{stderr}");
+}
+
+#[test]
 fn node_options_without_classify_or_node_are_usage_errors() {
     let dir = tempfile::tempdir().unwrap();
     let list = dir.path().join("build.list");

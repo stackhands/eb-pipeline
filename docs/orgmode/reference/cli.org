@@ -460,6 +460,7 @@ With =--require-lines=, exit 1 means the retry list was written but is empty.
 Exit 2 is a missing or invalid input, an output path that aliases an input, an absent or unreadable recorded list, a selected line without a recorded log, an =eb-stack= that cannot start or fails, invalid classifier output, or =stack oom= output that has no single =oom=N= line matching its warnings.
 Classification and the memory check never fall back to retaining a line that =eb-stack= did not accept.
 =eb-retry-list= does not classify a log or estimate memory itself.
+When =stack oom= rejects its generated easystack, the error names the source build list instead of the deleted temporary file.
 
 *** eb-shard-weights
 
