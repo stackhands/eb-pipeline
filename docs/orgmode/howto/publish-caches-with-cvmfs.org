@@ -47,7 +47,26 @@ That expression contains expansion and =&&=, so =eb-cvmfs= runs it as =sh -c CMD
 A failed verifier keeps its standard output and standard error visible, triggers =cvmfs_server abort -f= and returns its status.
 The synchronization command and verifier are not retried by =eb-cvmfs=.
 
-** 4. Name the publish and check the repository
+** 4. Bound synchronization and verification
+
+Add =--sync-timeout SEC= when synchronization must stop after a fixed number of seconds.
+Add =--verify-timeout SEC= with =--verify-cmd= to bound the verifier separately:
+
+#+begin_src bash
+eb-cvmfs \
+  --sync-timeout 900 \
+  --verify-cmd '/opt/site/bin/check-module-cache --root "/cvmfs/repo.example"' \
+  --verify-timeout 120 \
+  repo.example -- /opt/site/bin/sync-module-cache
+#+end_src
+
+Choose deadlines that cover a normal run at the publishing site.
+Both values are positive whole seconds.
+When either deadline expires, =eb-cvmfs= terminates the complete command process group, waits the documented one-second grace period between =TERM= and =KILL=, and aborts the transaction once.
+The timed-out command is not retried, and no publish starts.
+Exit status 124 and the optional metrics file distinguish a timeout from a command failure.
+
+** 5. Name the publish and check the repository
 
 Use =--tag= and =--tag-description= when operators want a named rollback point on the published revision:
 
@@ -68,7 +87,7 @@ eb-cvmfs --dry-run --check repo.example -- /opt/site/bin/sync-module-cache
 The integrity check runs only after publish succeeds.
 A failed check returns the check command's exit status and does not roll back the published revision.
 
-** 5. Put the bracket in =[caches]=
+** 6. Put the bracket in =[caches]=
 
 Set the site's cache command to the same command without =--dry-run=:
 
@@ -87,7 +106,7 @@ A successful synchronization is published.
 A failed synchronization is aborted with =cvmfs_server abort -f=, and its exit status becomes the cache command's exit status.
 When =--verify-cmd= is configured, verification runs after synchronization and before publish; its failure is aborted and returned in the same way.
 
-** 6. Test the configured command
+** 7. Test the configured command
 
 Run a dry plan to see that the cache phase names =eb-cvmfs=:
 
@@ -95,9 +114,9 @@ Run a dry plan to see that the cache phase names =eb-cvmfs=:
 eb-pipeline plan --site site.toml --list build.list --target cpu --build-type production
 #+end_src
 
-Then run the =eb-cvmfs --dry-run= command from steps 2 through 4 under the same module and account environment that publishes the repository.
+Then run the =eb-cvmfs --dry-run= command from steps 2 through 5 under the same module and account environment that publishes the repository.
 
-** 7. Optionally check an ingest archive first
+** 8. Optionally check an ingest archive first
 
 Pass =--archive-manifest= when the synchronization command ingests one tar archive and a missing parent directory, or a user or group id the repository cannot store, would make a later publish fail.
 The check is off unless you pass the option.

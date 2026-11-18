@@ -1,0 +1,1 @@
+Add opt-in `eb-cvmfs --sync-timeout SEC` and `--verify-timeout SEC` deadlines that terminate the command process group, abort the transaction, record the timed-out phase, and prevent retries and publication.
