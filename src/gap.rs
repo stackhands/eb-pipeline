@@ -141,12 +141,7 @@ fn execute(bin: &str, argv: &[String]) -> Result<Output, Fail> {
         .args(argv)
         .stdin(Stdio::null())
         .output()
-        .map_err(|error| {
-            Fail::new(
-                exit::FAILED,
-                format!("cannot run `{bin} {}`: {error}", argv.join(" ")),
-            )
-        })
+        .map_err(|error| Fail::usage(format!("cannot run `{bin} {}`: {error}", argv.join(" "))))
 }
 
 fn write(path: &Path, bytes: &[u8]) -> Result<(), Fail> {
