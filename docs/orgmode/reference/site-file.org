@@ -362,6 +362,7 @@ It is started as a subprocess and is not probed with =--version=.
 =easyconfigs= are the trees given to =eb-stack stack order --easyconfigs=.
 When that list is empty, =resume.easyconfigs= is used, then =shards.easyconfigs=.
 =easyblocks= are directories searched for the Python file that defines each class.
+A quoted =easyblock= assignment is read anywhere in the easyconfig, regardless of earlier assignments.
 A class with no file is recorded with an empty path.
 =patches= are extra directories searched, together with the easyconfig's own directory and the easyconfig trees, for a quoted name that ends in =.patch=.
 Two files of the same name with different contents refuse the attestation.
