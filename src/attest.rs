@@ -541,23 +541,69 @@ fn patch_literals(text: &str) -> Vec<String> {
         if !append {
             out.clear();
         }
-        let mut rest = rhs;
-        while let Some(start) = rest.find(['\'', '"']) {
-            let quote = rest[start..].chars().next().unwrap_or('"');
-            let body = &rest[start + quote.len_utf8()..];
-            match body.find(quote) {
-                Some(end) => {
-                    let lit = &body[..end];
-                    if lit.ends_with(".patch") && lit != ".patch" && !lit.contains('\\') {
-                        out.push(lit.to_string());
-                    }
-                    rest = &body[end + quote.len_utf8()..];
-                }
-                None => break,
+        for literal in python_string_literals(rhs) {
+            if literal.ends_with(".patch") && literal != ".patch" {
+                out.push(literal);
             }
         }
     }
     out
+}
+
+fn python_string_literals(text: &str) -> Vec<String> {
+    let characters: Vec<char> = text.chars().collect();
+    let mut literals = Vec::new();
+    let mut index = 0;
+    while index < characters.len() {
+        while index < characters.len() && characters[index] != '\'' && characters[index] != '"' {
+            index += 1;
+        }
+        if index == characters.len() {
+            break;
+        }
+        let mut literal = String::new();
+        loop {
+            let quote = characters[index];
+            index += 1;
+            let mut closed = false;
+            while index < characters.len() {
+                let character = characters[index];
+                index += 1;
+                if character == quote {
+                    closed = true;
+                    break;
+                }
+                if character == '\\' && index < characters.len() {
+                    let escaped = characters[index];
+                    index += 1;
+                    match escaped {
+                        'n' => literal.push('\n'),
+                        'r' => literal.push('\r'),
+                        't' => literal.push('\t'),
+                        '\\' | '\'' | '"' => literal.push(escaped),
+                        _ => {
+                            literal.push('\\');
+                            literal.push(escaped);
+                        }
+                    }
+                } else {
+                    literal.push(character);
+                }
+            }
+            if !closed {
+                return literals;
+            }
+            while index < characters.len() && characters[index].is_whitespace() {
+                index += 1;
+            }
+            if index == characters.len() || (characters[index] != '\'' && characters[index] != '"')
+            {
+                break;
+            }
+        }
+        literals.push(literal);
+    }
+    literals
 }
 
 fn python_statements(text: &str) -> Vec<String> {
@@ -928,6 +974,12 @@ patches = ['new.patch']
 patches += ['extra.patch']
 ";
         assert_eq!(patch_literals(text), ["new.patch", "extra.patch"]);
+    }
+
+    #[test]
+    fn adjacent_patch_string_literals_are_concatenated() {
+        let text = "patches = ['a' '.patch', 'dir/' \"b.patch\"]\n";
+        assert_eq!(patch_literals(text), ["a.patch", "dir/b.patch"]);
     }
 
     #[test]
