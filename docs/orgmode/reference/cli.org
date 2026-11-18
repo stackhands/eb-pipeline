@@ -66,6 +66,13 @@ Examples:
   eb-pipeline audit --site site.toml --target cpu --findings findings.csv --out-dir audit
   eb-pipeline metrics --result result.json
 
+Companion commands from this package:
+  eb-retry-list
+  eb-shard-weights
+  eb-test-map
+  eb-junit
+  eb-cvmfs
+
 Configuration: every flag above falls back to an EB_PIPELINE_<FLAG> variable
 (EB_PIPELINE_SITE, EB_PIPELINE_LIST, EB_PIPELINE_PACKAGE_PLAN,
 EB_PIPELINE_TARGET, EB_PIPELINE_BUILD_TYPE, EB_PIPELINE_RUN_ID,
