@@ -3,9 +3,10 @@
 //! `run` append a record through `eb-stack` and `rfc9162-sidecar`, and
 //! `verify` recomputes that record.
 
+#[path = "common/exec_stub.rs"]
 mod exec_stub;
 
-use std::os::unix::fs::PermissionsExt;
+use exec_stub::CommandSyncExt;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -123,7 +124,7 @@ impl Tree {
         for (k, v) in vars {
             cmd.env(k, v);
         }
-        cmd.output().unwrap()
+        cmd.sync_output()
     }
 }
 

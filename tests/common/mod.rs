@@ -2,10 +2,10 @@
 //! `eb-stack` binaries, and a fake EESSI tree, for the tests of the run
 //! summary, `watch` and what reads them. Each test file uses a part of it.
 #![allow(dead_code)]
-#[path = "../exec_stub.rs"]
+#[path = "exec_stub.rs"]
 mod exec_stub_shared;
 
-use exec_stub_shared::CommandSyncExt;
+pub use exec_stub_shared::CommandSyncExt;
 use serde_json::Value;
 use std::os::fd::FromRawFd;
 use std::path::{Path, PathBuf};
