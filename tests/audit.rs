@@ -9,6 +9,7 @@ use std::process::Command;
 const EB_STACK_AUDIT: &str = r#"#!/bin/sh
 D="${STUB_DIR:?}"
 case "$1" in --version) echo "eb-stack 0.7.4"; exit 0;; esac
+[ -n "${STUB_AUDIT_SIGNAL:-}" ] && kill "-$STUB_AUDIT_SIGNAL" "$$"
 echo "$*" >> "$D/ebstack.calls"
 cmd="$1"; shift
 if [ "$cmd" = stack ]; then cmd="stack-$1"; shift; fi
@@ -169,6 +170,46 @@ fn cve_mode_runs_stack_sbom_and_component_reach() {
         .filter(|line| line.starts_with("component-reach "))
         .count();
     assert_eq!(component_calls, 2, "{calls}");
+}
+
+#[test]
+fn an_audit_helper_signal_keeps_its_exit_code() {
+    let t = setup("");
+    write_exec(&t.stubs.join("eb-stack"), EB_STACK_AUDIT);
+    t.eessi_module("Foo", "1.0-GCCcore-13.2.0");
+    let findings = t.root().join("findings.csv");
+    std::fs::write(
+        &findings,
+        "severity,vuln_id,package,used_in\nhigh,CVE-2026-0001,zlib,Foo/1.0-GCCcore-13.2.0\n",
+    )
+    .unwrap();
+    let out_dir = t.root().join("audit");
+    let mut vars: Vec<(&str, &str)> = eessi_vars(&t, "2026.06")
+        .into_iter()
+        .map(|(key, value)| (key, Box::leak(value.into_boxed_str()) as &str))
+        .collect();
+    vars.push(("STUB_AUDIT_SIGNAL", "TERM"));
+    let output = eb_pipeline(
+        &t,
+        &[
+            "audit",
+            "--site",
+            &t.site.display().to_string(),
+            "--target",
+            "cpu",
+            "--findings",
+            &findings.display().to_string(),
+            "--out-dir",
+            &out_dir.display().to_string(),
+        ],
+        &vars,
+    );
+    assert_eq!(code(&output), 143, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("exited 143"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]

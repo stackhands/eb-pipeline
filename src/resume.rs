@@ -80,21 +80,36 @@ pub fn order_path(log_dir: &str) -> PathBuf {
 
 /// A single path component for a repository path, so it can name a directory.
 pub fn workspace_key(repo: &str) -> String {
-    let key: String = repo
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if key.is_empty() || key.chars().all(|c| c == '_' || c == '.') {
-        "repository".into()
-    } else {
-        key
+    if !repo.contains(['_', '%']) {
+        let key: String = repo
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        return if key.is_empty() || key.chars().all(|c| c == '_' || c == '.') {
+            "repository".into()
+        } else {
+            key
+        };
     }
+
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut key = String::with_capacity(repo.len());
+    for byte in repo.bytes() {
+        if byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'.' {
+            key.push(char::from(byte));
+        } else {
+            key.push('%');
+            key.push(char::from(HEX[usize::from(byte >> 4)]));
+            key.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
+    key
 }
 
 /// Read a result file written by a run that recorded an input digest.
@@ -337,6 +352,10 @@ mod tests {
             "_opt_site_easyconfigs"
         );
         assert_eq!(workspace_key(".."), "repository");
+        assert_eq!(workspace_key("/opt/a_b"), "%2Fopt%2Fa%5Fb");
+        assert_eq!(workspace_key("/opt/a%b"), "%2Fopt%2Fa%25b");
+        assert_eq!(workspace_key("/opt/a/b"), "_opt_a_b");
+        assert_ne!(workspace_key("/opt/a_b"), workspace_key("/opt/a/b"));
     }
 
     #[test]

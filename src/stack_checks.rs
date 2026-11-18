@@ -81,6 +81,29 @@ fn source_paths(site: &Site, targets: &[&Target]) -> Vec<String> {
         .collect()
 }
 
+fn validate_list_path(list: &Path, checks: &[StackCheck]) -> Result<(), Fail> {
+    let provided = checks.contains(&StackCheck::Provided);
+    if provided && checks.iter().any(|check| *check != StackCheck::Provided) {
+        return Err(Fail::usage(
+            "--stack-checks cannot combine provided with easystack checks because they require different input formats",
+        ));
+    }
+    if provided {
+        return Ok(());
+    }
+    match list
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+    {
+        Some(extension) if extension == "yml" || extension == "yaml" => Ok(()),
+        _ => Err(Fail::usage(format!(
+            "--stack-checks needs an easystack .yml or .yaml path, not {}",
+            list.display()
+        ))),
+    }
+}
+
 /// Build the real `eb-stack` argv for one requested check.
 pub fn argv(site: &Site, list: &Path, targets: &[&Target], check: StackCheck) -> Vec<String> {
     let mut argv = vec!["stack".into(), check.subcommand().into()];
@@ -138,6 +161,7 @@ pub fn run(
     target: Option<&str>,
     checks: &[StackCheck],
 ) -> Result<(), Fail> {
+    validate_list_path(list, checks)?;
     let targets = selected_targets(site, target)?;
     let bin = Tool::EbStack.bin(site);
     let label = target.unwrap_or("-");

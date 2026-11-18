@@ -21,7 +21,8 @@ eb-junit [--result FILE]... [--reframe-report FILE]... [--out FILE]
 | =--property NAME=VALUE= | Add the property to every suite. Repeat for more properties. |
 | =--fail-on-failure= | After writing the complete document, exit 1 when it contains at least one =failure= case. |
 
-At least one of =--result= or =--reframe-report= is required.
+At least one of =--result= or =--reframe-report= is required unless =EB_PIPELINE_RESULT= is set.
+When neither input option is present, =EB_PIPELINE_RESULT= supplies one =--result= file; a command-line input wins.
 
 Exit 0 means the document was written, including when =exit_code= in a result is not 0.
 With =--fail-on-failure=, exit 1 means the document was written and contains at least one failure.

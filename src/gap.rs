@@ -141,12 +141,7 @@ fn execute(bin: &str, argv: &[String]) -> Result<Output, Fail> {
         .args(argv)
         .stdin(Stdio::null())
         .output()
-        .map_err(|error| {
-            Fail::new(
-                exit::FAILED,
-                format!("cannot run `{bin} {}`: {error}", argv.join(" ")),
-            )
-        })
+        .map_err(|error| Fail::usage(format!("cannot run `{bin} {}`: {error}", argv.join(" "))))
 }
 
 fn write(path: &Path, bytes: &[u8]) -> Result<(), Fail> {
@@ -162,7 +157,7 @@ fn emit(bytes: &[u8], stderr: bool) -> Result<(), Fail> {
     let result = if stderr {
         std::io::stderr().write_all(bytes)
     } else {
-        std::io::stdout().write_all(bytes)
+        util::write_stdout(bytes)
     };
     result.map_err(|error| {
         Fail::new(

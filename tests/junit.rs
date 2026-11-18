@@ -466,3 +466,14 @@ fn junit_succeeds_when_stdout_consumer_closes() {
         String::from_utf8_lossy(&o.stderr)
     );
 }
+
+#[test]
+fn value_options_do_not_consume_the_next_long_option() {
+    let output = bin()
+        .args(["--result", "--fail-on-failure"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stdout, b"");
+    assert_eq!(output.stderr, b"eb-junit: --result needs a value\n");
+}

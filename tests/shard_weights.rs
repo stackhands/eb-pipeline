@@ -606,3 +606,14 @@ fn a_successful_result_line_requires_a_numeric_duration() {
     assert_eq!(valid.stdout, b"A/1.0\t2\n");
     assert_eq!(valid.stderr, b"");
 }
+
+#[test]
+fn value_options_do_not_consume_the_next_long_option() {
+    let output = bin()
+        .args(["--result", "--target", "cpu"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stdout, b"");
+    assert_eq!(output.stderr, b"eb-shard-weights: --result needs a value\n");
+}
