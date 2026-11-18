@@ -531,9 +531,16 @@ fn patch_literals(text: &str) -> Vec<String> {
             continue;
         };
         let rest = rest.trim_start();
-        let Some(rhs) = rest.strip_prefix("+=").or_else(|| rest.strip_prefix('=')) else {
+        let (append, rhs) = if let Some(rhs) = rest.strip_prefix("+=") {
+            (true, rhs)
+        } else if let Some(rhs) = rest.strip_prefix('=') {
+            (false, rhs)
+        } else {
             continue;
         };
+        if !append {
+            out.clear();
+        }
         let mut rest = rhs;
         while let Some(start) = rest.find(['\'', '"']) {
             let quote = rest[start..].chars().next().unwrap_or('"');
@@ -911,6 +918,16 @@ patches = [
 ]
 ";
         assert_eq!(patch_literals(text), ["real.patch"]);
+    }
+
+    #[test]
+    fn patch_assignment_replaces_and_append_assignment_extends() {
+        let text = "\
+patches = ['old.patch']
+patches = ['new.patch']
+patches += ['extra.patch']
+";
+        assert_eq!(patch_literals(text), ["new.patch", "extra.patch"]);
     }
 
     #[test]
