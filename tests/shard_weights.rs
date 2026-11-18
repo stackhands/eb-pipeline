@@ -3,7 +3,10 @@
 use std::process::Command;
 
 fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_eb-shard-weights"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_eb-shard-weights"));
+    command.env_remove("EB_PIPELINE_RESULT");
+    command.env_remove("EB_PIPELINE_TARGET");
+    command
 }
 
 #[test]
@@ -43,6 +46,36 @@ fn successful_build_durations_become_sorted_tab_separated_weights() {
         String::from_utf8(o.stdout).unwrap(),
         "GROMACS/2024.1-foss-2023b\t125\npigz/2.8-GCCcore-15.2.0\t1\n"
     );
+}
+
+#[test]
+fn common_environment_falls_back_and_flags_win() {
+    let dir = tempfile::tempdir().unwrap();
+    let result = dir.path().join("result.json");
+    std::fs::write(
+        &result,
+        r#"{"kind":"result","target":"cpu","lines":[{"easyconfig":"A-1.0.eb","phase":"build","status":"success","duration_seconds":2.0}]}"#,
+    )
+    .unwrap();
+    let from_env = bin()
+        .env("EB_PIPELINE_RESULT", &result)
+        .env("EB_PIPELINE_TARGET", "cpu")
+        .output()
+        .unwrap();
+    let from_flags = bin()
+        .args(["--result"])
+        .arg(&result)
+        .args(["--target", "cpu"])
+        .env("EB_PIPELINE_RESULT", dir.path().join("wrong.json"))
+        .env("EB_PIPELINE_TARGET", "wrong")
+        .output()
+        .unwrap();
+    assert_eq!(from_env.status.code(), Some(0));
+    assert_eq!(from_flags.status.code(), Some(0));
+    assert_eq!(from_env.stdout, b"A/1.0\t2\n");
+    assert_eq!(from_flags.stdout, from_env.stdout);
+    assert!(from_env.stderr.is_empty());
+    assert!(from_flags.stderr.is_empty());
 }
 
 #[test]
@@ -255,6 +288,8 @@ fn log_root_and_existing_weights_aggregate_with_mode_and_target_filter() {
         .arg(&existing)
         .args(["--mode", "max", "--out"])
         .arg(&out)
+        .env("EB_PIPELINE_RESULT", dir.path().join("wrong.json"))
+        .env("EB_PIPELINE_TARGET", "wrong")
         .output()
         .unwrap();
     assert_eq!(
