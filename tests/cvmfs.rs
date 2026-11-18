@@ -318,21 +318,52 @@ fn a_failed_publish_has_duration_but_no_success_timestamp() {
 fn a_shared_metrics_file_serializes_whole_invocations() {
     let fixture = Fixture::new();
     let metrics = fixture.dir.path().join("cvmfs.prom");
+    let ready = fixture.dir.path().join("sync.ready");
+    let release = fixture.dir.path().join("sync.release");
+    write_exec(
+        &fixture.sync,
+        "#!/bin/sh\n\
+         echo \"sync $*\" >> \"$CALLS\"\n\
+         if [ -n \"${SYNC_READY:-}\" ]; then\n\
+           : > \"$SYNC_READY\"\n\
+           while [ ! -e \"$SYNC_RELEASE\" ]; do /bin/sleep 0.01; done\n\
+         fi\n",
+    );
     let mut first = fixture.command_with_metrics(Some(&metrics));
-    first.env("SYNC_DELAY", "0.2");
+    first
+        .env("SYNC_READY", &ready)
+        .env("SYNC_RELEASE", &release);
     let first = first.spawn().unwrap();
-    for _ in 0..100 {
-        if fixture.calls().contains("sync --delete") {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
+    let became_ready = wait_for_path(&ready, std::time::Duration::from_secs(10));
+    if !became_ready {
+        std::fs::write(&release, b"go\n").unwrap();
     }
-    assert!(fixture.calls().contains("sync --delete"));
+    assert!(
+        became_ready,
+        "first synchronization did not become ready; calls:\n{}",
+        fixture.calls()
+    );
+    assert_eq!(
+        fixture.calls(),
+        "list\ntransaction repo.example\nsync --delete\n"
+    );
 
-    let second = fixture
+    let mut second = fixture
         .command_with_metrics(Some(&metrics))
         .spawn()
         .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let second_status = second.try_wait();
+    let calls_while_locked = fixture.calls();
+    std::fs::write(release, b"go\n").unwrap();
+    assert!(
+        second_status.unwrap().is_none(),
+        "second invocation finished while the first held the metrics lock"
+    );
+    assert_eq!(
+        calls_while_locked,
+        "list\ntransaction repo.example\nsync --delete\n"
+    );
     let first = first.wait_with_output().unwrap();
     let second = second.wait_with_output().unwrap();
     assert_eq!(code(&first), 0, "{}", stderr(&first));
@@ -350,6 +381,17 @@ sync --delete
 publish repo.example
 "
     );
+}
+
+fn wait_for_path(path: &Path, timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while !path.exists() {
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    true
 }
 
 #[test]
