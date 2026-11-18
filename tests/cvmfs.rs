@@ -347,6 +347,26 @@ fn failed_sync_preserves_the_last_publish_and_records_its_completed_abort() {
 }
 
 #[test]
+fn signaled_sync_preserves_128_plus_signal_exit_code() {
+    let fixture = Fixture::new();
+    let metrics = fixture.dir.path().join("cvmfs.prom");
+    write_exec(
+        &fixture.sync,
+        "#!/bin/sh\necho \"sync $*\" >> \"$CALLS\"\nkill -TERM \"$$\"\n",
+    );
+
+    let output = fixture.command_with_metrics(Some(&metrics)).sync_output();
+
+    assert_eq!(code(&output), 143, "{}", stderr(&output));
+    assert_eq!(
+        fixture.calls(),
+        "list\ntransaction repo.example\nsync --delete\nabort -f repo.example\n"
+    );
+    let text = std::fs::read_to_string(metrics).unwrap();
+    assert_eq!(sample(&text, "eb_cvmfs_exit_code"), Some(143.0));
+}
+
+#[test]
 fn an_abort_that_cannot_start_is_not_counted_or_called_complete() {
     let fixture = Fixture::new();
     let metrics = fixture.dir.path().join("cvmfs.prom");
@@ -1387,6 +1407,27 @@ fn concurrent_fixture_exec_writes_do_not_hit_text_file_busy() {
     for worker in workers {
         worker.join().unwrap();
     }
+}
+
+#[test]
+fn cvmfs_dry_run_succeeds_when_stdout_consumer_closes() {
+    let mut fds = [0; 2];
+    unsafe {
+        assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+        assert_eq!(libc::close(fds[0]), 0);
+    }
+    let closed = unsafe { <std::process::Stdio as std::os::fd::FromRawFd>::from_raw_fd(fds[1]) };
+    let o = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
+        .args(["--dry-run", "repo.example", "--", "sync"])
+        .stdout(closed)
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
 }
 
 #[test]

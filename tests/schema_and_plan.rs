@@ -332,6 +332,76 @@ fn plan_succeeds_when_its_output_consumer_closes() {
 }
 
 #[test]
+fn stdout_subcommands_succeed_when_consumer_closes() {
+    let d = tempfile::tempdir().unwrap();
+    let result = d.path().join("result.json");
+    std::fs::write(
+        &result,
+        r#"{"kind":"result","site":"s","target":"t","build_type":"b","run_id":"r","sharded":false,"exit_code":0,"ended_at":"2026-11-17T20:00:00Z","duration_seconds":1.0}"#,
+    )
+    .unwrap();
+    let site = d.path().join("site.toml");
+    let site_text = std::fs::read_to_string(example("eessi-site.toml"))
+        .unwrap()
+        .replace(
+            "/tmp/eessi-logs",
+            &d.path().join("logs").display().to_string(),
+        );
+    std::fs::write(&site, site_text).unwrap();
+
+    let cases: Vec<Vec<String>> = vec![
+        vec!["schema".into()],
+        vec!["init".into(), "--list".into()],
+        vec!["init".into(), "--template".into(), "small-cluster".into()],
+        vec![
+            "targets".into(),
+            "--site".into(),
+            site.display().to_string(),
+        ],
+        vec![
+            "targets".into(),
+            "--site".into(),
+            site.display().to_string(),
+            "--format".into(),
+            "json".into(),
+        ],
+        vec![
+            "explain".into(),
+            "--site".into(),
+            site.display().to_string(),
+            "--format".into(),
+            "toml".into(),
+        ],
+        vec!["status".into(), "--site".into(), site.display().to_string()],
+        vec![
+            "metrics".into(),
+            "--result".into(),
+            result.display().to_string(),
+        ],
+        vec![
+            "metrics".into(),
+            "--result".into(),
+            result.display().to_string(),
+            "--format".into(),
+            "json".into(),
+        ],
+    ];
+    for args in &cases {
+        let o = bin()
+            .args(args)
+            .stdout(common::closed_stdout())
+            .output()
+            .unwrap();
+        assert_eq!(
+            o.status.code(),
+            Some(0),
+            "args={args:?} stderr={}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    }
+}
+
+#[test]
 fn schema_subcommand_lists_every_key() {
     let o = bin().arg("schema").output().unwrap();
     assert_eq!(o.status.code(), Some(0));

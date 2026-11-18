@@ -1,0 +1,1 @@
+Route standard output writes across `eb-pipeline` subcommands (`explain`, `targets`, `status`, `metrics`, `init`, `watch --dry-run`, `verify`, and `schema`) through `util::write_stdout` so early closed pipes exit `0` instead of panicking with exit `101`.
