@@ -1,0 +1,5 @@
+#+title: From-commit exit status
+
+* Delegated checks
+
+=eb-pipeline check --check-from-commit= returns the exit status from =eb-stack stack from-commit=. A child terminated by a signal returns =128 + signal=, such as 143 for =SIGTERM=.
