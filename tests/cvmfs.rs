@@ -1438,3 +1438,62 @@ fn archive_manifest_accepts_equals_form_and_rejects_empty_or_duplicate() {
     assert_eq!(code(&dup), 2);
     assert!(stderr(&dup).contains("`--archive-manifest` was given twice"));
 }
+
+#[test]
+fn value_options_do_not_consume_the_next_long_option() {
+    let fixture = Fixture::new();
+    let cases = [
+        (
+            &["--metrics-file", "--check"][..],
+            "--metrics-file requires PATH",
+        ),
+        (&["--tag", "--check"][..], "`--tag` requires NAME"),
+        (
+            &["--tag", "release", "--tag-description", "--check"][..],
+            "`--tag-description` requires TEXT",
+        ),
+        (
+            &["--verify-cmd", "--check"][..],
+            "`--verify-cmd` requires CMD",
+        ),
+        (
+            &["--archive-manifest", "--check"][..],
+            "`--archive-manifest` needs a path",
+        ),
+        (
+            &["--sync-timeout", "--check"][..],
+            "`--sync-timeout` requires SEC",
+        ),
+        (
+            &["--verify-timeout", "--check"][..],
+            "`--verify-timeout` requires SEC",
+        ),
+        (
+            &["--publish-timeout", "--check"][..],
+            "`--publish-timeout` requires SEC",
+        ),
+        (
+            &["--check-timeout", "--check"][..],
+            "`--check-timeout` requires SEC",
+        ),
+    ];
+
+    for (args, message) in cases {
+        let output = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
+            .env("PATH", &fixture.bin)
+            .current_dir(fixture.dir.path())
+            .arg("--dry-run")
+            .args(args)
+            .args(["repo.example", "--"])
+            .arg(&fixture.sync)
+            .sync_output();
+        assert_eq!(code(&output), 2, "{args:?}: {}", stderr(&output));
+        assert_eq!(output.stdout, b"", "{args:?}");
+        assert_eq!(
+            output.stderr,
+            format!("eb-cvmfs: {message}\n").as_bytes(),
+            "{args:?}"
+        );
+    }
+    assert!(!fixture.dir.path().join("--check").exists());
+}
