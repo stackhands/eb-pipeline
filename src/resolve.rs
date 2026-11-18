@@ -363,6 +363,7 @@ impl<'a> Scope<'a> {
                     .iter()
                     .chain(&r.shares_ro)
                     .chain(&r.shares_rw)
+                    .chain(r.env.values())
                     .any(|a| a.contains("{phase_dir}")) =>
             {
                 vec![format!("{}/{}", self.log_dir(), phase)]
@@ -774,6 +775,28 @@ Foo = "2"
         assert_eq!(
             licence_group(&licences, "Foo", Some("2rc1")),
             Some("licensed".into())
+        );
+    }
+
+    #[test]
+    fn route_environment_phase_directories_are_created() {
+        let text = format!(
+            "{}\n[targets.route]\nkind = \"command\"\ncommand = \"/opt/route\"\n\
+             [targets.route.env]\nWORK = \"{{phase_dir}}\"\n",
+            include_str!("../templates/small-cluster.toml")
+        );
+        let site = crate::site::parse(&text).unwrap();
+        let scope = Scope {
+            site: &site,
+            site_file: None,
+            target: site.target("cpu").unwrap(),
+            build_type: None,
+            run_id: "run".into(),
+            log_stamp: "20261118_190000".into(),
+        };
+        assert_eq!(
+            scope.route_dirs("build"),
+            [format!("{}/build", scope.log_dir())]
         );
     }
 
