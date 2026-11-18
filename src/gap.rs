@@ -157,7 +157,7 @@ fn emit(bytes: &[u8], stderr: bool) -> Result<(), Fail> {
     let result = if stderr {
         std::io::stderr().write_all(bytes)
     } else {
-        std::io::stdout().write_all(bytes)
+        util::write_stdout(bytes)
     };
     result.map_err(|error| {
         Fail::new(
