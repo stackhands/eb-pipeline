@@ -12,6 +12,7 @@ use crate::util::{self, ListLine};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -251,6 +252,16 @@ fn exec(cmd: &Cmd, base_env: &BTreeMap<String, String>, log: &Path) -> Result<Ex
         .stdin(Stdio::null())
         .stdout(Stdio::from(out))
         .stderr(Stdio::from(err));
+    // SAFETY: setpgid is async-signal-safe and runs before the child execs.
+    unsafe {
+        c.pre_exec(|| {
+            if libc::setpgid(0, 0) == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        });
+    }
     let started = Instant::now();
     let mut child = match c.spawn() {
         Ok(ch) => ch,
@@ -265,20 +276,20 @@ fn exec(cmd: &Cmd, base_env: &BTreeMap<String, String>, log: &Path) -> Result<Ex
     };
     let mut forwarded = 0;
     let status = loop {
+        if let Some(sig) = interrupted() {
+            if forwarded != sig {
+                // SAFETY: the negative pid names the process group created for this child.
+                unsafe {
+                    libc::kill(-(child.id() as libc::pid_t), sig);
+                }
+                forwarded = sig;
+            }
+        }
         match child.try_wait() {
             Ok(Some(s)) => break s,
             Ok(None) => {}
             Err(e) => {
                 return Err(Fail::new(exit::FAILED, format!("wait failed: {e}")));
-            }
-        }
-        if let Some(sig) = interrupted() {
-            if forwarded != sig {
-                // SAFETY: the pid belongs to a child this process started.
-                unsafe {
-                    libc::kill(child.id() as libc::pid_t, sig);
-                }
-                forwarded = sig;
             }
         }
         std::thread::sleep(Duration::from_millis(20));

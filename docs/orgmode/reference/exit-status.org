@@ -98,7 +98,8 @@ The refusals before the first build leave every line unbuilt.
 
 *** 130 and 143
 
-=run= passes the signal to the running command and waits for it to end.
+=run= passes the signal to the process group of the running command and waits for the command to end.
+The process group includes subprocesses that the command started.
 It starts no other command, records the phase as =interrupted=, writes the result file and the run summary, and exits 130 for =SIGINT= or 143 for =SIGTERM=.
 The rebuild of =watch= does the same, and =watch= then changes no record.
 

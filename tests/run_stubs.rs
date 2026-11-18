@@ -92,6 +92,14 @@ env | grep '^EB_PIPELINE_\|^EASYBUILD_\|^ROUTE_' | sort > "$D/env.$kind.$stem"
 if [ -n "${STUB_EB_PIPELINE:-}" ]; then
   (cd / && "$STUB_EB_PIPELINE" targets) > "$D/targets.$stem" 2>&1 || exit 1
 fi
+if [ -n "${STUB_EB_DESCENDANT:-}" ]; then
+  "$D/descendant" &
+  pid=$!
+  echo "$pid" > "$D/descendant.pid"
+  echo started > "$D/started"
+  wait "$pid"
+  exit 0
+fi
 if [ -n "${STUB_EB_DELAY:-}" ]; then sleep "$STUB_EB_DELAY"; fi
 if [ -n "${STUB_EB_SLEEP:-}" ]; then
   echo started > "$D/started"
@@ -267,6 +275,7 @@ fn use_eb_stack_from_path(env: &Env) {
 
 struct Out {
     code: i32,
+    stdout: Vec<u8>,
     stderr: String,
     result: Option<Value>,
 }
@@ -342,6 +351,7 @@ fn finish(env: &Env, child: std::process::Child) -> Out {
         .map(|t| serde_json::from_str(&t).unwrap());
     Out {
         code: o.status.code().unwrap_or(-1),
+        stdout: o.stdout,
         stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
         result,
     }
@@ -388,6 +398,32 @@ fn success_exits_zero_and_records_lines() {
         "{}",
         o.stderr
     );
+}
+
+#[test]
+fn successful_run_default_output_bytes_remain_unchanged() {
+    let env = setup("");
+    let o = go(&env, "Foo-1.0-foss-2025a.eb\n", &[]);
+    assert_eq!(o.code, 0);
+    assert_eq!(o.stdout, b"");
+    let root = env.dir.path().display();
+    let stderr = format!(
+        concat!(
+            "INFO [licences] cpu: not configured\n",
+            "INFO [shard] cpu: not configured\n",
+            "INFO [sources] cpu: not configured\n",
+            "INFO [admission] cpu: not configured\n",
+            "INFO [checks] cpu: not configured\n",
+            "INFO [caches] cpu: not configured\n",
+            "INFO [logs] cpu: not configured\n",
+            "INFO [build] cpu: Foo-1.0-foss-2025a: start\n",
+            "INFO [build] cpu: Foo-1.0-foss-2025a: ok\n",
+            "INFO [summary] cpu: summary.json and summary.html written in ",
+            "{root}/logs/20260101_000000\n",
+        ),
+        root = root,
+    );
+    assert_eq!(o.stderr.as_bytes(), stderr.as_bytes());
 }
 
 #[test]
@@ -1349,6 +1385,69 @@ fn sigterm_is_forwarded_and_exit_is_143() {
     assert_eq!(lines[0]["easyconfig"], "Foo-1.0-foss-2025a.eb");
     assert_eq!(lines[1]["status"], "skipped");
     assert_eq!(lines[1]["easyconfig"], "Bar-2.0-foss-2025a.eb");
+}
+
+#[test]
+fn sigterm_reaches_descendants_of_the_running_command() {
+    let env = setup("");
+    write_exec(
+        &env.dir.path().join("descendant"),
+        r#"#!/bin/sh
+trap 'echo term > "$STUB_DIR/descendant.termed"; exit 0' TERM
+echo ready > "$STUB_DIR/descendant.ready"
+while :; do sleep 1; done
+"#,
+    );
+    let mut child = driver(&env, LIST, &[("STUB_EB_DESCENDANT", "1")], &[]);
+    let ready = env.dir.path().join("descendant.ready");
+    let t0 = Instant::now();
+    while !ready.exists() {
+        assert!(
+            t0.elapsed() < Duration::from_secs(20),
+            "descendant never started"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // SAFETY: the pid is the driver child this test started.
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+    }
+    let t0 = Instant::now();
+    let status = loop {
+        if let Some(s) = child.try_wait().unwrap() {
+            break s;
+        }
+        assert!(
+            t0.elapsed() < Duration::from_secs(20),
+            "driver did not exit"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(status.code(), Some(143));
+
+    let terminated = env.dir.path().join("descendant.termed");
+    let t0 = Instant::now();
+    let descendant_stopped = loop {
+        if terminated.exists() {
+            break true;
+        }
+        if t0.elapsed() >= Duration::from_secs(2) {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    if !descendant_stopped {
+        let pid: libc::pid_t = file_text(&env, "descendant.pid").trim().parse().unwrap();
+        // SAFETY: this cleans up the descendant pid recorded by the test stub.
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+    }
+    assert!(
+        descendant_stopped,
+        "SIGTERM did not reach the running command's descendant"
+    );
 }
 
 #[test]
