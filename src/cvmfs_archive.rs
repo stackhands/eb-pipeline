@@ -176,8 +176,8 @@ fn resolve_directory(manifest: &Path, directory: &str) -> Result<PathBuf, String
 }
 
 fn one_archive(directory: &Path, name: &str) -> Result<PathBuf, String> {
-    match fs::symlink_metadata(directory) {
-        Ok(meta) if meta.file_type().is_dir() => {}
+    match fs::metadata(directory) {
+        Ok(meta) if meta.is_dir() => {}
         Ok(_) => return Err(fail("directory is not a directory")),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             return Err(fail("directory does not exist"));
@@ -816,6 +816,18 @@ mod tests {
             file_bytes("pkg/file", 1000, 1000, b"hi"),
         ]);
         let manifest = place(root.path(), "cache.tar", &bytes);
+        check(&manifest).unwrap();
+    }
+
+    #[test]
+    fn a_symlinked_archive_directory_is_accepted() {
+        let root = tempfile::tempdir().unwrap();
+        let bytes = archive(&[file_bytes("pkg", 0, 0, b"x")]);
+        std::fs::create_dir(root.path().join("real-ingest")).unwrap();
+        std::fs::write(root.path().join("real-ingest/cache.tar"), &bytes).unwrap();
+        std::os::unix::fs::symlink("real-ingest", root.path().join("ingest")).unwrap();
+        let manifest = write_manifest(root.path(), "ingest", "cache.tar", &bytes, "i32", "i32");
+
         check(&manifest).unwrap();
     }
 
