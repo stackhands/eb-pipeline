@@ -52,7 +52,7 @@ def archive_bins(path: pathlib.Path) -> set[str]:
     names: set[str] = set()
     with tarfile.open(path, mode="r:xz") as tar:
         for member in tar.getmembers():
-            if not member.isfile():
+            if not member.isfile() or member.mode & 0o111 == 0:
                 continue
             parts = pathlib.PurePosixPath(member.name).parts
             if len(parts) != 2:
