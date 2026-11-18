@@ -10,7 +10,7 @@ use std::env;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::fd::AsRawFd;
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitCode, ExitStatus};
 use std::time::{Duration, Instant};
@@ -683,16 +683,7 @@ fn grouped_status(command: &mut Command, timeout: Option<Duration>) -> io::Resul
     let deadline = Instant::now()
         .checked_add(timeout)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "timeout is too large"))?;
-    // SAFETY: `setpgid` is async-signal-safe, and the closure captures nothing.
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setpgid(0, 0) == 0 {
-                Ok(())
-            } else {
-                Err(io::Error::last_os_error())
-            }
-        });
-    }
+    eb_pipeline::util::set_new_process_group(command);
     let mut child = command.spawn()?;
     loop {
         if let Some(status) = child.try_wait()? {
@@ -707,18 +698,10 @@ fn grouped_status(command: &mut Command, timeout: Option<Duration>) -> io::Resul
 }
 
 fn terminate_group(child: &mut Child) {
-    signal_group(child.id(), libc::SIGTERM);
+    eb_pipeline::util::signal_process_group(child.id(), libc::SIGTERM);
     std::thread::sleep(TERMINATION_GRACE);
-    signal_group(child.id(), libc::SIGKILL);
+    eb_pipeline::util::signal_process_group(child.id(), libc::SIGKILL);
     let _ = child.wait();
-}
-
-fn signal_group(id: u32, signal: libc::c_int) {
-    // SAFETY: the negative pid addresses the process group created for this
-    // child. The unreaped group leader prevents its pid from being reused.
-    unsafe {
-        libc::kill(-(id as libc::pid_t), signal);
-    }
 }
 
 fn timeout_message(phase: &str, timeout: Duration) {

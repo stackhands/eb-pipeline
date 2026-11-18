@@ -5,6 +5,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
 /// Whether two paths name the same file, including through a symbolic or
@@ -62,6 +63,34 @@ pub fn refuse_output_alias(
         }
     }
     Ok(())
+}
+
+/// Arrange for `command` to start in a new process group whose id equals the
+/// child pid.
+pub fn set_new_process_group(command: &mut std::process::Command) {
+    // SAFETY: `setpgid` is async-signal-safe, runs in the child before exec,
+    // and the closure captures nothing.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        });
+    }
+}
+
+/// Send `signal` to the process group whose leader id is `pgid`.
+pub fn signal_process_group(pgid: u32, signal: libc::c_int) {
+    if pgid == 0 {
+        return;
+    }
+    // SAFETY: the negative pid addresses the process group created for this
+    // child by `set_new_process_group`.
+    unsafe {
+        libc::kill(-(pgid as libc::pid_t), signal);
+    }
 }
 
 /// Atomically replace `path` through a fully written temporary sibling.
