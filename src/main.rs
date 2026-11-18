@@ -1,4 +1,5 @@
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::{generate_to, shells};
 use eb_pipeline::exit::{self, Fail};
 use eb_pipeline::package_plan;
 use eb_pipeline::plan::{build_plan, read_units, Planner};
@@ -234,6 +235,23 @@ enum Cmd {
         #[arg(long)]
         result: Option<PathBuf>,
     },
+    /// Generate shell completion scripts from the clap command definition.
+    #[command(hide = true)]
+    Completions {
+        /// Target shell.
+        #[arg(long, value_enum)]
+        shell: CompletionShell,
+        /// Output directory.
+        #[arg(long)]
+        out_dir: PathBuf,
+    },
+    /// Generate a section 1 man page from the clap command definition.
+    #[command(hide = true)]
+    Man {
+        /// Output directory.
+        #[arg(long)]
+        out_dir: PathBuf,
+    },
 }
 
 #[derive(Args)]
@@ -302,6 +320,13 @@ enum TextOrJson {
 enum StatusFormat {
     Prometheus,
     Json,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum CompletionShell {
+    Bash,
+    Zsh,
+    Fish,
 }
 
 fn to_sorted<T: Serialize>(v: &T) -> serde_json::Value {
@@ -549,6 +574,66 @@ fn cmd_init(
             );
         }
     }
+    Ok(exit::OK)
+}
+
+fn cmd_completions(shell: CompletionShell, out_dir: &Path) -> Result<i32, Fail> {
+    let mut cmd = Cli::command();
+    std::fs::create_dir_all(out_dir).map_err(|e| {
+        Fail::new(
+            exit::FAILED,
+            format!("cannot create {}: {e}", out_dir.display()),
+        )
+    })?;
+    match shell {
+        CompletionShell::Bash => generate_to(shells::Bash, &mut cmd, "eb-pipeline", out_dir)
+            .map_err(|e| {
+                Fail::new(
+                    exit::FAILED,
+                    format!("cannot write completions in {}: {e}", out_dir.display()),
+                )
+            })?,
+        CompletionShell::Zsh => generate_to(shells::Zsh, &mut cmd, "eb-pipeline", out_dir)
+            .map_err(|e| {
+                Fail::new(
+                    exit::FAILED,
+                    format!("cannot write completions in {}: {e}", out_dir.display()),
+                )
+            })?,
+        CompletionShell::Fish => generate_to(shells::Fish, &mut cmd, "eb-pipeline", out_dir)
+            .map_err(|e| {
+                Fail::new(
+                    exit::FAILED,
+                    format!("cannot write completions in {}: {e}", out_dir.display()),
+                )
+            })?,
+    };
+    Ok(exit::OK)
+}
+
+fn cmd_man(out_dir: &Path) -> Result<i32, Fail> {
+    std::fs::create_dir_all(out_dir).map_err(|e| {
+        Fail::new(
+            exit::FAILED,
+            format!("cannot create {}: {e}", out_dir.display()),
+        )
+    })?;
+    let cmd = Cli::command();
+    let man = clap_mangen::Man::new(cmd.clone());
+    let mut out = Vec::new();
+    man.render(&mut out).map_err(|e| {
+        Fail::new(
+            exit::FAILED,
+            format!("cannot render man page for {}: {e}", cmd.get_name()),
+        )
+    })?;
+    let path = out_dir.join("eb-pipeline.1");
+    std::fs::write(&path, out).map_err(|e| {
+        Fail::new(
+            exit::FAILED,
+            format!("cannot write {}: {e}", path.display()),
+        )
+    })?;
     Ok(exit::OK)
 }
 
@@ -1362,6 +1447,8 @@ fn main() {
             plan_out: plan_out.as_deref(),
             result: result.as_deref(),
         }),
+        Cmd::Completions { shell, out_dir } => cmd_completions(*shell, out_dir),
+        Cmd::Man { out_dir } => cmd_man(out_dir),
     };
     let code = match r {
         Ok(c) => c,
