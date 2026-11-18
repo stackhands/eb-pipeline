@@ -31,6 +31,7 @@ An error that ends a command is written to stderr as =ERROR [main] -: MESSAGE=.
 - =run=: no line failed, was refused or is pending, and no phase failed.
   A deselected line, a phase that is not configured, an =unsharded= shard phase and a =logs= phase that another rotation made =skipped= all leave the status at 0.
 - =watch=: no install is recorded, EESSI is as recorded, or no recorded install needs a rebuild; =--dry-run= printed the plan, or =--adopt= recorded the installs; or the rebuild exited 0.
+- =audit=: all requested =eb-stack= subcommands exited 0, any generated rebuild lists were copied, and (when =--strict= is set) zero backport items were reported.
 
 *** 1
 
@@ -48,6 +49,7 @@ An error that ends a command is written to stderr as =ERROR [main] -: MESSAGE=.
 - =verify=: the inclusion proof does not meet its checkpoint, or the blob file does not match the proof.
 - =status=: the log root could not be read.
 - =watch=: the rebuild exited 1; an eb-stack call failed, or what it wrote could not be read; or the record, the state file, the plan or the rebuild list could not be read or written.
+- =audit=: =--out-dir= or its working directory could not be created, an =eb-stack= subcommand exited non-zero or its log could not be read, a rebuild list could not be copied, or =--strict= saw one or more backport items.
 
 A failed =eb-keep-logs failed= after a failed line leaves the status as it is, with a =WARN= line.
 So does a run summary that cannot be written, or sent to the webhook of =[notify]=, as [[file:run-summary.org][The run summary]] says, and a record of =[watch]= that fails, as [[file:watch.org][The watch state and plan]] says.
@@ -67,6 +69,7 @@ So does a run summary that cannot be written, or sent to the webhook of =[notify
 - =verify=: =[attest]= is absent or =enabled= is false.
 - =plan=, =run= or =verify=: =[attest]= is enabled and the command was given =--package-plan= instead of =--list=.
 - =watch=: eb-stack prints a version below its =min_version=.
+- =audit=: =--cve= was given without =sbom.lock= in the site file, or =eb-stack= prints a version below its =min_version=.
 
 *** 75
 
@@ -74,6 +77,7 @@ So does a run summary that cannot be written, or sent to the webhook of =[notify
 - =watch=: another watch of the target holds =STATE_DIR/TARGET.watch.lock=, the module environment of the target did not load, or the EESSI repository or one of its module trees cannot be read.
 - =watch=: =REPOSITORY/versions= holds a =YYYY.MM= directory newer than the =EESSI_VERSION= the module environment loads. Watch only detects that. It does not ask eb-stack for a rebuild set. =watch --adopt= still records the loaded generation.
 - =watch=: the rebuild exited 75.
+- =audit=: the module environment of the target did not load, or the EESSI repository or one of its module trees cannot be read.
 
 *** 78
 
@@ -95,6 +99,7 @@ The refusals before the first build leave every line unbuilt.
 
 - =watch=: the site file has no =[watch]= table, or it is off; the module environment loads no EESSI; recorded installs were built against another EESSI version or CPU subdirectory; eb-stack cannot be started; or a dependency vanished from EESSI, and no easyconfig tree is there to plan its build from.
 - =watch=: the rebuild exited 78.
+- =audit=: =eb-stack= cannot be started, or the module environment of the target loads no EESSI.
 
 *** 130 and 143
 
@@ -103,6 +108,7 @@ The process group includes subprocesses that the command started.
 It starts no other command, records the phase as =interrupted=, writes the result file and the run summary, and exits 130 for =SIGINT= or 143 for =SIGTERM=.
 The active build line is =failed= with that same status, even when its command handles the signal and exits 0.
 The rebuild of =watch= does the same, and =watch= then changes no record.
+An attestation helper killed by a signal reports and returns =128 + signal=.
 
 ** Command deadlines
 

@@ -11,7 +11,6 @@ use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::io::{self, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -90,8 +89,7 @@ fn run() -> Result<ExitCode, String> {
                 .map_err(|e| format!("cannot write {path}: {e}"))?;
         }
         _ => {
-            let mut out = io::stdout().lock();
-            out.write_all(report.as_bytes())
+            util::write_stdout(report.as_bytes())
                 .map_err(|e| format!("cannot write the report: {e}"))?;
         }
     }
@@ -156,6 +154,11 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 }
                 return Err(format!("does not know `{word}`"));
             }
+        }
+    }
+    if results.is_empty() && reframe_reports.is_empty() {
+        if let Some(result) = util::env_value("EB_PIPELINE_RESULT") {
+            results.push(result);
         }
     }
     if results.is_empty() && reframe_reports.is_empty() {

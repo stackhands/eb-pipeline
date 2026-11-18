@@ -8,7 +8,7 @@ mod archive_manifest;
 
 use std::env;
 use std::fs::{File, OpenOptions};
-use std::io;
+use std::io::{self, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -18,6 +18,14 @@ use std::time::{Duration, Instant};
 const TIMEOUT_EXIT: u8 = 124;
 const MAX_TIMEOUT_SECONDS: u64 = i32::MAX as u64;
 const TERMINATION_GRACE: Duration = Duration::from_secs(1);
+
+fn write_stdout(bytes: &[u8]) -> Result<(), String> {
+    match io::stdout().lock().write_all(bytes) {
+        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        Err(e) => Err(format!("cannot write stdout: {e}")),
+        Ok(()) => Ok(()),
+    }
+}
 
 struct Args {
     check: bool,
@@ -123,9 +131,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 if metrics_file.is_some() {
                     return Err("--metrics-file may be given only once".into());
                 }
-                let path = words
-                    .next()
-                    .ok_or_else(|| "--metrics-file requires PATH".to_string())?;
+                let path = separate_value(&mut words, "--metrics-file requires PATH")?;
                 if path.is_empty() {
                     return Err("--metrics-file PATH must not be empty".into());
                 }
@@ -135,9 +141,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 if tag.is_some() {
                     return Err("`--tag` may be given only once".into());
                 }
-                let name = words
-                    .next()
-                    .ok_or_else(|| "`--tag` requires NAME".to_string())?;
+                let name = separate_value(&mut words, "`--tag` requires NAME")?;
                 if name.is_empty() {
                     return Err("`--tag` must not be empty".into());
                 }
@@ -147,9 +151,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 if tag_description.is_some() {
                     return Err("`--tag-description` may be given only once".into());
                 }
-                let text = words
-                    .next()
-                    .ok_or_else(|| "`--tag-description` requires TEXT".to_string())?;
+                let text = separate_value(&mut words, "`--tag-description` requires TEXT")?;
                 if text.is_empty() {
                     return Err("`--tag-description` must not be empty".into());
                 }
@@ -159,31 +161,29 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 if verify_cmd.is_some() {
                     return Err("`--verify-cmd` may be given only once".into());
                 }
-                verify_cmd = Some(
-                    words
-                        .next()
-                        .ok_or_else(|| "`--verify-cmd` requires CMD".to_string())?,
-                );
+                verify_cmd = Some(separate_value(&mut words, "`--verify-cmd` requires CMD")?);
             }
             "--sync-timeout" => {
-                set_timeout(&mut sync_timeout, "--sync-timeout", words.next())?;
+                let value = separate_value(&mut words, "`--sync-timeout` requires SEC")?;
+                set_timeout(&mut sync_timeout, "--sync-timeout", Some(value))?;
             }
             "--verify-timeout" => {
-                set_timeout(&mut verify_timeout, "--verify-timeout", words.next())?;
+                let value = separate_value(&mut words, "`--verify-timeout` requires SEC")?;
+                set_timeout(&mut verify_timeout, "--verify-timeout", Some(value))?;
             }
             "--publish-timeout" => {
-                set_timeout(&mut publish_timeout, "--publish-timeout", words.next())?;
+                let value = separate_value(&mut words, "`--publish-timeout` requires SEC")?;
+                set_timeout(&mut publish_timeout, "--publish-timeout", Some(value))?;
             }
             "--check-timeout" => {
-                set_timeout(&mut check_timeout, "--check-timeout", words.next())?;
+                let value = separate_value(&mut words, "`--check-timeout` requires SEC")?;
+                set_timeout(&mut check_timeout, "--check-timeout", Some(value))?;
             }
             "--archive-manifest" => {
                 if archive_manifest.is_some() {
                     return Err("`--archive-manifest` was given twice".into());
                 }
-                let path = words
-                    .next()
-                    .ok_or_else(|| "`--archive-manifest` needs a path".to_string())?;
+                let path = separate_value(&mut words, "`--archive-manifest` needs a path")?;
                 if path.is_empty() || path == "--" {
                     return Err("`--archive-manifest` needs a path".into());
                 }
@@ -199,6 +199,16 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                     return Err("--metrics-file PATH must not be empty".into());
                 }
                 metrics_file = Some(PathBuf::from(path));
+            }
+            _ if word.starts_with("--archive-manifest=") => {
+                if archive_manifest.is_some() {
+                    return Err("`--archive-manifest` was given twice".into());
+                }
+                let path = &word["--archive-manifest=".len()..];
+                if path.is_empty() || path == "--" {
+                    return Err("`--archive-manifest` needs a path".into());
+                }
+                archive_manifest = Some(PathBuf::from(path));
             }
             _ if word.starts_with("--tag=") => {
                 if tag.is_some() {
@@ -291,6 +301,16 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
         check_timeout,
         sync,
     })
+}
+
+fn separate_value(
+    words: &mut impl Iterator<Item = String>,
+    missing: &str,
+) -> Result<String, String> {
+    words
+        .next()
+        .filter(|value| !value.is_empty() && !value.starts_with("--"))
+        .ok_or_else(|| missing.to_string())
 }
 
 fn set_timeout(
@@ -451,34 +471,42 @@ fn run(args: &Args, facts: &mut Facts) -> Result<u8, String> {
         .map(parse_verify_command)
         .transpose()?;
     if args.dry_run {
-        println!("cvmfs_server list");
-        println!(
-            "{}",
-            display_command(&["cvmfs_server", "transaction", &args.repository])
-        );
-        println!(
-            "{}",
-            display_command(&args.sync.iter().map(String::as_str).collect::<Vec<_>>())
-        );
+        let mut plan = String::new();
+        plan.push_str("cvmfs_server list\n");
+        plan.push_str(&display_command(&[
+            "cvmfs_server",
+            "transaction",
+            &args.repository,
+        ]));
+        plan.push('\n');
+        plan.push_str(&display_command(
+            &args.sync.iter().map(String::as_str).collect::<Vec<_>>(),
+        ));
+        plan.push('\n');
         if let Some(command) = &verify {
-            println!("{}", display_verify_command(command));
+            plan.push_str(&display_verify_command(command));
+            plan.push('\n');
         }
-        println!("{}", display_publish_command(args));
+        plan.push_str(&display_publish_command(args));
+        plan.push('\n');
         if args.check {
-            println!(
-                "{}",
-                display_command(&["cvmfs_server", "check", &args.repository])
-            );
+            plan.push_str(&display_command(&[
+                "cvmfs_server",
+                "check",
+                &args.repository,
+            ]));
+            plan.push('\n');
         }
         let failure = if verify.is_some() {
             "sync or verification failure"
         } else {
             "sync failure"
         };
-        println!(
-            "# on {failure}: {}",
+        plan.push_str(&format!(
+            "# on {failure}: {}\n",
             display_command(&["cvmfs_server", "abort", "-f", &args.repository])
-        );
+        ));
+        write_stdout(plan.as_bytes())?;
         return Ok(0);
     }
 

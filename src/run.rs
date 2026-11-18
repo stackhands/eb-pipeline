@@ -11,6 +11,7 @@ use crate::tools::{help_lists, map_rotate, map_staged, RotateOutcome, StagedOutc
 use crate::util::{self, ListLine};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -722,14 +723,19 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                 return finish(st, Some(f.code));
             }
         }
+        let mut output = String::new();
         for ph in &plan.phases {
             if ph.status != "planned" {
-                println!("# [{}] {}", ph.name, ph.status);
+                writeln!(output, "# [{}] {}", ph.name, ph.status).expect("writing to a string");
                 continue;
             }
             for c in &ph.commands {
-                println!("[{}] {}", ph.name, shell_line(c));
+                writeln!(output, "[{}] {}", ph.name, shell_line(c)).expect("writing to a string");
             }
+        }
+        if let Err(e) = util::write_stdout(output.as_bytes()) {
+            st.res.message = Some(format!("cannot write stdout: {e}"));
+            return finish(st, Some(exit::FAILED));
         }
         log("INFO", "run", &target, "dry run: nothing executed");
         return finish(st, None);
