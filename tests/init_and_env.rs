@@ -143,6 +143,17 @@ fn help_lists_dry_run_output_among_what_stdout_carries() {
 }
 
 #[test]
+fn help_names_the_eb_stack_stack_subcommands() {
+    let o = bin().arg("--help").output().unwrap();
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    let help = String::from_utf8_lossy(&o.stdout);
+    assert!(help.contains("eb-stack stack admit"), "{help}");
+    assert!(help.contains("eb-stack stack shard"), "{help}");
+    assert!(!help.contains("eb-stack admit    "), "{help}");
+    assert!(!help.contains("eb-stack shard    "), "{help}");
+}
+
+#[test]
 fn flags_fall_back_to_the_environment() {
     let o = bin()
         .arg("check")
