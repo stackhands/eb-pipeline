@@ -6,8 +6,8 @@ use eb_pipeline::plan::{build_plan, read_units, Planner};
 use eb_pipeline::resolve::{explain, Scope};
 use eb_pipeline::run::{install_handlers, log, run, Options, RunResult};
 use eb_pipeline::{
-    easystack, eessi, metrics, notify, sbom, schema, site, stack_checks, summary, templates, tools,
-    util, watch,
+    audit, easystack, eessi, metrics, notify, sbom, schema, site, stack_checks, summary, templates,
+    tools, util, watch,
 };
 use serde::Serialize;
 use std::os::unix::fs::MetadataExt;
@@ -22,6 +22,7 @@ Examples:
   eb-pipeline plan --site site.toml --list list.txt --target cpu --build-type production --out plan.json
   eb-pipeline run --site site.toml --list list.txt --target cpu --build-type production --result result.json
   eb-pipeline watch --site site.toml --target cpu --build-type production --dry-run
+  eb-pipeline audit --site site.toml --target cpu --findings findings.csv --out-dir audit
   eb-pipeline metrics --result result.json
 
 Configuration: every flag above falls back to an EB_PIPELINE_<FLAG> variable
@@ -242,6 +243,27 @@ enum Cmd {
         /// Write the rebuild's result JSON here.
         #[arg(long)]
         result: Option<PathBuf>,
+    },
+    /// Run eb-stack vulnerability checks and collect rebuild lists.
+    Audit {
+        /// Site file.
+        #[arg(long, env = "EB_PIPELINE_SITE")]
+        site: PathBuf,
+        /// Target name.
+        #[arg(long, env = "EB_PIPELINE_TARGET")]
+        target: String,
+        /// Vulnerability scanner CSV for `eb-stack rebuild-set --findings`.
+        #[arg(long, required_unless_present = "cve", conflicts_with = "cve")]
+        findings: Option<PathBuf>,
+        /// CVE id to audit. Repeat for multiple advisories.
+        #[arg(long, required_unless_present = "findings")]
+        cve: Vec<String>,
+        /// Exit non-zero when eb-stack reports backport items.
+        #[arg(long)]
+        strict: bool,
+        /// Output directory for audit artifacts and copied rebuild lists.
+        #[arg(long)]
+        out_dir: PathBuf,
     },
     /// Generate shell completion scripts from the clap command definition.
     #[command(hide = true)]
@@ -508,6 +530,27 @@ fn cmd_metrics(path: &Path, format: StatusFormat) -> Result<i32, Fail> {
         StatusFormat::Json => print!("{}", metrics::status_json(&status)),
     }
     Ok(exit::OK)
+}
+
+fn cmd_audit(
+    site_path: &Path,
+    target_name: &str,
+    findings: Option<&Path>,
+    cves: &[String],
+    strict: bool,
+    out_dir: &Path,
+) -> Result<i32, Fail> {
+    let s = load_valid(site_path, None)?;
+    let target = s.target(target_name)?;
+    audit::run(audit::Args {
+        site: &s,
+        site_file: site_file(site_path),
+        target,
+        findings,
+        cves,
+        strict,
+        out_dir,
+    })
 }
 
 fn cmd_init(
@@ -1542,6 +1585,14 @@ fn main() {
             plan_out: plan_out.as_deref(),
             result: result.as_deref(),
         }),
+        Cmd::Audit {
+            site,
+            target,
+            findings,
+            cve,
+            strict,
+            out_dir,
+        } => cmd_audit(site, target, findings.as_deref(), cve, *strict, out_dir),
         Cmd::Completions { shell, out_dir } => cmd_completions(*shell, out_dir),
         Cmd::Man { out_dir } => cmd_man(out_dir),
     };

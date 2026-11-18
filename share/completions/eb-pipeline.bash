@@ -16,6 +16,9 @@ _eb__pipeline() {
             ",$1")
                 cmd="eb__pipeline"
                 ;;
+            eb__pipeline,audit)
+                cmd="eb__pipeline__subcmd__audit"
+                ;;
             eb__pipeline,check)
                 cmd="eb__pipeline__subcmd__check"
                 ;;
@@ -57,6 +60,9 @@ _eb__pipeline() {
                 ;;
             eb__pipeline,watch)
                 cmd="eb__pipeline__subcmd__watch"
+                ;;
+            eb__pipeline__subcmd__help,audit)
+                cmd="eb__pipeline__subcmd__help__subcmd__audit"
                 ;;
             eb__pipeline__subcmd__help,check)
                 cmd="eb__pipeline__subcmd__help__subcmd__check"
@@ -107,12 +113,46 @@ _eb__pipeline() {
 
     case "${cmd}" in
         eb__pipeline)
-            opts="-h -V --help --version check schema init explain targets status metrics plan run verify watch completions man help"
+            opts="-h -V --help --version check schema init explain targets status metrics plan run verify watch audit completions man help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        eb__subcmd__pipeline__subcmd__audit)
+            opts="-h --site --target --findings --cve --strict --out-dir --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --site)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --target)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --findings)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --cve)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --out-dir)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -207,8 +247,22 @@ _eb__pipeline() {
             return 0
             ;;
         eb__subcmd__pipeline__subcmd__help)
-            opts="check schema init explain targets status metrics plan run verify watch completions man help"
+            opts="check schema init explain targets status metrics plan run verify watch audit completions man help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        eb__subcmd__pipeline__subcmd__help__subcmd__audit)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

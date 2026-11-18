@@ -1,0 +1,54 @@
+#+TITLE: Audit vulnerabilities and stage rebuild lists
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Audit vulnerabilities and stage rebuild lists
+
+Run =eb-pipeline audit= to let eb-stack decide the rebuilds.
+The command copies those rebuild lists into one directory for =eb-pipeline run=.
+
+** Before you start
+
+- You have a site file and a target name.
+- The target's module environment loads the European Environment for Scientific Software Installations (EESSI).
+- =eb-stack= is on =PATH=, or set in =[site.tools.eb_stack]=.
+
+** From a scanner findings file
+
+Run:
+
+#+begin_example
+eb-pipeline audit --site site.toml --target cpu --findings findings.csv --out-dir audit
+#+end_example
+
+This runs =eb-stack rebuild-set --findings= and writes rebuild lists under =audit/rebuilds/=.
+
+Then build one list. The filename may include a Common Vulnerabilities and Exposures (CVE) identifier:
+
+#+begin_example
+eb-pipeline run --site site.toml --target cpu --build-type production --list audit/rebuilds/CVE-2026-0001.yml
+#+end_example
+
+** From one or more CVE identifiers
+
+Run:
+
+#+begin_example
+eb-pipeline audit --site site.toml --target cpu --cve CVE-2026-0001 --cve CVE-2026-0002 --out-dir audit
+#+end_example
+
+This runs:
+
+- =eb-stack stack sbom --cve ... --backport-list ...=
+- =eb-stack component-reach --cve ...=
+
+Use =--strict= when a reported backport requirement should fail the command:
+
+#+begin_example
+eb-pipeline audit --site site.toml --target cpu --cve CVE-2026-0001 --strict --out-dir audit
+#+end_example
+
+** What to pass to eb-pipeline run
+
+The files copied to =--out-dir/rebuilds/*.yml= are easystacks from eb-stack.
+Pass one file to =eb-pipeline run --list= for each rebuild campaign.
