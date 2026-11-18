@@ -99,6 +99,23 @@ pub fn from_result(v: &Value) -> Result<Status, Fail> {
             })?;
             counts.insert(key.clone(), n);
         }
+    } else if let Some(raw) = obj.get("lines") {
+        let raw = raw
+            .as_array()
+            .ok_or_else(|| Fail::usage("result.lines must be an array"))?;
+        for (i, item) in raw.iter().enumerate() {
+            let item = item
+                .as_object()
+                .ok_or_else(|| Fail::usage(format!("result.lines[{i}] must be an object")))?;
+            let status = need_str(item, "status")
+                .map_err(|_| Fail::usage(format!("result.lines[{i}].status must be a string")))?;
+            let count = counts.get_mut(status).ok_or_else(|| {
+                Fail::usage(format!(
+                    "result.lines[{i}].status has unknown value `{status}`"
+                ))
+            })?;
+            *count += 1;
+        }
     }
 
     let mut phases = Vec::new();
@@ -445,6 +462,17 @@ eb_pipeline_phase{{{id},phase=\"checks\",status=\"skipped\"}} 1
         assert_eq!(v["phases"][1]["status"], "skipped");
         assert!(v.get("lines").is_none());
         assert!(!text.contains("/secret/path"));
+    }
+
+    #[test]
+    fn missing_counts_are_derived_from_recorded_lines() {
+        let mut v = result();
+        v.as_object_mut().unwrap().remove("counts");
+
+        let status = from_result(&v).unwrap();
+
+        assert_eq!(status.counts["failed"], 1);
+        assert_eq!(status.counts["success"], 0);
     }
 
     #[test]
