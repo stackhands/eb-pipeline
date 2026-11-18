@@ -57,7 +57,7 @@ fn requested_checks_use_site_paths_and_selected_target_without_allocating() {
             "--target",
             "cpu",
             "--stack-checks",
-            "files,arch,cuda-cc,generation,provided,known-failures",
+            "files,arch,cuda-cc,generation,known-failures",
         ],
         &[],
     );
@@ -73,9 +73,6 @@ fn requested_checks_use_site_paths_and_selected_target_without_allocating() {
         ),
         format!("stack cuda-cc --easystack {list} --easyconfigs /robot/easyconfigs"),
         format!("stack generation --easystack {list}"),
-        format!(
-            "stack provided --build-list {list} --baseline-lock /locks/baseline.json --strict"
-        ),
         format!(
             "stack known-failures --arch x86_64/amd/zen4 --easystack {list} --easyconfigs /robot/easyconfigs --strict"
         ),
@@ -201,6 +198,33 @@ fn easystack_checks_refuse_a_plain_build_list() {
     assert!(t.calls("ebstack").is_empty());
     assert!(
         stderr(&output).contains("needs an easystack .yml or .yaml path"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn provided_cannot_share_an_input_with_easystack_checks() {
+    let t = configured();
+    let list = t.root().join("stack.yml");
+    std::fs::write(&list, "easyconfigs: []\n").unwrap();
+    let output = eb_pipeline(
+        &t,
+        &[
+            "check",
+            "--site",
+            &t.site.display().to_string(),
+            "--list",
+            &list.display().to_string(),
+            "--stack-checks",
+            "provided,files",
+        ],
+        &[],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(t.calls("ebstack").is_empty());
+    assert!(
+        stderr(&output).contains("cannot combine provided with easystack checks"),
         "{}",
         stderr(&output)
     );

@@ -82,7 +82,13 @@ fn source_paths(site: &Site, targets: &[&Target]) -> Vec<String> {
 }
 
 fn validate_list_path(list: &Path, checks: &[StackCheck]) -> Result<(), Fail> {
-    if checks.iter().all(|check| *check == StackCheck::Provided) {
+    let provided = checks.contains(&StackCheck::Provided);
+    if provided && checks.iter().any(|check| *check != StackCheck::Provided) {
+        return Err(Fail::usage(
+            "--stack-checks cannot combine provided with easystack checks because they require different input formats",
+        ));
+    }
+    if provided {
         return Ok(());
     }
     match list
