@@ -520,6 +520,7 @@ doc_struct! {
         bindings: Option<String> => ("string", "none", false, "EB_PIPELINE_CACHE_BINDINGS."),
         init_module: Option<String> => ("string", "none", false,
             "Default EB_PIPELINE_CACHE_INIT_MODULE for entries that set none."),
+        #[serde(default)]
         targets: Vec<CacheTarget> => ("array of table", "[]", false, "`[[caches.targets]]` entries."),
     }
 }
@@ -957,5 +958,12 @@ mod tests {
         ] {
             assert!(!req.contains(&k), "{k} must be optional");
         }
+    }
+
+    #[test]
+    fn cache_targets_use_the_documented_empty_default() {
+        let caches: Caches = toml::from_str("").unwrap();
+        assert!(caches.enabled);
+        assert!(caches.targets.is_empty());
     }
 }
