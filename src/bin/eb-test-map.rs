@@ -206,6 +206,10 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
             _ => return Err(format!("does not know `{word}`")),
         }
     }
+    if list.is_none() && result.is_none() {
+        list = eb_pipeline::util::env_value("EB_PIPELINE_LIST");
+        result = eb_pipeline::util::env_value("EB_PIPELINE_RESULT");
+    }
     let format = format.unwrap_or(OutputFormat::Plain);
     if list.is_some() && result.is_some() {
         return Err("pass either --list or --result, not both".into());

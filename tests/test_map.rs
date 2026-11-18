@@ -3,12 +3,47 @@
 use std::process::Command;
 
 fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_eb-test-map"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_eb-test-map"));
+    command.env_remove("EB_PIPELINE_LIST");
+    command.env_remove("EB_PIPELINE_RESULT");
+    command
 }
 
 fn files(dir: &std::path::Path, map: &str, list: &str) {
     std::fs::write(dir.join("map.tsv"), map).unwrap();
     std::fs::write(dir.join("build.list"), list).unwrap();
+}
+
+#[test]
+fn list_environment_falls_back_and_the_flag_wins() {
+    let dir = tempfile::tempdir().unwrap();
+    files(
+        dir.path(),
+        "GROMACS gromacs\n",
+        "GROMACS-2024.1-foss-2023b.eb\n",
+    );
+    let map = dir.path().join("map.tsv");
+    let list = dir.path().join("build.list");
+    let from_env = bin()
+        .args(["--map"])
+        .arg(&map)
+        .env("EB_PIPELINE_LIST", &list)
+        .output()
+        .unwrap();
+    let from_flag = bin()
+        .args(["--map"])
+        .arg(&map)
+        .args(["--list"])
+        .arg(&list)
+        .env("EB_PIPELINE_RESULT", dir.path().join("wrong.json"))
+        .output()
+        .unwrap();
+    assert_eq!(from_env.status.code(), Some(0));
+    assert_eq!(from_flag.status.code(), Some(0));
+    assert_eq!(from_env.stdout, b"gromacs\n");
+    assert_eq!(from_flag.stdout, from_env.stdout);
+    assert!(from_env.stderr.is_empty());
+    assert!(from_flag.stderr.is_empty());
 }
 
 fn result_file(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
