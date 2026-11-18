@@ -5,6 +5,7 @@
 * The test map
 
 =eb-test-map= reads a build list and prints the tests that cover the applications in it.
+For a plain build list, each line's easyconfig selects the application and its following =eb= options do not become part of the name.
 The default uses a map of software name to test name.
 =--format eessi-modules= does not read a map. It prints the module names the European Environment for Scientific Software Installations (EESSI) test suite selects with ReFrame.
 

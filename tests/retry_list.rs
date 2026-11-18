@@ -1080,6 +1080,17 @@ fn node_warns_without_dropping_unless_drop_oom_is_set() {
         calls_text.contains("Big.eb") && calls_text.contains("Small.eb"),
         "{calls_text}"
     );
+    let generated: serde_yaml::Value = serde_yaml::from_str(
+        calls_text
+            .split_once("EASYSTACK\n")
+            .expect("generated easystack")
+            .1,
+    )
+    .unwrap();
+    assert_eq!(
+        generated["easyconfigs"][0]["Big.eb"]["options"]["robot"],
+        serde_yaml::Value::Bool(true)
+    );
     assert!(
         !std::path::Path::new(easystack).exists(),
         "temporary easystack was left behind"
