@@ -1,9 +1,11 @@
 //! `eb-cvmfs` brackets one configured synchronization in a CVMFS transaction.
 
+use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
+use std::sync::RwLock;
 
 const CVMFS_SERVER: &str = r#"#!/bin/sh
 echo "$*" >> "$CALLS"
@@ -48,9 +50,49 @@ esac
 exit 99
 "#;
 
+static EXEC_FORK_LOCK: RwLock<()> = RwLock::new(());
+
 fn write_exec(path: &Path, text: &str) {
-    std::fs::write(path, text).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let _guard = EXEC_FORK_LOCK.write().unwrap_or_else(|e| e.into_inner());
+    let mut temp = tempfile::NamedTempFile::new_in(parent).unwrap();
+    temp.write_all(text.as_bytes()).unwrap();
+    temp.as_file().flush().unwrap();
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let persisted = temp.persist(path).unwrap();
+    drop(persisted);
+}
+
+trait CommandSyncExt {
+    fn sync_spawn(&mut self) -> Child;
+    fn sync_output(&mut self) -> Output;
+    fn sync_status(&mut self) -> ExitStatus;
+}
+
+impl CommandSyncExt for Command {
+    fn sync_spawn(&mut self) -> Child {
+        for attempt in 0..20 {
+            let _guard = EXEC_FORK_LOCK.read().unwrap_or_else(|e| e.into_inner());
+            match self.spawn() {
+                Ok(child) => return child,
+                Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) && attempt < 19 => {
+                    drop(_guard);
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(error) => panic!("failed to spawn {self:?}: {error}"),
+            }
+        }
+        unreachable!()
+    }
+
+    fn sync_output(&mut self) -> Output {
+        self.stdout(Stdio::piped()).stderr(Stdio::piped());
+        self.sync_spawn().wait_with_output().unwrap()
+    }
+
+    fn sync_status(&mut self) -> ExitStatus {
+        self.sync_spawn().wait().unwrap()
+    }
 }
 
 struct Fixture {
@@ -156,7 +198,7 @@ fn sample(text: &str, family: &str) -> Option<f64> {
 #[test]
 fn successful_sync_opens_and_publishes_one_transaction() {
     let fixture = Fixture::new();
-    let output = fixture.command().output().unwrap();
+    let output = fixture.command().sync_output();
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert_eq!(
         fixture.calls(),
@@ -175,7 +217,7 @@ fn sync_without_a_timeout_stays_in_the_callers_process_group() {
          set -- $(/bin/cat /proc/$$/stat)\n\
          echo \"$$ ${5}\" > \"$GROUP\"\n",
     );
-    let output = fixture.command().env("GROUP", &group).output().unwrap();
+    let output = fixture.command().env("GROUP", &group).sync_output();
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     let identity = std::fs::read_to_string(group).unwrap();
     let (pid, process_group) = identity.trim().split_once(' ').unwrap();
@@ -192,8 +234,7 @@ fn publish_without_a_timeout_stays_in_the_callers_process_group() {
     let output = fixture
         .command()
         .env("STUB_PUBLISH_GROUP", &group)
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     let identity = std::fs::read_to_string(group).unwrap();
     let (pid, process_group) = identity.trim().split_once(' ').unwrap();
@@ -211,8 +252,7 @@ fn check_without_a_timeout_stays_in_the_callers_process_group() {
     let output = fixture
         .command_with_options(None, None, None, &["--check"])
         .env("STUB_CHECK_GROUP", &group)
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     let identity = std::fs::read_to_string(group).unwrap();
     let (pid, process_group) = identity.trim().split_once(' ').unwrap();
@@ -249,7 +289,7 @@ fn successful_publish_writes_final_metrics_atomically_with_the_existing_mode() {
             Ok(())
         });
     }
-    let output = command.output().unwrap();
+    let output = command.sync_output();
     assert_eq!(code(&output), 0, "{}", stderr(&output));
 
     let text = std::fs::read_to_string(&metrics).unwrap();
@@ -281,10 +321,7 @@ fn successful_publish_writes_final_metrics_atomically_with_the_existing_mode() {
 fn failed_sync_preserves_the_last_publish_and_records_its_completed_abort() {
     let fixture = Fixture::new();
     let metrics = fixture.dir.path().join("cvmfs.prom");
-    let output = fixture
-        .command_with_metrics(Some(&metrics))
-        .output()
-        .unwrap();
+    let output = fixture.command_with_metrics(Some(&metrics)).sync_output();
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     let first = std::fs::read_to_string(&metrics).unwrap();
     let published = sample(&first, "eb_cvmfs_last_publish_timestamp_seconds").unwrap();
@@ -293,8 +330,7 @@ fn failed_sync_preserves_the_last_publish_and_records_its_completed_abort() {
         .command_with_metrics(Some(&metrics))
         .env("SYNC_EXIT", "23")
         .env("STUB_ABORT_DELAY", "0.1")
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 23, "{}", stderr(&output));
     let text = std::fs::read_to_string(&metrics).unwrap();
     assert_eq!(sample(&text, "eb_cvmfs_last_result"), Some(0.0));
@@ -318,8 +354,7 @@ fn an_abort_that_cannot_start_is_not_counted_or_called_complete() {
         .command_with_metrics(Some(&metrics))
         .env("SYNC_EXIT", "23")
         .env("REMOVE_SERVER", "1")
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 23, "{}", stderr(&output));
     assert!(
         stderr(&output).contains("cannot start cvmfs_server abort"),
@@ -342,8 +377,7 @@ fn a_metrics_write_failure_does_not_mask_the_sync_failure() {
     let output = fixture
         .command_with_metrics(Some(&metrics))
         .env("SYNC_EXIT", "23")
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 23, "{}", stderr(&output));
     assert!(
         stderr(&output).contains("cannot write metrics"),
@@ -363,8 +397,7 @@ fn a_failed_publish_has_duration_but_no_success_timestamp() {
     let output = fixture
         .command_with_metrics(Some(&metrics))
         .env("STUB_PUBLISH_EXIT", "8")
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 8, "{}", stderr(&output));
     let text = std::fs::read_to_string(metrics).unwrap();
     assert_eq!(sample(&text, "eb_cvmfs_last_result"), Some(0.0));
@@ -398,7 +431,7 @@ fn a_shared_metrics_file_serializes_whole_invocations() {
     first
         .env("SYNC_READY", &ready)
         .env("SYNC_RELEASE", &release);
-    let first = first.spawn().unwrap();
+    let first = first.sync_spawn();
     let became_ready = wait_for_path(&ready, std::time::Duration::from_secs(10));
     if !became_ready {
         std::fs::write(&release, b"go\n").unwrap();
@@ -413,10 +446,7 @@ fn a_shared_metrics_file_serializes_whole_invocations() {
         "list\ntransaction repo.example\nsync --delete\n"
     );
 
-    let mut second = fixture
-        .command_with_metrics(Some(&metrics))
-        .spawn()
-        .unwrap();
+    let mut second = fixture.command_with_metrics(Some(&metrics)).sync_spawn();
     std::thread::sleep(std::time::Duration::from_millis(50));
     let second_status = second.try_wait();
     let calls_while_locked = fixture.calls();
@@ -463,7 +493,7 @@ fn wait_for_path(path: &Path, timeout: std::time::Duration) -> bool {
 fn successful_verification_runs_between_sync_and_publish_without_a_shell() {
     let fixture = Fixture::new();
     let verify = format!("{} --cache 'two words'", fixture.verify.display());
-    let output = fixture.command_with_verify(Some(&verify)).output().unwrap();
+    let output = fixture.command_with_verify(Some(&verify)).sync_output();
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert_eq!(
         fixture.calls(),
@@ -480,8 +510,7 @@ fn failed_verification_is_aborted_and_preserves_its_output_and_status() {
     let output = fixture
         .command_with_verify(Some(&verify))
         .env("VERIFY_EXIT", "29")
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 29);
     assert_eq!(
         fixture.calls(),
@@ -499,8 +528,7 @@ fn verification_uses_a_shell_when_the_command_contains_shell_syntax() {
     let output = fixture
         .command_with_verify(Some(verify))
         .env("PATH", format!("{}:{path}", fixture.bin.display()))
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert_eq!(
         fixture.calls(),
@@ -515,8 +543,7 @@ fn failed_sync_is_aborted_and_its_exit_status_is_returned() {
         .command()
         .env("SYNC_EXIT", "23")
         .env("STUB_ABORT_EXIT", "5")
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 23);
     assert_eq!(
         fixture.calls(),
@@ -536,8 +563,7 @@ fn failed_sync_does_not_run_verification() {
     let output = fixture
         .command_with_verify(Some(&verify))
         .env("SYNC_EXIT", "23")
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 23);
     assert_eq!(
         fixture.calls(),
@@ -561,8 +587,7 @@ fn a_sync_timeout_kills_its_process_group_aborts_once_and_records_the_phase() {
     let output = fixture
         .command_with_options(None, Some(&metrics), None, &["--sync-timeout", "1"])
         .env("CHILD_IDENTITY", &child_identity)
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 124, "{}", stderr(&output));
     assert!(output.stdout.is_empty());
     assert!(
@@ -623,8 +648,7 @@ fn a_verification_timeout_aborts_without_retrying_or_publishing() {
             &["--verify-timeout", "1"],
         )
         .env("VERIFY_DELAY", "30")
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 124);
     assert_eq!(String::from_utf8_lossy(&output.stdout), "verify-stdout\n");
     assert!(
@@ -657,8 +681,7 @@ fn a_publish_timeout_kills_its_process_group_aborts_once_and_skips_check() {
             &["--publish-timeout", "1", "--check"],
         )
         .env("STUB_PUBLISH_CHILD_IDENTITY", &child_identity)
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 124, "{}", stderr(&output));
     assert!(output.stdout.is_empty());
     assert!(
@@ -708,8 +731,7 @@ fn a_check_timeout_kills_its_process_group_without_aborting_the_publish() {
             &["--check", "--check-timeout", "1"],
         )
         .env("STUB_CHECK_CHILD_IDENTITY", &child_identity)
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 124, "{}", stderr(&output));
     assert!(output.stdout.is_empty());
     assert!(
@@ -752,8 +774,7 @@ fn an_existing_transaction_is_refused_before_sync() {
     let output = fixture
         .command()
         .env("STUB_IN_TRANSACTION", "1")
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 2);
     assert!(stderr(&output).contains("already in a transaction"));
     assert_eq!(fixture.calls(), "list\n");
@@ -762,11 +783,7 @@ fn an_existing_transaction_is_refused_before_sync() {
 #[test]
 fn cvmfs_setup_and_publish_failures_stop_at_the_failing_command() {
     let fixture = Fixture::new();
-    let output = fixture
-        .command()
-        .env("STUB_LIST_EXIT", "6")
-        .output()
-        .unwrap();
+    let output = fixture.command().env("STUB_LIST_EXIT", "6").sync_output();
     assert_eq!(code(&output), 2);
     assert!(stderr(&output).contains("cvmfs_server list failed"));
     assert_eq!(fixture.calls(), "list\n");
@@ -775,8 +792,7 @@ fn cvmfs_setup_and_publish_failures_stop_at_the_failing_command() {
     let output = fixture
         .command()
         .env("STUB_TRANSACTION_EXIT", "7")
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 7);
     assert_eq!(fixture.calls(), "list\ntransaction repo.example\n");
 
@@ -784,8 +800,7 @@ fn cvmfs_setup_and_publish_failures_stop_at_the_failing_command() {
     let output = fixture
         .command()
         .env("STUB_PUBLISH_EXIT", "8")
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 8);
     assert_eq!(
         fixture.calls(),
@@ -804,8 +819,7 @@ fn a_sync_command_that_cannot_start_is_aborted_and_returns_127() {
         .env("REPOSITORY", "repo.example")
         .args(["repo.example", "--"])
         .arg(&missing)
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 127);
     assert!(stderr(&output).contains("cannot start sync command"));
     assert_eq!(
@@ -820,8 +834,7 @@ fn a_verification_command_that_cannot_start_is_aborted_and_returns_127() {
     let missing = fixture.dir.path().join("missing-verify");
     let output = fixture
         .command_with_verify(Some(&missing.display().to_string()))
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 127);
     assert!(stderr(&output).contains("cannot start verification command"));
     assert_eq!(
@@ -835,7 +848,7 @@ fn a_missing_cvmfs_server_is_a_clear_error() {
     let fixture = Fixture::new();
     let empty = fixture.dir.path().join("empty");
     std::fs::create_dir(&empty).unwrap();
-    let output = fixture.command().env("PATH", empty).output().unwrap();
+    let output = fixture.command().env("PATH", empty).sync_output();
     assert_eq!(code(&output), 2);
     assert!(
         stderr(&output).contains("cannot start cvmfs_server list"),
@@ -852,8 +865,7 @@ fn dry_run_prints_every_possible_command_without_running_one() {
         .args(["--dry-run", "repo.example", "--"])
         .arg(&fixture.sync)
         .arg("--delete")
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     let stdout = String::from_utf8(output.stdout).unwrap();
     let sync = format!("{} --delete", fixture.sync.display());
@@ -878,8 +890,7 @@ fn dry_run_prints_verification_between_sync_and_publish() {
         .args(["--dry-run", "--verify-cmd", &verify, "repo.example", "--"])
         .arg(&fixture.sync)
         .arg("--delete")
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     let stdout = String::from_utf8(output.stdout).unwrap();
     let sync = format!("{} --delete", fixture.sync.display());
@@ -919,14 +930,13 @@ fn default_outputs_match_the_bytes_from_before_archive_manifests() {
     let output = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
         .env("PATH", empty.path())
         .args(["--dry-run", "repo.example", "--", sync, "--delete"])
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 0);
     assert_eq!(output.stdout, historical_dry_run(sync));
     assert_eq!(output.stderr, b"");
 
     let fixture = Fixture::new();
-    let output = fixture.command().output().unwrap();
+    let output = fixture.command().sync_output();
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert_eq!(output.stdout, b"");
     assert_eq!(output.stderr, b"");
@@ -944,10 +954,7 @@ fn default_outputs_match_the_bytes_from_before_archive_manifests() {
 
     let fixture = Fixture::new();
     let metrics = fixture.dir.path().join("cvmfs.prom");
-    let output = fixture
-        .command_with_metrics(Some(&metrics))
-        .output()
-        .unwrap();
+    let output = fixture.command_with_metrics(Some(&metrics)).sync_output();
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert_eq!(output.stdout, b"");
     assert_eq!(output.stderr, b"");
@@ -967,7 +974,7 @@ fn default_outputs_match_the_bytes_from_before_archive_manifests() {
 #[test]
 fn absent_timeout_options_preserve_stdout_stderr_and_exit_status_bytes() {
     let fixture = Fixture::new();
-    let output = fixture.command().output().unwrap();
+    let output = fixture.command().sync_output();
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stdout, b"");
     assert_eq!(output.stderr, b"");
@@ -976,8 +983,7 @@ fn absent_timeout_options_preserve_stdout_stderr_and_exit_status_bytes() {
     let sync = "/opt/site/bin/sync-module-cache";
     let output = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
         .args(["--dry-run", "repo.example", "--", sync, "--delete"])
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stdout, historical_dry_run(sync));
     assert_eq!(output.stderr, b"");
@@ -990,8 +996,7 @@ fn archive_manifest_after_the_separator_stays_a_sync_argument() {
         .command()
         .arg("--archive-manifest")
         .arg("ingest.json")
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert_eq!(
         fixture.calls(),
@@ -1021,15 +1026,11 @@ fn a_refused_archive_does_not_open_a_transaction_or_change_dry_run_bytes() {
             "--files-from",
             fixture.dir.path().join("list").to_str().unwrap(),
         ])
-        .status()
-        .unwrap();
+        .sync_status();
     assert!(status.success());
     let manifest = manifest_for(&fixture, "cache.tar", "i32");
 
-    let output = fixture
-        .command_with(Some(&manifest), None)
-        .output()
-        .unwrap();
+    let output = fixture.command_with(Some(&manifest), None).sync_output();
     assert_eq!(code(&output), 2, "{}", stderr(&output));
     assert!(output.stdout.is_empty());
     assert!(stderr(&output).contains("missing explicit directory `pkg`"));
@@ -1045,8 +1046,7 @@ fn a_refused_archive_does_not_open_a_transaction_or_change_dry_run_bytes() {
             "/opt/site/bin/sync-module-cache",
             "--delete",
         ])
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&preview), 2);
     assert!(preview.stdout.is_empty(), "{}", stderr(&preview));
     assert!(fixture.calls().is_empty());
@@ -1067,15 +1067,11 @@ fn an_accepted_archive_keeps_the_historical_command_bytes() {
         .arg("-C")
         .arg(&tree)
         .arg("pkg")
-        .status()
-        .unwrap();
+        .sync_status();
     assert!(status.success());
     let manifest = manifest_for(&fixture, "cache.tar", "i32");
 
-    let output = fixture
-        .command_with(Some(&manifest), None)
-        .output()
-        .unwrap();
+    let output = fixture.command_with(Some(&manifest), None).sync_output();
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert_eq!(output.stdout, b"");
     assert_eq!(output.stderr, b"");
@@ -1087,8 +1083,7 @@ fn an_accepted_archive_keeps_the_historical_command_bytes() {
         .args(["--dry-run", "--archive-manifest"])
         .arg(&manifest)
         .args(["repo.example", "--", sync, "--delete"])
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&preview), 0, "{}", stderr(&preview));
     assert_eq!(preview.stdout, historical_dry_run(sync));
     assert_eq!(preview.stderr, b"");
@@ -1110,8 +1105,7 @@ fn an_accepted_archive_composes_with_verification_tags_and_check() {
         .arg("-C")
         .arg(&tree)
         .arg("pkg")
-        .status()
-        .unwrap();
+        .sync_status();
     assert!(status.success());
     let manifest = manifest_for(&fixture, "cache.tar", "i32");
     let verify = fixture.verify.display().to_string();
@@ -1129,8 +1123,7 @@ fn an_accepted_archive_composes_with_verification_tags_and_check() {
                 "--check",
             ],
         )
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert_eq!(
         fixture.calls(),
@@ -1166,8 +1159,7 @@ fn dry_run_updates_only_invocation_metrics() {
         .arg(&metrics)
         .args(["repo.example", "--"])
         .arg(&fixture.sync)
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     let text = std::fs::read_to_string(metrics).unwrap();
     assert_eq!(sample(&text, "eb_cvmfs_last_result"), Some(1.0));
@@ -1199,8 +1191,7 @@ fn publish_passes_named_tag_and_description_to_cvmfs_server() {
                 "module cache refresh",
             ],
         )
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert_eq!(
         fixture.calls(),
@@ -1213,8 +1204,7 @@ fn publish_check_runs_after_a_successful_publish() {
     let fixture = Fixture::new();
     let output = fixture
         .command_with_options(None, None, None, &["--check"])
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert_eq!(
         fixture.calls(),
@@ -1228,8 +1218,7 @@ fn a_failed_publish_does_not_run_check() {
     let output = fixture
         .command_with_options(None, None, None, &["--check"])
         .env("STUB_PUBLISH_EXIT", "8")
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 8);
     assert_eq!(
         fixture.calls(),
@@ -1243,8 +1232,7 @@ fn check_failure_returns_its_status_after_publish() {
     let output = fixture
         .command_with_options(None, None, None, &["--check"])
         .env("STUB_CHECK_EXIT", "11")
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 11);
     assert_eq!(
         fixture.calls(),
@@ -1268,8 +1256,7 @@ fn tag_options_appear_in_dry_run_publish_and_check_order() {
         ])
         .arg(&fixture.sync)
         .arg("--delete")
-        .output()
-        .unwrap();
+        .sync_output();
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     let stdout = String::from_utf8(output.stdout).unwrap();
     let sync = format!("{} --delete", fixture.sync.display());
@@ -1378,9 +1365,26 @@ fn invalid_arguments_are_usage_errors() {
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
             .args(args)
-            .output()
-            .unwrap();
+            .sync_output();
         assert_eq!(code(&output), 2);
         assert!(output.stdout.is_empty());
+    }
+}
+
+#[test]
+fn concurrent_fixture_exec_writes_do_not_hit_text_file_busy() {
+    let workers: Vec<_> = (0..8)
+        .map(|_| {
+            std::thread::spawn(|| {
+                for _ in 0..20 {
+                    let fixture = Fixture::new();
+                    let output = fixture.command().sync_output();
+                    assert_eq!(code(&output), 0, "{}", stderr(&output));
+                }
+            })
+        })
+        .collect();
+    for worker in workers {
+        worker.join().unwrap();
     }
 }
