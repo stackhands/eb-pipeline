@@ -33,6 +33,9 @@ eb-cvmfs [--dry-run] [--metrics-file PATH] [--archive-manifest FILE]
 | =--metrics-file PATH= | Atomically replace =PATH= with Prometheus text after each valid invocation. Without it, no metrics or lock file is written. |
 | =--archive-manifest FILE= | Optional. Read =FILE= and refuse to start =cvmfs_server= unless the archive it names satisfies the manifest. Omit it, and no archive is read. |
 
+A separate option value does not consume the next long option.
+Use the equals form when a value itself starts with two dashes.
+
 CMD is one argument to =--verify-cmd=.
 Quote the complete value in the shell that starts =eb-cvmfs=:
 
