@@ -118,11 +118,11 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
         }
         match word.as_str() {
             "-h" | "--help" => {
-                print!("{}", include_str!("eb-cvmfs-help.txt"));
+                write_stdout(include_str!("eb-cvmfs-help.txt").as_bytes())?;
                 std::process::exit(0);
             }
             "-V" | "--version" => {
-                println!("eb-cvmfs {}", env!("CARGO_PKG_VERSION"));
+                write_stdout(format!("eb-cvmfs {}\n", env!("CARGO_PKG_VERSION")).as_bytes())?;
                 std::process::exit(0);
             }
             "--check" => check = true,

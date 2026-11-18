@@ -107,11 +107,14 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     while let Some(word) = words.next() {
         match word.as_str() {
             "-h" | "--help" => {
-                print!("{}", include_str!("eb-junit-help.txt"));
+                util::write_stdout(include_str!("eb-junit-help.txt").as_bytes())
+                    .map_err(|error| format!("cannot write help: {error}"))?;
                 std::process::exit(0);
             }
             "-V" | "--version" => {
-                println!("eb-junit {}", env!("CARGO_PKG_VERSION"));
+                let version = format!("eb-junit {}\n", env!("CARGO_PKG_VERSION"));
+                util::write_stdout(version.as_bytes())
+                    .map_err(|error| format!("cannot write version: {error}"))?;
                 std::process::exit(0);
             }
             "--fail-on-failure" => fail_on_failure = true,
