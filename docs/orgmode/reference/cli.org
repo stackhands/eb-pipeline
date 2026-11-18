@@ -443,7 +443,8 @@ Classification and the memory check never fall back to retaining a line that =eb
 
 #+begin_example
 eb-shard-weights (--result FILE... | --summary FILE... | --log-root DIR [--last N])
-                 [--target NAME] [--existing FILE] [--mode max|latest|mean] [--out FILE]
+                 [--target NAME] [--existing FILE] [--min-samples N]
+                 [--mode max|latest|mean] [--out FILE]
 #+end_example
 
 | Option | Meaning |
@@ -454,6 +455,7 @@ eb-shard-weights (--result FILE... | --summary FILE... | --log-root DIR [--last 
 | =--last N= | How many newest run directories under =--log-root= to read (1 to 65535; default 10). |
 | =--target NAME= | Keep observations from this target only. |
 | =--existing FILE= | Seed weights TSV (=MODULE<TAB>SECONDS=) to merge with new observations. |
+| =--min-samples N= | Update a module only after N selected observations, from 1 to 65535; 1 when absent. Under-sampled existing weights remain unchanged. |
 | =--mode MODE= | Combine durations with =max= (default), =latest= or =mean=. |
 | =--out FILE= | Write the table to =FILE=; =-= or absent prints to stdout. |
 
