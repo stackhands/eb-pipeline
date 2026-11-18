@@ -15,10 +15,13 @@ use std::process::{Command, ExitCode, ExitStatus};
 use std::time::Instant;
 
 struct Args {
+    check: bool,
     dry_run: bool,
     metrics_file: Option<PathBuf>,
     archive_manifest: Option<PathBuf>,
     repository: String,
+    tag: Option<String>,
+    tag_description: Option<String>,
     verify_cmd: Option<String>,
     sync: Vec<String>,
 }
@@ -75,10 +78,13 @@ fn main() -> ExitCode {
 }
 
 fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
+    let mut check = false;
     let mut dry_run = false;
     let mut metrics_file = None;
     let mut archive_manifest = None;
     let mut repository = None;
+    let mut tag = None;
+    let mut tag_description = None;
     let mut verify_cmd = None;
     let mut sync = Vec::new();
     let mut after_separator = false;
@@ -98,6 +104,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 println!("eb-cvmfs {}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
             }
+            "--check" => check = true,
             "--dry-run" => dry_run = true,
             "--metrics-file" => {
                 if metrics_file.is_some() {
@@ -110,6 +117,30 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                     return Err("--metrics-file PATH must not be empty".into());
                 }
                 metrics_file = Some(PathBuf::from(path));
+            }
+            "--tag" => {
+                if tag.is_some() {
+                    return Err("`--tag` may be given only once".into());
+                }
+                let name = words
+                    .next()
+                    .ok_or_else(|| "`--tag` requires NAME".to_string())?;
+                if name.is_empty() {
+                    return Err("`--tag` must not be empty".into());
+                }
+                tag = Some(name);
+            }
+            "--tag-description" => {
+                if tag_description.is_some() {
+                    return Err("`--tag-description` may be given only once".into());
+                }
+                let text = words
+                    .next()
+                    .ok_or_else(|| "`--tag-description` requires TEXT".to_string())?;
+                if text.is_empty() {
+                    return Err("`--tag-description` must not be empty".into());
+                }
+                tag_description = Some(text);
             }
             "--verify-cmd" => {
                 if verify_cmd.is_some() {
@@ -144,6 +175,26 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 }
                 metrics_file = Some(PathBuf::from(path));
             }
+            _ if word.starts_with("--tag=") => {
+                if tag.is_some() {
+                    return Err("`--tag` may be given only once".into());
+                }
+                let name = word["--tag=".len()..].to_string();
+                if name.is_empty() {
+                    return Err("`--tag` must not be empty".into());
+                }
+                tag = Some(name);
+            }
+            _ if word.starts_with("--tag-description=") => {
+                if tag_description.is_some() {
+                    return Err("`--tag-description` may be given only once".into());
+                }
+                let text = word["--tag-description=".len()..].to_string();
+                if text.is_empty() {
+                    return Err("`--tag-description` must not be empty".into());
+                }
+                tag_description = Some(text);
+            }
             _ if word.starts_with("--verify-cmd=") => {
                 if verify_cmd.is_some() {
                     return Err("`--verify-cmd` may be given only once".into());
@@ -163,11 +214,17 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     if sync.is_empty() {
         return Err("a sync command is required after `--`".into());
     }
+    if tag_description.is_some() && tag.is_none() {
+        return Err("`--tag-description` requires `--tag`".into());
+    }
     Ok(Args {
+        check,
         dry_run,
         metrics_file,
         archive_manifest,
         repository,
+        tag,
+        tag_description,
         verify_cmd,
         sync,
     })
@@ -311,10 +368,13 @@ fn run(args: &Args, facts: &mut Facts) -> Result<u8, String> {
         if let Some(command) = &verify {
             println!("{}", display_verify_command(command));
         }
-        println!(
-            "{}",
-            display_command(&["cvmfs_server", "publish", &args.repository])
-        );
+        println!("{}", display_publish_command(args));
+        if args.check {
+            println!(
+                "{}",
+                display_command(&["cvmfs_server", "check", &args.repository])
+            );
+        }
         let failure = if verify.is_some() {
             "sync or verification failure"
         } else {
@@ -411,18 +471,52 @@ fn run(args: &Args, facts: &mut Facts) -> Result<u8, String> {
         }
     }
 
-    let published = status(
-        Command::new("cvmfs_server")
-            .arg("publish")
-            .arg(&args.repository),
-        "cvmfs_server publish",
-    )?;
+    let mut publish = configure_publish(args);
+    let published = status(&mut publish, "cvmfs_server publish")?;
     facts.transaction_duration_seconds =
         Some(eb_pipeline::run::seconds(transaction_started.elapsed()));
-    if published.success() {
-        facts.published_at_seconds = Some(chrono::Utc::now().timestamp_millis() as f64 / 1000.0);
+    if !published.success() {
+        return Ok(exit_code(published));
     }
-    Ok(exit_code(published))
+    facts.published_at_seconds = Some(chrono::Utc::now().timestamp_millis() as f64 / 1000.0);
+    if !args.check {
+        return Ok(0);
+    }
+
+    let checked = status(
+        Command::new("cvmfs_server")
+            .arg("check")
+            .arg(&args.repository),
+        "cvmfs_server check",
+    )?;
+    Ok(exit_code(checked))
+}
+
+fn configure_publish(args: &Args) -> Command {
+    let mut command = Command::new("cvmfs_server");
+    command.arg("publish");
+    if let Some(name) = &args.tag {
+        command.arg("-a").arg(name);
+    }
+    if let Some(text) = &args.tag_description {
+        command.arg("-m").arg(text);
+    }
+    command.arg(&args.repository);
+    command
+}
+
+fn display_publish_command(args: &Args) -> String {
+    let mut words = vec!["cvmfs_server", "publish"];
+    if let Some(name) = &args.tag {
+        words.push("-a");
+        words.push(name);
+    }
+    if let Some(text) = &args.tag_description {
+        words.push("-m");
+        words.push(text);
+    }
+    words.push(&args.repository);
+    display_command(&words)
 }
 
 fn is_repository_char(c: char) -> bool {

@@ -18,6 +18,7 @@ case "$1" in
     ;;
   transaction) [ -n "${STUB_TRANSACTION_DELAY:-}" ] && /bin/sleep "$STUB_TRANSACTION_DELAY"; exit "${STUB_TRANSACTION_EXIT:-0}" ;;
   publish) [ -n "${STUB_PUBLISH_DELAY:-}" ] && /bin/sleep "$STUB_PUBLISH_DELAY"; exit "${STUB_PUBLISH_EXIT:-0}" ;;
+  check) exit "${STUB_CHECK_EXIT:-0}" ;;
   abort) [ -n "${STUB_ABORT_DELAY:-}" ] && /bin/sleep "$STUB_ABORT_DELAY"; exit "${STUB_ABORT_EXIT:-0}" ;;
 esac
 exit 99
@@ -63,19 +64,19 @@ impl Fixture {
     }
 
     fn command(&self) -> Command {
-        self.command_with_options(None, None, None)
+        self.command_with_options(None, None, None, &[])
     }
 
     fn command_with_metrics(&self, metrics: Option<&Path>) -> Command {
-        self.command_with_options(None, metrics, None)
+        self.command_with_options(None, metrics, None, &[])
     }
 
     fn command_with_verify(&self, verify: Option<&str>) -> Command {
-        self.command_with_options(None, None, verify)
+        self.command_with_options(None, None, verify, &[])
     }
 
     fn command_with(&self, manifest: Option<&Path>, metrics: Option<&Path>) -> Command {
-        self.command_with_options(manifest, metrics, None)
+        self.command_with_options(manifest, metrics, None, &[])
     }
 
     fn command_with_options(
@@ -83,6 +84,7 @@ impl Fixture {
         manifest: Option<&Path>,
         metrics: Option<&Path>,
         verify: Option<&str>,
+        extra: &[&str],
     ) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"));
         command
@@ -96,6 +98,7 @@ impl Fixture {
         if let Some(metrics) = metrics {
             command.arg("--metrics-file").arg(metrics);
         }
+        command.args(extra);
         if let Some(verify) = verify {
             command.args(["--verify-cmd", verify]);
         }
@@ -739,7 +742,7 @@ fn an_accepted_archive_keeps_the_historical_command_bytes() {
 }
 
 #[test]
-fn an_accepted_archive_composes_with_verification() {
+fn an_accepted_archive_composes_with_verification_tags_and_check() {
     let fixture = Fixture::new();
     let tree = fixture.dir.path().join("tree");
     std::fs::create_dir_all(tree.join("pkg")).unwrap();
@@ -760,13 +763,24 @@ fn an_accepted_archive_composes_with_verification() {
     let verify = fixture.verify.display().to_string();
 
     let output = fixture
-        .command_with_options(Some(&manifest), None, Some(&verify))
+        .command_with_options(
+            Some(&manifest),
+            None,
+            Some(&verify),
+            &[
+                "--tag",
+                "snapshot",
+                "--tag-description",
+                "checked archive",
+                "--check",
+            ],
+        )
         .output()
         .unwrap();
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert_eq!(
         fixture.calls(),
-        "list\ntransaction repo.example\nsync --delete\nverify \npublish repo.example\n"
+        "list\ntransaction repo.example\nsync --delete\nverify \npublish -a snapshot -m checked archive repo.example\ncheck repo.example\n"
     );
 }
 
@@ -817,6 +831,109 @@ fn dry_run_updates_only_invocation_metrics() {
 }
 
 #[test]
+fn publish_passes_named_tag_and_description_to_cvmfs_server() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .command_with_options(
+            None,
+            None,
+            None,
+            &[
+                "--tag",
+                "release-2026-03",
+                "--tag-description",
+                "module cache refresh",
+            ],
+        )
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(
+        fixture.calls(),
+        "list\ntransaction repo.example\nsync --delete\npublish -a release-2026-03 -m module cache refresh repo.example\n"
+    );
+}
+
+#[test]
+fn publish_check_runs_after_a_successful_publish() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .command_with_options(None, None, None, &["--check"])
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(
+        fixture.calls(),
+        "list\ntransaction repo.example\nsync --delete\npublish repo.example\ncheck repo.example\n"
+    );
+}
+
+#[test]
+fn a_failed_publish_does_not_run_check() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .command_with_options(None, None, None, &["--check"])
+        .env("STUB_PUBLISH_EXIT", "8")
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 8);
+    assert_eq!(
+        fixture.calls(),
+        "list\ntransaction repo.example\nsync --delete\npublish repo.example\n"
+    );
+}
+
+#[test]
+fn check_failure_returns_its_status_after_publish() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .command_with_options(None, None, None, &["--check"])
+        .env("STUB_CHECK_EXIT", "11")
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 11);
+    assert_eq!(
+        fixture.calls(),
+        "list\ntransaction repo.example\nsync --delete\npublish repo.example\ncheck repo.example\n"
+    );
+}
+
+#[test]
+fn tag_options_appear_in_dry_run_publish_and_check_order() {
+    let fixture = Fixture::new();
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
+        .args([
+            "--dry-run",
+            "--tag",
+            "snapshot",
+            "--tag-description",
+            "two words",
+            "--check",
+            "repo.example",
+            "--",
+        ])
+        .arg(&fixture.sync)
+        .arg("--delete")
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let sync = format!("{} --delete", fixture.sync.display());
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        [
+            "cvmfs_server list",
+            "cvmfs_server transaction repo.example",
+            &sync,
+            "cvmfs_server publish -a snapshot -m 'two words' repo.example",
+            "cvmfs_server check repo.example",
+            "# on sync failure: cvmfs_server abort -f repo.example",
+        ]
+    );
+    assert!(fixture.calls().is_empty());
+}
+
+#[test]
 fn invalid_arguments_are_usage_errors() {
     for args in [
         vec![],
@@ -838,6 +955,19 @@ fn invalid_arguments_are_usage_errors() {
         vec![
             "--verify-cmd",
             "unterminated '",
+            "repo.example",
+            "--",
+            "sync",
+        ],
+        vec!["--tag", "repo.example", "--", "sync"],
+        vec!["--tag", "", "repo.example", "--", "sync"],
+        vec!["--tag", "a", "--tag", "b", "repo.example", "--", "sync"],
+        vec!["--tag-description", "note", "repo.example", "--", "sync"],
+        vec![
+            "--tag-description",
+            "",
+            "--tag",
+            "a",
             "repo.example",
             "--",
             "sync",
