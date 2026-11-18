@@ -10,9 +10,14 @@ use std::env;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::fd::AsRawFd;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode, ExitStatus};
-use std::time::Instant;
+use std::process::{Child, Command, ExitCode, ExitStatus};
+use std::time::{Duration, Instant};
+
+const TIMEOUT_EXIT: u8 = 124;
+const MAX_TIMEOUT_SECONDS: u64 = i32::MAX as u64;
+const TERMINATION_GRACE: Duration = Duration::from_secs(1);
 
 struct Args {
     check: bool,
@@ -23,6 +28,8 @@ struct Args {
     tag: Option<String>,
     tag_description: Option<String>,
     verify_cmd: Option<String>,
+    sync_timeout: Option<Duration>,
+    verify_timeout: Option<Duration>,
     sync: Vec<String>,
 }
 
@@ -86,6 +93,8 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut tag = None;
     let mut tag_description = None;
     let mut verify_cmd = None;
+    let mut sync_timeout = None;
+    let mut verify_timeout = None;
     let mut sync = Vec::new();
     let mut after_separator = false;
     let mut words = words.peekable();
@@ -152,6 +161,12 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                         .ok_or_else(|| "`--verify-cmd` requires CMD".to_string())?,
                 );
             }
+            "--sync-timeout" => {
+                set_timeout(&mut sync_timeout, "--sync-timeout", words.next())?;
+            }
+            "--verify-timeout" => {
+                set_timeout(&mut verify_timeout, "--verify-timeout", words.next())?;
+            }
             "--archive-manifest" => {
                 if archive_manifest.is_some() {
                     return Err("`--archive-manifest` was given twice".into());
@@ -201,6 +216,20 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 }
                 verify_cmd = Some(word["--verify-cmd=".len()..].to_string());
             }
+            _ if word.starts_with("--sync-timeout=") => {
+                set_timeout(
+                    &mut sync_timeout,
+                    "--sync-timeout",
+                    Some(word["--sync-timeout=".len()..].to_string()),
+                )?;
+            }
+            _ if word.starts_with("--verify-timeout=") => {
+                set_timeout(
+                    &mut verify_timeout,
+                    "--verify-timeout",
+                    Some(word["--verify-timeout=".len()..].to_string()),
+                )?;
+            }
             _ if word.starts_with('-') => return Err(format!("does not know `{word}`")),
             _ if repository.is_none() => repository = Some(word),
             _ => return Err("put `--` between REPOSITORY and the sync command".into()),
@@ -217,6 +246,9 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     if tag_description.is_some() && tag.is_none() {
         return Err("`--tag-description` requires `--tag`".into());
     }
+    if verify_timeout.is_some() && verify_cmd.is_none() {
+        return Err("`--verify-timeout` requires `--verify-cmd`".into());
+    }
     Ok(Args {
         check,
         dry_run,
@@ -226,8 +258,32 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
         tag,
         tag_description,
         verify_cmd,
+        sync_timeout,
+        verify_timeout,
         sync,
     })
+}
+
+fn set_timeout(
+    timeout: &mut Option<Duration>,
+    option: &str,
+    value: Option<String>,
+) -> Result<(), String> {
+    if timeout.is_some() {
+        return Err(format!("`{option}` may be given only once"));
+    }
+    let value = value.ok_or_else(|| format!("`{option}` requires SEC"))?;
+    let seconds: u64 = value
+        .parse()
+        .map_err(|_| format!("`{option}` SEC must be a positive integer"))?;
+    if seconds == 0 {
+        return Err(format!("`{option}` SEC must be a positive integer"));
+    }
+    if seconds > MAX_TIMEOUT_SECONDS {
+        return Err(format!("`{option}` SEC is too large"));
+    }
+    *timeout = Some(Duration::from_secs(seconds));
+    Ok(())
 }
 
 #[derive(Default)]
@@ -236,6 +292,7 @@ struct Facts {
     published_at_seconds: Option<f64>,
     transaction_duration_seconds: Option<f64>,
     aborts: u8,
+    timed_out: Option<&'static str>,
 }
 
 struct MetricsGuard {
@@ -327,6 +384,15 @@ fn prometheus(repository: &str, facts: &Facts, published: Option<f64>) -> String
         &label,
         &facts.aborts.to_string(),
     );
+    if let Some(phase) = facts.timed_out {
+        metric(
+            &mut out,
+            "eb_cvmfs_timeout",
+            "Whether the latest invocation timed out, labelled by phase.",
+            &format!("{label},phase=\"{phase}\""),
+            "1",
+        );
+    }
     out
 }
 
@@ -422,8 +488,21 @@ fn run(args: &Args, facts: &mut Facts) -> Result<u8, String> {
     }
 
     let sync_name = display_command(&args.sync.iter().map(String::as_str).collect::<Vec<_>>());
-    let sync_status = match Command::new(&args.sync[0]).args(&args.sync[1..]).status() {
-        Ok(status) => status,
+    let sync_status = match grouped_status(
+        Command::new(&args.sync[0]).args(&args.sync[1..]),
+        args.sync_timeout,
+    ) {
+        Ok(GroupStatus::Exited(status)) => status,
+        Ok(GroupStatus::TimedOut) => {
+            timeout_message("sync", args.sync_timeout.unwrap());
+            facts.timed_out = Some("sync");
+            let completed = abort(&args.repository, facts);
+            if completed {
+                facts.transaction_duration_seconds =
+                    Some(eb_pipeline::run::seconds(transaction_started.elapsed()));
+            }
+            return Ok(TIMEOUT_EXIT);
+        }
         Err(error) => {
             eprintln!("eb-cvmfs: cannot start sync command `{sync_name}`: {error}");
             let completed = abort(&args.repository, facts);
@@ -446,11 +525,26 @@ fn run(args: &Args, facts: &mut Facts) -> Result<u8, String> {
     if let Some(command) = &verify {
         let verify_name = display_verify_command(command);
         let verify_status = match command {
-            VerifyCommand::Direct(words) => Command::new(&words[0]).args(&words[1..]).status(),
-            VerifyCommand::Shell(script) => Command::new("sh").args(["-c", script]).status(),
+            VerifyCommand::Direct(words) => grouped_status(
+                Command::new(&words[0]).args(&words[1..]),
+                args.verify_timeout,
+            ),
+            VerifyCommand::Shell(script) => {
+                grouped_status(Command::new("sh").args(["-c", script]), args.verify_timeout)
+            }
         };
         let verify_status = match verify_status {
-            Ok(status) => status,
+            Ok(GroupStatus::Exited(status)) => status,
+            Ok(GroupStatus::TimedOut) => {
+                timeout_message("verification", args.verify_timeout.unwrap());
+                facts.timed_out = Some("verify");
+                let completed = abort(&args.repository, facts);
+                if completed {
+                    facts.transaction_duration_seconds =
+                        Some(eb_pipeline::run::seconds(transaction_started.elapsed()));
+                }
+                return Ok(TIMEOUT_EXIT);
+            }
             Err(error) => {
                 eprintln!("eb-cvmfs: cannot start verification command `{verify_name}`: {error}");
                 let completed = abort(&args.repository, facts);
@@ -525,6 +619,74 @@ fn is_repository_char(c: char) -> bool {
 
 fn status(command: &mut Command, name: &str) -> Result<ExitStatus, String> {
     command.status().map_err(|error| start_error(name, error))
+}
+
+enum GroupStatus {
+    Exited(ExitStatus),
+    TimedOut,
+}
+
+fn grouped_status(command: &mut Command, timeout: Option<Duration>) -> io::Result<GroupStatus> {
+    let Some(timeout) = timeout else {
+        return command.status().map(GroupStatus::Exited);
+    };
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "timeout is too large"))?;
+    // SAFETY: `setpgid` is async-signal-safe, and the closure captures nothing.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        });
+    }
+    let mut child = command.spawn()?;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(GroupStatus::Exited(status));
+        }
+        if Instant::now() >= deadline {
+            terminate_group(&mut child);
+            return Ok(GroupStatus::TimedOut);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn terminate_group(child: &mut Child) {
+    signal_group(child.id(), libc::SIGTERM);
+    std::thread::sleep(TERMINATION_GRACE);
+    signal_group(child.id(), libc::SIGKILL);
+    let _ = child.wait();
+}
+
+fn signal_group(id: u32, signal: libc::c_int) {
+    // SAFETY: the negative pid addresses the process group created for this
+    // child. The unreaped group leader prevents its pid from being reused.
+    unsafe {
+        libc::kill(-(id as libc::pid_t), signal);
+    }
+}
+
+fn timeout_message(phase: &str, timeout: Duration) {
+    let timeout_unit = if timeout.as_secs() == 1 {
+        "second"
+    } else {
+        "seconds"
+    };
+    let grace_unit = if TERMINATION_GRACE.as_secs() == 1 {
+        "second"
+    } else {
+        "seconds"
+    };
+    eprintln!(
+        "eb-cvmfs: {phase} command timed out after {} {timeout_unit}; sent TERM, waited {} {grace_unit}, then sent KILL",
+        timeout.as_secs(),
+        TERMINATION_GRACE.as_secs()
+    );
 }
 
 fn abort(repository: &str, facts: &mut Facts) -> bool {

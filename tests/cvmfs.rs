@@ -52,7 +52,7 @@ impl Fixture {
         );
         write_exec(
             &verify,
-            "#!/bin/sh\necho \"verify $*\" >> \"$CALLS\"\necho verify-stdout\necho verify-stderr >&2\nexit \"${VERIFY_EXIT:-0}\"\n",
+            "#!/bin/sh\necho \"verify $*\" >> \"$CALLS\"\necho verify-stdout\necho verify-stderr >&2\n[ -n \"${VERIFY_DELAY:-}\" ] && /bin/sleep \"$VERIFY_DELAY\"\nexit \"${VERIFY_EXIT:-0}\"\n",
         );
         Self {
             dir,
@@ -138,6 +138,33 @@ fn successful_sync_opens_and_publishes_one_transaction() {
         fixture.calls(),
         "list\ntransaction repo.example\nsync --delete\npublish repo.example\n"
     );
+}
+
+#[test]
+fn sync_without_a_timeout_stays_in_the_callers_process_group() {
+    let fixture = Fixture::new();
+    let group = fixture.dir.path().join("group");
+    write_exec(
+        &fixture.sync,
+        "#!/bin/sh\n\
+         echo \"sync $*\" >> \"$CALLS\"\n\
+         set -- $(/bin/cat /proc/$$/stat)\n\
+         echo \"$$ ${5}\" > \"$GROUP\"\n",
+    );
+    let output = fixture.command().env("GROUP", &group).output().unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let identity = std::fs::read_to_string(group).unwrap();
+    let (pid, process_group) = identity.trim().split_once(' ').unwrap();
+    assert_ne!(pid, process_group);
+    assert_eq!(process_group, current_process_group());
+    assert_eq!(output.stdout, b"");
+    assert_eq!(output.stderr, b"");
+}
+
+fn current_process_group() -> String {
+    let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
+    let (_, fields) = stat.rsplit_once(") ").unwrap();
+    fields.split_whitespace().nth(2).unwrap().to_string()
 }
 
 #[test]
@@ -412,6 +439,105 @@ fn failed_sync_does_not_run_verification() {
 }
 
 #[test]
+fn a_sync_timeout_kills_its_process_group_aborts_once_and_records_the_phase() {
+    let fixture = Fixture::new();
+    let child_identity = fixture.dir.path().join("child.identity");
+    write_exec(
+        &fixture.sync,
+        "#!/bin/sh\n\
+         echo \"sync $*\" >> \"$CALLS\"\n\
+         trap '' TERM\n\
+         /bin/sh -c 'trap \"\" TERM; set -- $(/bin/cat /proc/$$/stat); echo \"$$ ${22}\" > \"$CHILD_IDENTITY\"; exec /bin/sleep 30' &\n\
+         wait\n",
+    );
+    let metrics = fixture.dir.path().join("cvmfs.prom");
+    let output = fixture
+        .command_with_options(None, Some(&metrics), None, &["--sync-timeout", "1"])
+        .env("CHILD_IDENTITY", &child_identity)
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 124, "{}", stderr(&output));
+    assert!(output.stdout.is_empty());
+    assert!(
+        stderr(&output).contains(
+            "sync command timed out after 1 second; sent TERM, waited 1 second, then sent KILL"
+        ),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(
+        fixture.calls(),
+        "list\ntransaction repo.example\nsync --delete\nabort -f repo.example\n"
+    );
+    let identity = std::fs::read_to_string(child_identity).unwrap();
+    let (pid, start_time) = identity.trim().split_once(' ').unwrap();
+    let pid: i32 = pid.parse().unwrap();
+    let start_time: u64 = start_time.parse().unwrap();
+    assert!(
+        !same_live_process(pid, start_time),
+        "sleep descendant {pid} survived timeout"
+    );
+
+    let text = std::fs::read_to_string(metrics).unwrap();
+    assert_eq!(sample(&text, "eb_cvmfs_last_result"), Some(0.0));
+    assert_eq!(sample(&text, "eb_cvmfs_exit_code"), Some(124.0));
+    assert_eq!(sample(&text, "eb_cvmfs_aborts"), Some(1.0));
+    assert!(
+        text.contains("eb_cvmfs_timeout{repository=\"repo.example\",phase=\"sync\"} 1"),
+        "{text}"
+    );
+}
+
+fn same_live_process(pid: i32, start_time: u64) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    let Some((_, fields)) = stat.rsplit_once(") ") else {
+        return false;
+    };
+    let fields: Vec<_> = fields.split_whitespace().collect();
+    fields.first() != Some(&"Z")
+        && fields
+            .get(19)
+            .and_then(|field| field.parse::<u64>().ok())
+            .is_some_and(|current| current == start_time)
+}
+
+#[test]
+fn a_verification_timeout_aborts_without_retrying_or_publishing() {
+    let fixture = Fixture::new();
+    let verify = fixture.verify.display().to_string();
+    let metrics = fixture.dir.path().join("cvmfs.prom");
+    let output = fixture
+        .command_with_options(
+            None,
+            Some(&metrics),
+            Some(&verify),
+            &["--verify-timeout", "1"],
+        )
+        .env("VERIFY_DELAY", "30")
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 124);
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "verify-stdout\n");
+    assert!(
+        stderr(&output).contains("verification command timed out after 1 second"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(
+        fixture.calls(),
+        "list\ntransaction repo.example\nsync --delete\nverify \nabort -f repo.example\n"
+    );
+    let text = std::fs::read_to_string(metrics).unwrap();
+    assert_eq!(sample(&text, "eb_cvmfs_exit_code"), Some(124.0));
+    assert!(
+        text.contains("eb_cvmfs_timeout{repository=\"repo.example\",phase=\"verify\"} 1"),
+        "{text}"
+    );
+}
+
+#[test]
 fn an_existing_transaction_is_refused_before_sync() {
     let fixture = Fixture::new();
     let output = fixture
@@ -627,6 +753,25 @@ fn default_outputs_match_the_bytes_from_before_archive_manifests() {
     );
     assert!(sample(&text, "eb_cvmfs_last_transaction_duration_seconds").is_some());
     assert!(fixture.dir.path().join(".cvmfs.prom.lock").is_file());
+}
+
+#[test]
+fn absent_timeout_options_preserve_stdout_stderr_and_exit_status_bytes() {
+    let fixture = Fixture::new();
+    let output = fixture.command().output().unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"");
+    assert_eq!(output.stderr, b"");
+    assert_eq!(fixture.calls().as_bytes(), HISTORICAL_CALLS);
+
+    let sync = "/opt/site/bin/sync-module-cache";
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
+        .args(["--dry-run", "repo.example", "--", sync, "--delete"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, historical_dry_run(sync));
+    assert_eq!(output.stderr, b"");
 }
 
 #[test]
@@ -943,6 +1088,34 @@ fn invalid_arguments_are_usage_errors() {
         vec!["--unknown", "repo.example", "--", "sync"],
         vec!["--verify-cmd"],
         vec!["--verify-cmd", "", "repo.example", "--", "sync"],
+        vec!["--sync-timeout"],
+        vec!["--sync-timeout", "0", "repo.example", "--", "sync"],
+        vec!["--sync-timeout", "1.5", "repo.example", "--", "sync"],
+        vec!["--sync-timeout", "2147483648", "repo.example", "--", "sync"],
+        vec![
+            "--sync-timeout",
+            "18446744073709551615",
+            "repo.example",
+            "--",
+            "sync",
+        ],
+        vec![
+            "--sync-timeout",
+            "1",
+            "--sync-timeout=2",
+            "repo.example",
+            "--",
+            "sync",
+        ],
+        vec!["--verify-timeout", "1", "repo.example", "--", "sync"],
+        vec![
+            "--verify-cmd",
+            "verify",
+            "--verify-timeout=0",
+            "repo.example",
+            "--",
+            "sync",
+        ],
         vec![
             "--verify-cmd",
             "verify",
