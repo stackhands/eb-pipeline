@@ -168,7 +168,16 @@ def main(argv):
         print(f"check_site: no index.html in {args.site}", file=sys.stderr)
         return 2
     patterns = ([] if args.no_default_forbid else DEFAULT_FORBID) + args.forbid
-    forbid = [re.compile(p, re.I) for p in patterns]
+    forbid = []
+    for pattern in patterns:
+        try:
+            forbid.append(re.compile(pattern, re.I))
+        except re.error as error:
+            print(
+                f"check_site: invalid --forbid regular expression {pattern!r}: {error}",
+                file=sys.stderr,
+            )
+            return 2
     errors, count = check_site(args.site, forbid, set(args.exempt))
     errors += check_sources(args.sources, forbid)
     for error in errors:
