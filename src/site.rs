@@ -660,10 +660,24 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
         }
     }
     if let Some(s) = &site.shards {
+        let mut seen_dirs = BTreeSet::new();
+        for path in &s.installed_modules_dirs {
+            if !seen_dirs.insert(path) {
+                e.push(format!(
+                    "shards.installed_modules_dirs: duplicate path `{path}`"
+                ));
+            }
+        }
+        let mut seen_env = BTreeSet::new();
         for n in &s.installed_modules_dirs_from_env {
             if !env_name_ok(n) {
                 e.push(format!(
                     "shards.installed_modules_dirs_from_env: `{n}` is not a variable name"
+                ));
+            }
+            if !seen_env.insert(n) {
+                e.push(format!(
+                    "shards.installed_modules_dirs_from_env: duplicate variable `{n}`"
                 ));
             }
         }
@@ -1131,6 +1145,40 @@ mod override_tests {
         assert_eq!(
             serde_json::to_string(&a).unwrap(),
             serde_json::to_string(&b).unwrap()
+        );
+    }
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_shard_module_sources_are_refused() {
+        let text = include_str!("../templates/eessi-site.toml")
+            .replace(
+                "installed_modules_dirs = [\"/opt/eb/noarch/modules/all\"]",
+                "installed_modules_dirs = [\"/opt/eb/noarch/modules/all\", \"/opt/eb/noarch/modules/all\"]",
+            )
+            .replace(
+                "installed_modules_dirs_from_env = [\"SITE_INSTALLED_MODULES\"]",
+                "installed_modules_dirs_from_env = [\"SITE_INSTALLED_MODULES\", \"SITE_INSTALLED_MODULES\"]",
+            );
+        let parsed = parse(&text).unwrap();
+        let errors = validate(&parsed, None);
+        assert!(
+            errors.contains(
+                &"shards.installed_modules_dirs: duplicate path `/opt/eb/noarch/modules/all`"
+                    .to_string()
+            ),
+            "{errors:?}"
+        );
+        assert!(
+            errors.contains(
+                &"shards.installed_modules_dirs_from_env: duplicate variable `SITE_INSTALLED_MODULES`"
+                    .to_string()
+            ),
+            "{errors:?}"
         );
     }
 }

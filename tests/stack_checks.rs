@@ -178,3 +178,30 @@ fn stack_checks_require_a_list_and_validate_the_target_before_starting() {
     assert_eq!(code(&unknown), 2, "{}", stderr(&unknown));
     assert!(t.calls("ebstack").is_empty());
 }
+
+#[test]
+fn easystack_checks_refuse_a_plain_build_list() {
+    let t = configured();
+    let list = t.root().join("build.list");
+    std::fs::write(&list, "Pkg-1.0.eb\n").unwrap();
+    let output = eb_pipeline(
+        &t,
+        &[
+            "check",
+            "--site",
+            &t.site.display().to_string(),
+            "--list",
+            &list.display().to_string(),
+            "--stack-checks",
+            "generation",
+        ],
+        &[],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(t.calls("ebstack").is_empty());
+    assert!(
+        stderr(&output).contains("needs an easystack .yml or .yaml path"),
+        "{}",
+        stderr(&output)
+    );
+}
