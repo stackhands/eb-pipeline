@@ -168,6 +168,25 @@ fn status_of_one_target_shows_only_its_runs_and_entries() {
 }
 
 #[test]
+fn status_does_not_report_another_target_as_the_selected_target() {
+    let t = setup("");
+    assert_eq!(code(&run(&t, "cpu", A, LIST, &[])), 0);
+    std::fs::create_dir(t.run_dir(A).join("gpu")).unwrap();
+
+    let o = status(&t, &["--target", "gpu"]);
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    assert_eq!(
+        o.stdout,
+        format!(
+            "{A}  {} has no target `gpu`\n",
+            t.run_dir(A).join("summary.json").display()
+        )
+        .as_bytes()
+    );
+    assert_eq!(o.stderr, b"");
+}
+
+#[test]
 fn the_columns_of_the_targets_line_up_across_runs() {
     let t = setup("");
     assert_eq!(code(&run(&t, "cpu", A, LIST, &[])), 0);

@@ -376,11 +376,14 @@ fn selected_runs(
             continue;
         }
         let summary = if dir.join(JSON).exists() {
-            read(&dir).map(|mut s| {
+            read(&dir).and_then(|mut s| {
                 if let Some(t) = target {
                     s.targets.retain(|x| x.name == t);
+                    if s.targets.is_empty() {
+                        return Err(format!("{} has no target `{t}`", dir.join(JSON).display()));
+                    }
                 }
-                s
+                Ok(s)
             })
         } else {
             Err(format!(
