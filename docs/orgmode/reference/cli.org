@@ -449,7 +449,7 @@ eb-retry-list (--result FILE | --summary FILE --target NAME)
 | =--target NAME= | Target entry to read from =--summary=. |
 | =--list FILE= | Build list or easystack (=.yml= or =.yaml=) passed to the run. Mutually exclusive with =--recorded-list=. |
 | =--recorded-list= | Read the build-list path from the result or selected summary target and use it as written. Mutually exclusive with =--list=. |
-| =--status STATUS,...= | Comma-separated statuses to keep: =failed=, =refused=, =pending=, =skipped=, =unreached=. Default: all non-=success= lines and unreached lines on a non-zero exit. |
+| =--status STATUS,...= | Comma-separated statuses to keep: =failed=, =refused=, =pending=, =skipped=, =unreached=. Default: all non-=success= lines and unreached lines on a non-zero exit, omitting =skipped= lines whose note starts with =resumed:= unless =--status skipped= is passed. |
 | =--classify= | Pass each selected line's recorded log to =eb-stack stack bot-classify --json=. Without =--class=, keep the =interrupted=, =resource= and =timeout= sub-classes. |
 | =--class CLASS,...= | Classes to keep instead of that default. A line stays when the JSON =class= or =sub_class= is one of these names. Repeatable. Requires =--classify=. |
 | =--node NODE= | =CORES:MEMORY_MIB= or =CORES:MEMORY_MIB:TARGET=, passed to =eb-stack stack oom --node=. The lines that remain are written to a temporary easystack with their =eb= options and passed as =--easystack=. A line the command warns may run out of memory is named on stderr and still written. Requires =--classify=. |
