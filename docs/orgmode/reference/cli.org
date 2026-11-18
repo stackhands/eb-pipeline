@@ -195,6 +195,7 @@ Its own report files are written directly into =DIR=.
 It also prints the summary line without changes.
 With =--shadow=, =stack shadow= receives the recipe trees as =--easyconfigs= and the EESSI trees as =--base=, with JavaScript Object Notation (JSON) selected by =--json=.
 Its standard output is =DIR/shadow.json= and its standard error is =DIR/shadow.stderr.log=.
+Each complete stream file atomically replaces an existing file.
 Neither subprocess uses =scheduler.launch=.
 
 *** schema
@@ -283,7 +284,7 @@ Exit 2 means the file is missing, is not JSON, or its =kind= is not =result=.
 | =--build-type NAME= | =EB_PIPELINE_BUILD_TYPE= | The build type; required. A name without a =[targets.build_types.NAME]= table takes the values of the target.                                                                    |
 | =--run-id ID=       | =EB_PIPELINE_RUN_ID=     | The run label passed to the tools; =<run-id>= when absent.                                                                                                                       |
 | =--log-stamp STAMP= | =EB_PIPELINE_LOG_STAMP=  | The name of the run's directory under the log root, a Coordinated Universal Time (UTC) as =YYYYMMDD_HHMMSS=; =<log-stamp>= when absent. Any other value is refused, with exit 2. |
-| =--out FILE=        |                          | Write the plan to =FILE= instead of stdout; =-= is stdout. =FILE= must differ from the site and list files.                                                                       |
+| =--out FILE=        |                          | Atomically replace =FILE= with the complete plan instead of writing stdout; =-= is stdout. =FILE= must differ from the site and list files.                                        |
 | =--shard-plan DIR=  |                          | Read =DIR/plan.json=, written by =eb-stack stack shard=, and plan its units and their lines instead of the list as one unit.                                                     |
 | =--offline-bundle DIR= |                       | Add the opt-in offline planner calls to the sources phase and name the bundle that =run= writes. Needs an active =[sources]= table, a source path and configured easyconfig trees. |
 | =--require-offline= |                          | Place =sources.offline_wrapper= before admission, build, check, cache, log and notification commands. Requires =--offline-bundle= and a non-empty wrapper.                       |
@@ -294,8 +295,8 @@ Exit 2 means the file is missing, is not JSON, or its =kind= is not =result=.
 
 | Option                 | Meaning                                                                                                                                                                                                                         |
 |------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| =--result FILE=        | Write the result file to =FILE= when the run ends. Without it, no result file is written. An error in the input, which stops the run before it starts, leaves an existing =FILE= as it was. It must differ from =--metrics-file=.   |
-| =--plan-out FILE=      | Write the plan computed by this invocation before any phase command starts. A dry run writes it too. =FILE= must differ from every result and metrics path.                                                                       |
+| =--result FILE=        | Atomically replace =FILE= with the complete result when the run ends. Without it, no result file is written. An input error leaves an existing =FILE= as it was. It must differ from =--metrics-file=.                              |
+| =--plan-out FILE=      | Atomically replace =FILE= with the plan computed by this invocation before any phase command starts. A dry run writes it too. =FILE= must differ from every result and metrics path.                                               |
 | =--metrics-file FILE=  | Atomically replace =FILE= with Prometheus text when the run ends. Without it, no metrics file is written. A dry run does not write it. It must differ from =--result= and =--resume-result=.                                             |
 | =--resume-result FILE= | Continue from =FILE= when =[resume] enabled= is true and the input digest still matches. Conflicts with =--dry-run=. Without that, exit 2 and no result file. A mismatch, a missing =input_digest=, or an incomplete identity exits 78 and writes the result. |
 | =--shard-plan DIR=     | Read the units from a plan previously written by =eb-stack stack shard=. The run does not call the shard planner or require its installed-module-directory environment variables.                                             |
@@ -345,8 +346,8 @@ Without =[attest] enabled=, =verify= exits 2.
 | =--log-stamp STAMP= | =EB_PIPELINE_LOG_STAMP=  | The run directory of the rebuild under the log root, as for =run=; the UTC time at which =watch= starts when absent. Any other value is refused, with exit 2. |
 | =--dry-run=         |                          | Print the plan on stdout, and rebuild and record nothing.                                                                                                     |
 | =--adopt=           |                          | Record each install in the module tree of the target against the EESSI loaded now, in place of the record, and rebuild nothing.                               |
-| =--plan-out FILE=   |                          | Write the plan to =FILE= in JSON, including the assessed actions when rebuild ordering stops before an order is computed.                                     |
-| =--result FILE=     |                          | Write the result file of the rebuild to =FILE=. Without it, or without a rebuild, no result file is written.                                                  |
+| =--plan-out FILE=   |                          | Atomically replace =FILE= with the complete plan in JSON, including assessed actions when rebuild ordering stops before an order is computed.                  |
+| =--result FILE=     |                          | Atomically replace =FILE= with the complete rebuild result. Without it, or without a rebuild, no result file is written.                                      |
 
 The plan and result destinations must differ from the site file and from each other.
 Without =--dry-run=, =watch= prints the plan to stderr, then runs the rebuild list through the phases of the site file, as =run= runs a build list.
@@ -440,7 +441,7 @@ eb-retry-list (--result FILE | --summary FILE --target NAME)
 | =--drop-oom= | Leave out every line =--node= warned about. Requires =--node=. |
 | =--easyconfigs DIR= | Robot tree passed through to =eb-stack stack oom --easyconfigs=. Repeatable. Requires =--node=. |
 | =--arch ARCH= | CPU target passed through to =eb-stack stack oom --arch=. Repeatable. Requires =--node=. |
-| =--out FILE= | Write the retry list to =FILE=; =-= or absent prints to stdout. It must differ from the result or summary and from the explicit or recorded build list, including through symbolic and hard links. |
+| =--out FILE= | Atomically replace =FILE= with the complete retry list; =-= or absent prints to stdout. It must differ from the result or summary and from the explicit or recorded build list, including through symbolic and hard links. |
 | =--require-lines= | Exit 1 after writing an empty retry list. Without it, an empty retry list exits 0. |
 
 Exit 0 means the retry list was written (empty when every line succeeded, was deselected, was not in a selected class, or was dropped by =--drop-oom=).
@@ -469,7 +470,7 @@ eb-shard-weights (--result FILE... | --summary FILE... | --log-root DIR [--last 
 | =--existing FILE= | Seed weights TSV (=MODULE<TAB>SECONDS=) to merge with new observations. |
 | =--min-samples N= | Update a module only after N selected observations, from 1 to 65535; 1 when absent. Under-sampled existing weights remain unchanged. |
 | =--mode MODE= | Combine durations with =max= (default), =latest= or =mean=. |
-| =--out FILE= | Write the table to =FILE=; =-= or absent prints to stdout. =FILE= must differ from every result, summary and existing weights file. |
+| =--out FILE= | Atomically replace =FILE= with the complete table; =-= or absent prints to stdout. =FILE= must differ from every result, summary and existing weights file. |
 
 Exit 0 means the table was written. Exit 2 is a missing or invalid input.
 
@@ -488,7 +489,7 @@ eb-junit [--result FILE]... [--reframe-report FILE]... [--out FILE]
 |--------+---------|
 | =--result FILE= | A result file written by =eb-pipeline run --result=. Repeat for each file. |
 | =--reframe-report FILE= | A ReFrame report JSON written by =reframe --report-file=. Repeat for each file. |
-| =--out FILE= | Write the report to =FILE=. =-= or absent prints it on stdout. =FILE= must differ from every result and ReFrame report file. |
+| =--out FILE= | Atomically replace =FILE= with the complete report. =-= or absent prints it on stdout. =FILE= must differ from every result and ReFrame report file. |
 | =--property NAME=VALUE= | Add the property to every suite. Repeat for more properties; the last value for a name wins. |
 | =--fail-on-failure= | Write the complete report, then exit 1 when it contains at least one failure. |
 

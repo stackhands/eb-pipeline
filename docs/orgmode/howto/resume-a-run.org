@@ -15,6 +15,7 @@ Leave =[resume]= out, or set =enabled = false=, for a run that always builds the
 - At least one absolute easyconfig tree, on =resume.easyconfigs= or, when that is empty, on =shards.easyconfigs=.
 - A result file from a run of that same site with =[resume]= enabled.
   A result that has no =input_digest= cannot be resumed.
+  A truncated or invalid JSON result exits 2 before any command starts and remains unchanged.
 
 Add the table:
 

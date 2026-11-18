@@ -1,7 +1,7 @@
 //! `run` against stub tool binaries written into a temporary directory.
 
 use serde_json::Value;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -1390,6 +1390,8 @@ fn historical_dry_run(env: &Env) -> String {
 fn plan_out_records_the_run_plan_without_changing_dry_run_output() {
     let env = setup("");
     let plan = env.dir.path().join("run-plan.json");
+    std::fs::write(&plan, b"complete old plan\n").unwrap();
+    let old_inode = std::fs::metadata(&plan).unwrap().ino();
     let o = driver(
         &env,
         LIST,
@@ -1402,6 +1404,7 @@ fn plan_out_records_the_run_plan_without_changing_dry_run_output() {
     assert_eq!(o.stdout, historical_dry_run(&env).as_bytes());
     assert_eq!(o.stderr, b"INFO [run] cpu: dry run: nothing executed\n");
     assert!(calls(&env, "eb.calls").is_empty());
+    assert_ne!(std::fs::metadata(&plan).unwrap().ino(), old_inode);
     let bytes = std::fs::read(&plan).unwrap();
     assert!(bytes.ends_with(b"\n"));
     let value: Value = serde_json::from_slice(&bytes).unwrap();

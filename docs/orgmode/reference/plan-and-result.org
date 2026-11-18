@@ -15,7 +15,7 @@ The examples on this page come from =docs/examples/files.sh=, which plans and ru
 A dry run writes the plan too.
 The file uses the run's actual default run id and log stamp.
 A real run includes its input attestation when =[attest]= is enabled; a dry run does not append an attestation.
-An existing file is replaced.
+An existing file is atomically replaced after the complete plan is written and synced to a temporary sibling.
 If the plan cannot be written, no phase command starts and the run exits 1.
 A plan holds every phase, planned or not, in the order a run goes through them, and every command a run would start, with its whole argument vector and environment.
 
@@ -153,6 +153,7 @@ A =probe:TOOL= command runs the =--version= of a tool that has a =min_version=.
 ** The result file
 
 =run --result FILE= writes it when the run ends, and =run= without =--result= writes none.
+The complete result is written and synced to a temporary sibling before it atomically replaces an existing =FILE=.
 =run --dry-run= writes none either, and neither does a run that an error in its input stops before it starts, such as an invalid site file, an unknown target, a list that cannot be read or a tool below its =min_version=: those exit 2, or 78 when only the licence gate fails, and leave an existing =FILE= as it was.
 Read the exit status before the file.
 

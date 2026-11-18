@@ -109,7 +109,8 @@ fn run() -> Result<ExitCode, String> {
     }
     match args.out.as_deref() {
         Some(path) if path != "-" => {
-            fs::write(path, &text).map_err(|e| format!("cannot write {path}: {e}"))?;
+            util::write_atomic(Path::new(path), text.as_bytes())
+                .map_err(|e| format!("cannot write {path}: {e}"))?;
         }
         _ => {
             let mut out = io::stdout().lock();

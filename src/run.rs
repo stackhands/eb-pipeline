@@ -8,7 +8,7 @@ use crate::plan::{
 use crate::resolve::Role;
 use crate::resume::{self, Prior};
 use crate::tools::{help_lists, map_rotate, map_staged, RotateOutcome, StagedOutcome, Tool};
-use crate::util::ListLine;
+use crate::util::{self, ListLine};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -527,7 +527,7 @@ struct OomPlan<'a> {
 fn write_plan(path: &Path, plan: &Plan) -> Result<(), Fail> {
     let value = serde_json::to_value(plan).expect("plan is serializable");
     let text = serde_json::to_string_pretty(&value).expect("plan is serializable") + "\n";
-    std::fs::write(path, text).map_err(|e| {
+    util::write_atomic(path, text.as_bytes()).map_err(|e| {
         Fail::new(
             exit::FAILED,
             format!("cannot write plan {}: {e}", path.display()),
