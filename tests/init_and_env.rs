@@ -63,6 +63,22 @@ fn init_writes_a_valid_site_file_and_refuses_to_overwrite() {
 }
 
 #[test]
+fn init_reports_an_output_filesystem_error_as_a_runtime_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("absent").join("site.toml");
+    let output = bin()
+        .args(["init", "--template", "small-cluster", "--out"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert_eq!(output.stdout, b"");
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(error.contains("cannot create"), "{error}");
+    assert!(error.contains(path.to_str().unwrap()), "{error}");
+}
+
+#[test]
 fn init_hints_print_next_steps_on_stderr() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("site.toml");

@@ -96,6 +96,18 @@ pub fn probe(bin: &str) -> Result<Vec<u64>, String> {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+    if !out.status.success() {
+        let code = out
+            .status
+            .code()
+            .map_or_else(|| out.status.to_string(), |code| code.to_string());
+        let detail = text.trim();
+        return Err(if detail.is_empty() {
+            format!("`{bin} --version` exited {code}")
+        } else {
+            format!("`{bin} --version` exited {code}: {detail}")
+        });
+    }
     find_version(&text)
         .ok_or_else(|| format!("`{bin} --version` printed no version: {}", text.trim()))
 }
@@ -207,5 +219,23 @@ pub fn map_rotate(code: i32) -> RotateOutcome {
         0 => RotateOutcome::Ok,
         75 => RotateOutcome::Locked,
         _ => RotateOutcome::Failed,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn a_failed_version_command_does_not_supply_an_accepted_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("eb-stack");
+        std::fs::write(&bin, "#!/bin/sh\necho 'eb-stack 99.0' >&2\nexit 1\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let error = probe(bin.to_str().unwrap()).unwrap_err();
+        assert!(error.contains("exited 1"), "{error}");
+        assert!(error.contains("eb-stack 99.0"), "{error}");
     }
 }

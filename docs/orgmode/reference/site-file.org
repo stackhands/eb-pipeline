@@ -130,7 +130,7 @@ So every job that a run or =watch= starts needs the directory, whatever its phas
 | Key           | Type   | Default                                  | Meaning                                                                                                                                                                                                                                                      |
 |---------------+--------+------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | =bin=         | string | the tool's own name, looked up on =PATH= | The program: a path, or a name to look up on =PATH=.                                                                                                                                                                                                         |
-| =min_version= | string | none                                     | The lowest version accepted, as dotted numbers such as =0.7.4=. When a phase that calls the tool is on, =run= starts =BIN --version= before any other command, and exits 2 when the tool cannot start, prints no dotted number, or prints a lower one first. |
+| =min_version= | string | none                                     | The lowest version accepted, as dotted numbers such as =0.7.4=. When a phase that calls the tool is on, =run= starts =BIN --version= before any other command, and exits 2 when the tool cannot start, exits nonzero, prints no dotted number, or prints a lower one first. |
 
 ** =[scheduler]=
 
@@ -396,6 +396,7 @@ The route receipt is the value of the target's =receipt_digest_env= when that va
 
 A prefetch command gets the options of its line, except those that start with =--rebuild=.
 A line whose prefetch fails is =failed= and is not built.
+A signal during prefetch records the active line as =failed= in =sources= and every other unbuilt line as =skipped= before the run exits 130 or 143.
 =--fetch= takes no account of installed modules, so =--robot= fetches the sources of every dependency, those EESSI provides included.
 With =--disable-robot= in =extra_args=, a line fetches its own sources only: the prefetch command has no =--robot=, the line's =--robot= is dropped, and the paths of the line's =--robot=PATH= go first in =--robot-paths=, so that its easyconfig is still found.
 
