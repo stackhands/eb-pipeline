@@ -218,7 +218,7 @@ enum Cmd {
         #[arg(long)]
         shard_plan: Option<PathBuf>,
         /// Print the commands that would run and start nothing.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "resume_result")]
         dry_run: bool,
         /// Ask `eb-stack stack oom` whether any planned package exceeds this node.
         #[arg(long, requires = "node")]

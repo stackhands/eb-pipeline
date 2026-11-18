@@ -141,7 +141,7 @@ _arguments "${_arguments_options[@]}" : \
 '--resume-result=[Continue from this result when its input digest still matches. Needs \`\[resume\] enabled\`]:FILE:_files' \
 '--verify-package-plan[Run ecosystem-native checks after a package-plan build]' \
 '--require-offline[Run phases after source prefetch through sources.offline_wrapper]' \
-'--dry-run[Print the commands that would run and start nothing]' \
+'(--resume-result)--dry-run[Print the commands that would run and start nothing]' \
 '--oom-preflight[Ask \`eb-stack stack oom\` whether any planned package exceeds this node]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
