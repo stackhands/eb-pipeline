@@ -29,6 +29,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
 clap_mangen = "0.2"
+flate2 = { version = "1.1.11", default-features = false, features = ["rust_backend"] }
 libc = "0.2"
 rfc9162 = "0.11.0"
 serde = { version = "1", features = ["derive"] }

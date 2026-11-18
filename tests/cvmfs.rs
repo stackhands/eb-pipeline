@@ -63,24 +63,36 @@ impl Fixture {
     }
 
     fn command(&self) -> Command {
-        self.command_with_options(None, None)
+        self.command_with_options(None, None, None)
     }
 
     fn command_with_metrics(&self, metrics: Option<&Path>) -> Command {
-        self.command_with_options(metrics, None)
+        self.command_with_options(None, metrics, None)
     }
 
     fn command_with_verify(&self, verify: Option<&str>) -> Command {
-        self.command_with_options(None, verify)
+        self.command_with_options(None, None, verify)
     }
 
-    fn command_with_options(&self, metrics: Option<&Path>, verify: Option<&str>) -> Command {
+    fn command_with(&self, manifest: Option<&Path>, metrics: Option<&Path>) -> Command {
+        self.command_with_options(manifest, metrics, None)
+    }
+
+    fn command_with_options(
+        &self,
+        manifest: Option<&Path>,
+        metrics: Option<&Path>,
+        verify: Option<&str>,
+    ) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"));
         command
             .env("PATH", &self.bin)
             .env("BIN", &self.bin)
             .env("CALLS", &self.calls)
             .env("REPOSITORY", "repo.example");
+        if let Some(manifest) = manifest {
+            command.arg("--archive-manifest").arg(manifest);
+        }
         if let Some(metrics) = metrics {
             command.arg("--metrics-file").arg(metrics);
         }
@@ -546,6 +558,235 @@ fn dry_run_prints_verification_between_sync_and_publish() {
         ]
     );
     assert!(fixture.calls().is_empty());
+}
+
+fn historical_dry_run(sync: &str) -> Vec<u8> {
+    format!(
+        "cvmfs_server list\n\
+         cvmfs_server transaction repo.example\n\
+         {sync} --delete\n\
+         cvmfs_server publish repo.example\n\
+         # on sync failure: cvmfs_server abort -f repo.example\n"
+    )
+    .into_bytes()
+}
+
+const HISTORICAL_CALLS: &[u8] =
+    b"list\ntransaction repo.example\nsync --delete\npublish repo.example\n";
+
+#[test]
+fn default_outputs_match_the_bytes_from_before_archive_manifests() {
+    let sync = "/opt/site/bin/sync-module-cache";
+    let empty = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
+        .env("PATH", empty.path())
+        .args(["--dry-run", "repo.example", "--", sync, "--delete"])
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 0);
+    assert_eq!(output.stdout, historical_dry_run(sync));
+    assert_eq!(output.stderr, b"");
+
+    let fixture = Fixture::new();
+    let output = fixture.command().output().unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(output.stdout, b"");
+    assert_eq!(output.stderr, b"");
+    assert_eq!(fixture.calls().as_bytes(), HISTORICAL_CALLS);
+    let names: Vec<String> = std::fs::read_dir(fixture.dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        names
+            .iter()
+            .all(|name| !name.ends_with(".prom") && !name.ends_with(".lock")),
+        "omitting both options writes no metrics file: {names:?}"
+    );
+
+    let fixture = Fixture::new();
+    let metrics = fixture.dir.path().join("cvmfs.prom");
+    let output = fixture
+        .command_with_metrics(Some(&metrics))
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(output.stdout, b"");
+    assert_eq!(output.stderr, b"");
+    assert_eq!(fixture.calls().as_bytes(), HISTORICAL_CALLS);
+    let text = std::fs::read_to_string(&metrics).unwrap();
+    assert_eq!(sample(&text, "eb_cvmfs_last_result"), Some(1.0));
+    assert_eq!(sample(&text, "eb_cvmfs_exit_code"), Some(0.0));
+    assert_eq!(sample(&text, "eb_cvmfs_aborts"), Some(0.0));
+    assert!(
+        sample(&text, "eb_cvmfs_last_publish_timestamp_seconds").unwrap() > 0.0,
+        "{text}"
+    );
+    assert!(sample(&text, "eb_cvmfs_last_transaction_duration_seconds").is_some());
+    assert!(fixture.dir.path().join(".cvmfs.prom.lock").is_file());
+}
+
+#[test]
+fn archive_manifest_after_the_separator_stays_a_sync_argument() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .command()
+        .arg("--archive-manifest")
+        .arg("ingest.json")
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(
+        fixture.calls(),
+        "list\ntransaction repo.example\nsync --delete --archive-manifest ingest.json\npublish repo.example\n"
+    );
+    assert!(!stderr(&output).contains("archive manifest"));
+}
+
+#[test]
+fn a_refused_archive_does_not_open_a_transaction_or_change_dry_run_bytes() {
+    let fixture = Fixture::new();
+    let tree = fixture.dir.path().join("tree");
+    std::fs::create_dir_all(tree.join("pkg")).unwrap();
+    std::fs::write(tree.join("pkg/file"), b"hi\n").unwrap();
+    std::fs::write(fixture.dir.path().join("list"), "pkg/file\n").unwrap();
+    let flat = fixture.dir.path().join("ingest");
+    std::fs::create_dir(&flat).unwrap();
+    let archive = flat.join("cache.tar");
+    let status = Command::new("tar")
+        .args([
+            "--format=ustar",
+            "-cf",
+            archive.to_str().unwrap(),
+            "-C",
+            tree.to_str().unwrap(),
+            "--no-recursion",
+            "--files-from",
+            fixture.dir.path().join("list").to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let manifest = manifest_for(&fixture, "cache.tar", "i32");
+
+    let output = fixture
+        .command_with(Some(&manifest), None)
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(output.stdout.is_empty());
+    assert!(stderr(&output).contains("missing explicit directory `pkg`"));
+    assert!(fixture.calls().is_empty());
+
+    let preview = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
+        .env("PATH", &fixture.bin)
+        .args(["--dry-run", "--archive-manifest"])
+        .arg(&manifest)
+        .args([
+            "repo.example",
+            "--",
+            "/opt/site/bin/sync-module-cache",
+            "--delete",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(code(&preview), 2);
+    assert!(preview.stdout.is_empty(), "{}", stderr(&preview));
+    assert!(fixture.calls().is_empty());
+}
+
+#[test]
+fn an_accepted_archive_keeps_the_historical_command_bytes() {
+    let fixture = Fixture::new();
+    let tree = fixture.dir.path().join("tree");
+    std::fs::create_dir_all(tree.join("pkg")).unwrap();
+    std::fs::write(tree.join("pkg/file"), b"hi\n").unwrap();
+    let ingest = fixture.dir.path().join("ingest");
+    std::fs::create_dir(&ingest).unwrap();
+    let archive = ingest.join("cache.tar");
+    let status = Command::new("tar")
+        .args(["--format=ustar", "-cf"])
+        .arg(&archive)
+        .arg("-C")
+        .arg(&tree)
+        .arg("pkg")
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let manifest = manifest_for(&fixture, "cache.tar", "i32");
+
+    let output = fixture
+        .command_with(Some(&manifest), None)
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(output.stdout, b"");
+    assert_eq!(output.stderr, b"");
+    assert_eq!(fixture.calls().as_bytes(), HISTORICAL_CALLS);
+
+    let sync = "/opt/site/bin/sync-module-cache";
+    let preview = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
+        .env("PATH", &fixture.bin)
+        .args(["--dry-run", "--archive-manifest"])
+        .arg(&manifest)
+        .args(["repo.example", "--", sync, "--delete"])
+        .output()
+        .unwrap();
+    assert_eq!(code(&preview), 0, "{}", stderr(&preview));
+    assert_eq!(preview.stdout, historical_dry_run(sync));
+    assert_eq!(preview.stderr, b"");
+    assert!(fixture.calls().as_bytes() == HISTORICAL_CALLS);
+}
+
+#[test]
+fn an_accepted_archive_composes_with_verification() {
+    let fixture = Fixture::new();
+    let tree = fixture.dir.path().join("tree");
+    std::fs::create_dir_all(tree.join("pkg")).unwrap();
+    std::fs::write(tree.join("pkg/file"), b"hi\n").unwrap();
+    let ingest = fixture.dir.path().join("ingest");
+    std::fs::create_dir(&ingest).unwrap();
+    let archive = ingest.join("cache.tar");
+    let status = Command::new("tar")
+        .args(["--format=ustar", "-cf"])
+        .arg(&archive)
+        .arg("-C")
+        .arg(&tree)
+        .arg("pkg")
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let manifest = manifest_for(&fixture, "cache.tar", "i32");
+    let verify = fixture.verify.display().to_string();
+
+    let output = fixture
+        .command_with_options(Some(&manifest), None, Some(&verify))
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(
+        fixture.calls(),
+        "list\ntransaction repo.example\nsync --delete\nverify \npublish repo.example\n"
+    );
+}
+
+fn manifest_for(fixture: &Fixture, name: &str, id_type: &str) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(fixture.dir.path().join("ingest").join(name)).unwrap();
+    let digest = Sha256::digest(bytes);
+    let mut sha = String::with_capacity(64);
+    for byte in digest {
+        sha.push_str(&format!("{byte:02x}"));
+    }
+    let path = fixture.dir.path().join("manifest.json");
+    std::fs::write(
+        &path,
+        format!(
+            "{{\n  \"directory\": \"ingest\",\n  \"name\": \"{name}\",\n  \"sha256\": \"{sha}\",\n  \"uid_type\": \"{id_type}\",\n  \"gid_type\": \"{id_type}\"\n}}\n"
+        ),
+    )
+    .unwrap();
+    path
 }
 
 #[test]
