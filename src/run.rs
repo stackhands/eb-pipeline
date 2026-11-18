@@ -321,7 +321,9 @@ fn last_json_line(path: &Path) -> Option<String> {
     text.lines()
         .rev()
         .map(str::trim)
-        .find(|l| l.starts_with('{') && l.ends_with('}'))
+        .find(|line| {
+            serde_json::from_str::<serde_json::Value>(line).is_ok_and(|value| value.is_object())
+        })
         .map(str::to_string)
 }
 

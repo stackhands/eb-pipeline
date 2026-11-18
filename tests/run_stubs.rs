@@ -48,7 +48,9 @@ case "$sub" in
       fi
       echo "{\"admitted\":true,\"attempt\":$n}"; exit 0
     fi
-    echo "{\"admitted\":false,\"attempt\":$n}"; exit 78;;
+    echo "{\"admitted\":false,\"attempt\":$n}"
+    [ -n "${STUB_ADMIT_TRAILER:-}" ] && printf '%s\n' "$STUB_ADMIT_TRAILER"
+    exit 78;;
   shard)
     echo "${EASYBUILD_FILTER_DEPS:-}" > "$D/shard.filterdeps"
     case "${STUB_SHARD:-ok}" in unsharded) exit 3;; fail) exit 1;; esac
@@ -924,6 +926,23 @@ fn admission_refused_after_n_attempts_exits_78() {
     assert_eq!(r["admission"][0]["attempts"], 3);
     assert_eq!(r["admission"][0]["outcome"], "refused");
     assert_eq!(r["counts"]["skipped"], 2);
+}
+
+#[test]
+fn admission_retries_keep_the_last_valid_json_report() {
+    let env = setup(ADMISSION);
+    let o = go(
+        &env,
+        LIST,
+        &[
+            ("STUB_ADMIT_OK_AT", "0"),
+            ("STUB_ADMIT_TRAILER", "{not json}"),
+        ],
+    );
+    assert_eq!(o.code, 78, "{}", o.stderr);
+    let admission = &o.result.unwrap()["admission"][0];
+    assert_eq!(admission["attempts"], 3);
+    assert_eq!(admission["last_json"], r#"{"admitted":false,"attempt":3}"#);
 }
 
 #[test]

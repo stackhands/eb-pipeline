@@ -335,7 +335,7 @@ That of =logs= counts =eb-keep-logs failed= after a failed line as well as =eb-k
 | Key         | Type    | Meaning                                           |
 |-------------+---------+---------------------------------------------------|
 | =attempts=  | integer | How many times =stack admit= ran for the unit.    |
-| =last_json= | string  | The last line in JSON that =stack admit= printed. |
+| =last_json= | string  | The last valid JSON object line that =stack admit= printed. |
 | =outcome=   | string  | =admitted=, =refused= or =failed=.                |
 | =unit=      | string  | The unit, as in =lines=.                          |
 
