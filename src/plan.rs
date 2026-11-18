@@ -166,6 +166,19 @@ pub fn wants_rebuild(line: &ListLine) -> bool {
         .any(|a| a == "--rebuild" || a == "-f" || a == "--force")
 }
 
+/// Append EasyBuild's options and one easyconfig operand. A leading-dash
+/// operand follows `--`; ordinary lines retain their historical order.
+fn push_eb_line(argv: &mut Vec<String>, easyconfig: &str, options: Vec<String>) {
+    if easyconfig.starts_with('-') {
+        argv.extend(options);
+        argv.push("--".into());
+        argv.push(easyconfig.into());
+    } else {
+        argv.push(easyconfig.into());
+        argv.extend(options);
+    }
+}
+
 /// Line options for a fetch with the robot disabled: a bare `--robot` goes,
 /// and the last `--robot=P` stays at the front of the search path so the
 /// line's easyconfig is still found. EasyBuild searches `P` then
@@ -604,14 +617,16 @@ impl<'a> Planner<'a> {
             .map(|s| s.extra_args.clone())
             .unwrap_or_default();
         let args = line.args.iter().filter(|x| !x.starts_with("--rebuild"));
-        let mut a = vec!["eb".to_string(), line.easyconfig.clone(), "--fetch".into()];
+        let mut options = vec!["--fetch".into()];
         if extra.iter().any(|x| x == "--disable-robot") {
-            a.extend(without_robot(args));
+            options.extend(without_robot(args));
         } else {
-            a.push("--robot".into());
-            a.extend(args.cloned());
+            options.push("--robot".into());
+            options.extend(args.cloned());
         }
-        a.extend(extra);
+        options.extend(extra);
+        let mut a = vec!["eb".to_string()];
+        push_eb_line(&mut a, &line.easyconfig, options);
         let mut env = self.scope.line_env(&line.easyconfig);
         env.extend(self.scope.fetch_env());
         env.extend(self.scope.hardware_env(unit_role));
@@ -885,11 +900,11 @@ impl<'a> Planner<'a> {
             inner = vec!["eb".into()];
             note = self.in_place_reason(line);
         }
-        inner.push(line.easyconfig.clone());
-        inner.extend(line.args.iter().cloned());
+        let mut options = line.args.clone();
         if self.site().logs_on().is_some_and(|l| l.keep_failed) {
-            inner.push(format!("--tmp-logdir={}", self.tmp_logdir(stem)));
+            options.push(format!("--tmp-logdir={}", self.tmp_logdir(stem)));
         }
+        push_eb_line(&mut inner, &line.easyconfig, options);
         let mut env = self.scope.line_env(&line.easyconfig);
         env.extend(self.scope.hardware_env(role));
         env.extend(self.route_env(role, "build"));
@@ -1501,7 +1516,32 @@ pub fn read_units(dir: &Path) -> Result<Vec<Unit>, Fail> {
 
 #[cfg(test)]
 mod read_tests {
-    use super::read_units;
+    use super::{push_eb_line, read_units};
+
+    #[test]
+    fn easybuild_operand_order_changes_only_for_a_leading_dash() {
+        let mut ordinary = vec!["eb".to_string()];
+        push_eb_line(&mut ordinary, "Foo-1.0.eb", vec!["--rebuild".into()]);
+        assert_eq!(
+            ordinary,
+            ["eb", "Foo-1.0.eb", "--rebuild"],
+            "ordinary argv bytes and order stay unchanged"
+        );
+
+        let mut staged = vec!["eb-staged-rebuild".into(), "run".into(), "--".into()];
+        push_eb_line(&mut staged, "-Foo-1.0.eb", vec!["--rebuild".into()]);
+        assert_eq!(
+            staged,
+            [
+                "eb-staged-rebuild",
+                "run",
+                "--",
+                "--rebuild",
+                "--",
+                "-Foo-1.0.eb"
+            ]
+        );
+    }
 
     #[test]
     fn a_shard_plan_cannot_name_a_file_outside_its_directory() {

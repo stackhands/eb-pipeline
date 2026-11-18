@@ -340,6 +340,13 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_easyconfig_bytes_stay_unchanged() {
+        let line = &parse("easyconfigs:\n  - Foo-1.0-foss-2025a.eb\n").unwrap()[0];
+        assert_eq!(line.raw.as_bytes(), b"Foo-1.0-foss-2025a.eb");
+        assert_eq!(line.easyconfig.as_bytes(), b"Foo-1.0-foss-2025a.eb");
+    }
+
+    #[test]
     fn options_become_eb_options_sorted_by_name() {
         let text = "easyconfigs:
   - x-1.0.eb:

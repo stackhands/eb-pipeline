@@ -61,6 +61,8 @@ It gives two files that eb-stack 0.7.4 wrote, kept in =tests/fixtures/eb-stack/=
    #+end_example
 
    Each entry is one line: its easyconfig, with =.eb= added to a name without it, then its =options= as options of =eb=, sorted by name, as EasyBuild turns them into options:
+   A name that starts with =-= follows =--= when eb-pipeline calls EasyBuild.
+   Its EasyBuild options come before that separator, so robot-path lookup still sees the bare name.
 
    | In the easystack                            | On the line                                       |
    |---------------------------------------------+---------------------------------------------------|
