@@ -100,7 +100,11 @@ def check_site(root, forbid, exempt=()):
             where = f"{rel}:{line}"
             if re.search(r"\.rst(?:[?#]|$)", href.split("?")[0]):
                 errors.append(f"{where}: link to a generated .rst file: {href}")
-            parts = urllib.parse.urlsplit(href)
+            try:
+                parts = urllib.parse.urlsplit(href)
+            except ValueError as error:
+                errors.append(f"{where}: invalid URL: {href} ({error})")
+                continue
             if parts.scheme or href.startswith("//") or href.startswith(("mailto:", "data:", "javascript:")):
                 continue
             decoded = urllib.parse.unquote(parts.path)

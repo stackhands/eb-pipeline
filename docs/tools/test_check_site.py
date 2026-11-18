@@ -11,6 +11,19 @@ import check_site
 
 
 class CheckSiteTests(unittest.TestCase):
+    def test_malformed_url_is_reported_without_stopping_the_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "index.html").write_text(
+                '<a href="https://[bad/path">Broken</a>', encoding="utf-8"
+            )
+            errors, count = check_site.check_site(root, [])
+            self.assertEqual(count, 1)
+            self.assertEqual(
+                errors,
+                ["index.html:1: invalid URL: https://[bad/path (Invalid IPv6 URL)"],
+            )
+
     def test_two_dot_file_name_stays_inside_the_built_site(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
