@@ -2122,6 +2122,44 @@ fn eessi_site_prefix_follows_the_install_prefix() {
 }
 
 #[test]
+fn plan_and_run_refuse_a_saved_shard_plan_without_units() {
+    let d = tempfile::tempdir().unwrap();
+    let list = d.path().join("l.txt");
+    std::fs::write(&list, "Foo-1.0-foss-2025a.eb\n").unwrap();
+    let sp = d.path().join("shards");
+    std::fs::create_dir(&sp).unwrap();
+    std::fs::write(sp.join("plan.json"), b"{\"shards\":[]}\n").unwrap();
+
+    for command in ["plan", "run"] {
+        let mut process = bin();
+        process
+            .arg(command)
+            .arg("--site")
+            .arg(example("eessi-site.toml"))
+            .arg("--list")
+            .arg(&list)
+            .args(["--target", "cpu-a", "--build-type", "production"])
+            .arg("--shard-plan")
+            .arg(&sp);
+        if command == "run" {
+            process.arg("--dry-run");
+        }
+        let output = process.output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{command}");
+        assert_eq!(output.stdout, b"", "{command}");
+        assert_eq!(
+            output.stderr,
+            format!(
+                "ERROR [main] -: {} contains no build units\n",
+                sp.join("plan.json").display()
+            )
+            .as_bytes(),
+            "{command}"
+        );
+    }
+}
+
+#[test]
 fn the_site_installs_guide_gives_users_the_prefix_and_target_builds_install_for() {
     let howto = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/orgmode/howto");
     let o = bin()

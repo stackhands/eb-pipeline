@@ -1505,6 +1505,12 @@ pub fn read_units(dir: &Path) -> Result<Vec<Unit>, Fail> {
             add(name, Role::Build, s)?;
         }
     }
+    if units.is_empty() {
+        return Err(Fail::new(
+            exit::FAILED,
+            format!("{} contains no build units", plan_path.display()),
+        ));
+    }
     Ok(units)
 }
 
