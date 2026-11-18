@@ -149,16 +149,11 @@ _arguments "${_arguments_options[@]}" : \
 (verify)
 _arguments "${_arguments_options[@]}" : \
 '--site=[Site file]:SITE:_files' \
-'(--package-plan)--list=[Build list file\: one \`Name-version-toolchain.eb \[eb options\]\` per line, or an EasyBuild easystack, a \`.yml\` or \`.yaml\` file]:LIST:_files' \
-'(--list)--package-plan=[Directory written by \`eb-stack package plan\`; builds its emitted recipes]:PACKAGE_PLAN:_files' \
+'(--recorded-list)--list=[Build list file, or an EasyBuild easystack]:LIST:_files' \
 '--target=[Target name]:TARGET:_default' \
-'--build-type=[Build type name (selects per-build-type overrides)]:BUILD_TYPE:_default' \
-'--run-id=[Run label recorded in the result and passed to tools; a staged rebuild line passes \`<run-id>-<easyconfig stem>\`. Default\: the log stamp for \`run\`, \`<run-id>\` for \`plan\`]:RUN_ID:_default' \
-'--log-stamp=[Timestamp directory under the log root\: a UTC time as \`YYYYMMDD_HHMMSS\`, the name \`eb-keep-logs rotate\` ages. Default\: the current UTC time, taken once per run; \`<log-stamp>\` for \`plan\`]:LOG_STAMP:_default' \
-'--offline-bundle=[Build a checksum-indexed bundle of prefetched and configured assets]:OFFLINE_BUNDLE:_files' \
+'--build-type=[Build type name]:BUILD_TYPE:_default' \
 '--from=[Plan or result JSON that holds \`input_attestation\`]:FROM:_files' \
-'--verify-package-plan[Run ecosystem-native checks after a package-plan build]' \
-'--require-offline[Run phases after source prefetch through sources.offline_wrapper]' \
+'--recorded-list[Read the list path recorded in the plan or result]' \
 '-h[Print help]' \
 '--help[Print help]' \
 && ret=0
