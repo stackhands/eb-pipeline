@@ -579,6 +579,7 @@ A POST that cannot start, fails or runs out of time is a =WARN= line, and the ru
 With the table, a clean =run= starts =eb-stack stack sbom --lock LOCK --out LOG_ROOT/LOG_STAMP/sbom.cdx.json= and keeps that file beside =summary.json=.
 A build that did not exit 0 does not start it, and neither does =run --dry-run=.
 A command that cannot be started, or that exits with a status other than 0, fails the run with that status and leaves no =sbom.cdx.json=.
+When a signal ends the command, the run uses =128 + SIGNAL=, such as 143 for =SIGTERM=.
 eb-stack reads the lock and writes the document; eb-pipeline does not compute a bill of materials of its own.
 
 | Key       | Type    | Default | Meaning                                                                                                        |
