@@ -41,6 +41,7 @@ struct Args {
 struct Outcome {
     status: String,
     log: Option<String>,
+    resumed: bool,
 }
 
 struct RunOutcomes {
@@ -520,9 +521,15 @@ fn collect_outcomes(
             .and_then(Value::as_str)
             .ok_or_else(|| format!("{}: {field}[{i}].status must be a string", path.display()))?;
         let log = obj.get("log").and_then(Value::as_str).map(str::to_string);
+        let resumed = ["note", "reason"].iter().any(|key| {
+            obj.get(*key)
+                .and_then(Value::as_str)
+                .is_some_and(|note| note.starts_with("resumed:"))
+        });
         map.entry(ec.to_string()).or_default().push_back(Outcome {
             status: status.to_string(),
             log,
+            resumed,
         });
     }
     Ok(map)
@@ -549,7 +556,7 @@ fn select_retry_lines(
         {
             let keep = match explicit_statuses {
                 Some(set) => set.contains(&outcome.status),
-                None => outcome.status != "success",
+                None => outcome.status != "success" && !outcome.resumed,
             };
             if keep {
                 out.push(RetryLine {
@@ -919,6 +926,7 @@ oom=2 fits=1 builds=3 nodes=1
         Outcome {
             status: status.into(),
             log: None,
+            resumed: false,
         }
     }
 }
