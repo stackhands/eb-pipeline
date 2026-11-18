@@ -106,8 +106,18 @@ The refusals before the first build leave every line unbuilt.
 =run= passes the signal to the process group of the running command and waits for the command to end.
 The process group includes subprocesses that the command started.
 It starts no other command, records the phase as =interrupted=, writes the result file and the run summary, and exits 130 for =SIGINT= or 143 for =SIGTERM=.
+The active build line is =failed= with that same status, even when its command handles the signal and exits 0.
 The rebuild of =watch= does the same, and =watch= then changes no record.
 An attestation helper killed by a signal reports and returns =128 + signal=.
+
+** Command deadlines
+
+=run= and the rebuild inside =watch= set no elapsed-time deadline on a phase command.
+They wait until the command ends or the driver receives =SIGINT= or =SIGTERM=.
+The admission retry waits, =rebuild.lock_timeout=, log-rotation lock wait and =notify.timeout_seconds= bound those named operations; none is a build-command timeout.
+
+The =eb-cvmfs= companion has separate opt-in deadlines for synchronization, verification, publish and check commands.
+[[file:cvmfs.org][The eb-cvmfs command]] defines their timeout status and termination sequence.
 
 ** When several apply
 
@@ -126,8 +136,9 @@ A run in which one line failed and another was refused exits 1.
 
 | Command                       |                                        Status | What the run does                                                                                                                                                   |
 |-------------------------------+-----------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| =eb=                          |                                             0 | The line is =success=.                                                                                                                                              |
+| =eb=                          |                                             0 | The line is =success= unless the driver received a signal while it was active.                                                                                      |
 | =eb=                          |                                     any other | The line is =failed=.                                                                                                                                               |
+| active build command          |                           =SIGINT= or =SIGTERM= | The line is =failed= with 130 or 143, the build phase is =interrupted= and later lines are =skipped=, even when the command exits 0 after handling the signal.      |
 | =eb-stack stack shard=        |                                             0 | The run builds the units of the shard plan.                                                                                                                         |
 | =eb-stack stack shard=        | =shards.planner_exit_unsharded=, 3 by default | The planner built the plan unsharded; the shard phase is =unsharded= and the list builds as one unit.                                                               |
 | =eb-stack stack shard=        |                                             2 | The shard phase is =failed=, and the run ends with 2.                                                                                                               |

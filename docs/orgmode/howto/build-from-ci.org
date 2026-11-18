@@ -81,6 +81,7 @@ The script exits as one run of eb-pipeline would, from what the runs of its targ
 
    Upload both files as CI artifacts.
    The plan is written before any phase command starts and uses the same run id, log stamp and resolved paths as the run.
+   Give =--plan-out= a path distinct from the site, list, result, metrics and resume-result paths.
 
 ** Check that it worked
 

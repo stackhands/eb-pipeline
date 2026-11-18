@@ -18,7 +18,7 @@ eb-junit [--result FILE]... [--reframe-report FILE]... [--out FILE]
 | =--result FILE= | One result file. Repeat the option for another file. |
 | =--reframe-report FILE= | One ReFrame report JSON from =reframe --report-file=. Repeat the option for another file. |
 | =--out FILE= | Write the document to =FILE=. =-= or absent prints it on stdout. A complete report atomically replaces an existing file unless it aliases a result or ReFrame report input, which is refused. |
-| =--property NAME=VALUE= | Add the property to every suite. Repeat for more properties. |
+| =--property NAME=VALUE= | Add the property to every suite. NAME must not be empty; VALUE may be empty. Repeat for more properties. |
 | =--fail-on-failure= | After writing the complete document, exit 1 when it contains at least one =failure= case. |
 
 At least one of =--result= or =--reframe-report= is required.
@@ -51,7 +51,7 @@ A property is present when the result has that field.
 Each =--property NAME=VALUE= adds a property to every result and ReFrame suite.
 Names and values use the same XML escaping as recorded properties.
 An empty value is valid.
-When a name repeats, the last command-line value wins.
+When a name repeats, the last command-line value wins and replaces a property read from the input.
 A command-line value also replaces a recorded property with the same name.
 New command-line property names appear in lexical order after the recorded properties.
 
