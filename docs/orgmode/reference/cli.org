@@ -468,6 +468,7 @@ When =stack oom= rejects its generated easystack, the error names the source bui
 *** eb-shard-weights
 
 =eb-shard-weights= turns observed =duration_seconds= of succeeded =build= lines from =result.json=, =summary.json= or =--log-root= into the =MODULE<TAB>SECONDS= table read by =eb-stack stack shard --weights= and =[shards] weights=.
+Each succeeded =build= line in a result must contain a non-negative numeric =duration_seconds=.
 
 #+begin_example
 eb-shard-weights (--result FILE... | --summary FILE... | --log-root DIR [--last N])

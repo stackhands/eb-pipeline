@@ -46,41 +46,6 @@ fn successful_build_durations_become_sorted_tab_separated_weights() {
 }
 
 #[test]
-fn a_target_filter_must_match_an_input_target() {
-    let dir = tempfile::tempdir().unwrap();
-    let result = dir.path().join("result.json");
-    std::fs::write(
-        &result,
-        r#"{"kind":"result","target":"cpu","lines":[{"easyconfig":"A-1.0.eb","phase":"build","status":"success","duration_seconds":2.0}]}"#,
-    )
-    .unwrap();
-
-    let mismatch = bin()
-        .args(["--result"])
-        .arg(&result)
-        .args(["--target", "gpu"])
-        .output()
-        .unwrap();
-    assert_eq!(mismatch.status.code(), Some(2));
-    assert_eq!(mismatch.stdout, b"");
-    assert!(
-        String::from_utf8_lossy(&mismatch.stderr).contains("no input data matched target `gpu`"),
-        "{}",
-        String::from_utf8_lossy(&mismatch.stderr)
-    );
-
-    let matched = bin()
-        .args(["--result"])
-        .arg(&result)
-        .args(["--target", "cpu"])
-        .output()
-        .unwrap();
-    assert_eq!(matched.status.code(), Some(0));
-    assert_eq!(matched.stdout, b"A/1.0\t2\n");
-    assert_eq!(matched.stderr, b"");
-}
-
-#[test]
 fn minimum_samples_is_opt_in_and_default_bytes_stay_unchanged() {
     let dir = tempfile::tempdir().unwrap();
     let result = dir.path().join("result.json");
@@ -514,4 +479,70 @@ fn shard_weights_succeeds_when_stdout_consumer_closes() {
         "{}",
         String::from_utf8_lossy(&o.stderr)
     );
+}
+
+#[test]
+fn a_target_filter_must_match_an_input_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let result = dir.path().join("result.json");
+    std::fs::write(
+        &result,
+        r#"{"kind":"result","target":"cpu","lines":[{"easyconfig":"A-1.0.eb","phase":"build","status":"success","duration_seconds":2.0}]}"#,
+    )
+    .unwrap();
+
+    let mismatch = bin()
+        .args(["--result"])
+        .arg(&result)
+        .args(["--target", "gpu"])
+        .output()
+        .unwrap();
+    assert_eq!(mismatch.status.code(), Some(2));
+    assert_eq!(mismatch.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&mismatch.stderr).contains("no input data matched target `gpu`"),
+        "{}",
+        String::from_utf8_lossy(&mismatch.stderr)
+    );
+
+    let matched = bin()
+        .args(["--result"])
+        .arg(&result)
+        .args(["--target", "cpu"])
+        .output()
+        .unwrap();
+    assert_eq!(matched.status.code(), Some(0));
+    assert_eq!(matched.stdout, b"A/1.0\t2\n");
+    assert_eq!(matched.stderr, b"");
+}
+
+#[test]
+fn a_successful_result_line_requires_a_numeric_duration() {
+    let dir = tempfile::tempdir().unwrap();
+    let result = dir.path().join("result.json");
+    std::fs::write(
+        &result,
+        r#"{"kind":"result","target":"cpu","lines":[{"easyconfig":"A-1.0.eb","phase":"build","status":"success","duration_seconds":"2.0"}]}"#,
+    )
+    .unwrap();
+
+    let malformed = bin().args(["--result"]).arg(&result).output().unwrap();
+    assert_eq!(malformed.status.code(), Some(2));
+    assert_eq!(malformed.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&malformed.stderr)
+            .contains("lines[0].duration_seconds must be a non-negative number"),
+        "{}",
+        String::from_utf8_lossy(&malformed.stderr)
+    );
+
+    std::fs::write(
+        &result,
+        r#"{"kind":"result","target":"cpu","lines":[{"easyconfig":"A-1.0.eb","phase":"build","status":"success","duration_seconds":2.0}]}"#,
+    )
+    .unwrap();
+    let valid = bin().args(["--result"]).arg(&result).output().unwrap();
+    assert_eq!(valid.status.code(), Some(0));
+    assert_eq!(valid.stdout, b"A/1.0\t2\n");
+    assert_eq!(valid.stderr, b"");
 }

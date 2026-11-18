@@ -401,11 +401,20 @@ fn collect_result(
         if phase != "build" || status != "success" {
             continue;
         }
-        let Some(secs) = line.get("duration_seconds").and_then(Value::as_f64) else {
-            continue;
-        };
+        let secs = line
+            .get("duration_seconds")
+            .and_then(Value::as_f64)
+            .ok_or_else(|| {
+                format!(
+                    "{}: lines[{i}].duration_seconds must be a non-negative number",
+                    path.display()
+                )
+            })?;
         if !secs.is_finite() || secs < 0.0 {
-            continue;
+            return Err(format!(
+                "{}: lines[{i}].duration_seconds must be a non-negative number",
+                path.display()
+            ));
         }
         let ec = line
             .get("easyconfig")
