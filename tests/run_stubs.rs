@@ -104,6 +104,7 @@ if [ -n "${STUB_EB_DELAY:-}" ]; then sleep "$STUB_EB_DELAY"; fi
 if [ -n "${STUB_EB_SLEEP:-}" ]; then
   echo started > "$D/started"
   trap 'echo term > "$D/termed"; kill $pid 2>/dev/null; exit 0' TERM
+  trap 'echo int > "$D/interrupted"; kill $pid 2>/dev/null; exit 0' INT
   sleep 30 &
   pid=$!
   wait $pid
@@ -1387,6 +1388,68 @@ fn sigterm_is_forwarded_and_exit_is_143() {
     assert_eq!(lines[0]["exit_code"], 143);
     assert_eq!(lines[1]["status"], "skipped");
     assert_eq!(lines[1]["easyconfig"], "Bar-2.0-foss-2025a.eb");
+
+    let run_dir = env.dir.path().join("logs/20260101_000000");
+    let summary_text = std::fs::read_to_string(run_dir.join("summary.json")).unwrap();
+    let summary: Value = serde_json::from_str(&summary_text).unwrap();
+    let packages = summary["targets"][0]["packages"].as_array().unwrap();
+    assert_eq!(summary["exit_code"], 143);
+    assert_eq!(packages[0]["status"], "failed");
+    assert_eq!(packages[0]["exit_code"], 143);
+    assert_eq!(packages[1]["status"], "skipped");
+    let html = std::fs::read_to_string(run_dir.join("summary.html")).unwrap();
+    assert!(html.starts_with("<!DOCTYPE html>"), "{html}");
+    assert!(html.ends_with("</html>\n"), "{html}");
+
+    let junit = env.dir.path().join("junit.xml");
+    std::fs::write(&junit, b"complete old report\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-junit"))
+        .arg("--result")
+        .arg(env.dir.path().join("result.json"))
+        .arg("--out")
+        .arg(&junit)
+        .arg("--fail-on-failure")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.stdout, b"");
+    assert_eq!(output.stderr, b"");
+    let xml = std::fs::read_to_string(&junit).unwrap();
+    assert!(xml.starts_with("<?xml version=\"1.0\""), "{xml}");
+    assert!(xml.ends_with("</testsuites>\n"), "{xml}");
+    assert!(xml.contains("name=\"cpu/Foo-1.0-foss-2025a.eb\""), "{xml}");
+    assert!(xml.contains("name=\"cpu/Bar-2.0-foss-2025a.eb\""), "{xml}");
+    assert!(!xml.contains("name=\"cpu/run\""), "{xml}");
+}
+
+#[test]
+fn sigint_marks_the_active_line_failed_and_exits_130() {
+    let env = setup("");
+    let mut child = driver(&env, LIST, &[("STUB_EB_SLEEP", "1")], &[]);
+    let started = env.dir.path().join("started");
+    let t0 = Instant::now();
+    while !started.exists() {
+        assert!(t0.elapsed() < Duration::from_secs(20), "stub never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // SAFETY: the pid is the driver child this test started.
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+    }
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(130));
+    assert!(
+        env.dir.path().join("interrupted").exists(),
+        "child saw SIGINT"
+    );
+    let r: Value =
+        serde_json::from_str(&std::fs::read_to_string(env.dir.path().join("result.json")).unwrap())
+            .unwrap();
+    assert_eq!(r["exit_code"], 130);
+    assert_eq!(r["interrupted_by"], "SIGINT");
+    assert_eq!(r["lines"][0]["status"], "failed");
+    assert_eq!(r["lines"][0]["exit_code"], 130);
+    assert_eq!(r["lines"][1]["status"], "skipped");
 }
 
 #[test]
