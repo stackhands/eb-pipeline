@@ -103,9 +103,13 @@ def check_site(root, forbid, exempt=()):
             parts = urllib.parse.urlsplit(href)
             if parts.scheme or href.startswith("//") or href.startswith(("mailto:", "data:", "javascript:")):
                 continue
-            target_rel = rel if not parts.path else os.path.normpath(
-                os.path.join(os.path.dirname(rel), urllib.parse.unquote(parts.path))
-            )
+            decoded = urllib.parse.unquote(parts.path)
+            if not decoded:
+                target_rel = rel
+            elif decoded.startswith("/"):
+                target_rel = os.path.normpath(decoded.lstrip("/"))
+            else:
+                target_rel = os.path.normpath(os.path.join(os.path.dirname(rel), decoded))
             if target_rel.startswith(".."):
                 errors.append(f"{where}: link leaves the site: {href}")
                 continue
@@ -164,7 +168,16 @@ def main(argv):
         print(f"check_site: no index.html in {args.site}", file=sys.stderr)
         return 2
     patterns = ([] if args.no_default_forbid else DEFAULT_FORBID) + args.forbid
-    forbid = [re.compile(p, re.I) for p in patterns]
+    forbid = []
+    for pattern in patterns:
+        try:
+            forbid.append(re.compile(pattern, re.I))
+        except re.error as error:
+            print(
+                f"check_site: invalid --forbid regular expression {pattern!r}: {error}",
+                file=sys.stderr,
+            )
+            return 2
     errors, count = check_site(args.site, forbid, set(args.exempt))
     errors += check_sources(args.sources, forbid)
     for error in errors:

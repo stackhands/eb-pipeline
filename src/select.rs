@@ -35,6 +35,12 @@ fn tokens(sel: &Select, line: &ListLine) -> Result<(bool, Vec<String>), Fail> {
             }
         } else if let Some(v) = a.strip_prefix(&eq) {
             found = true;
+            if v.is_empty() {
+                return Err(Fail::usage(format!(
+                    "selector option `{}` needs a value in `{}`",
+                    sel.option, line.raw
+                )));
+            }
             Some(v)
         } else {
             None
@@ -125,7 +131,6 @@ mod tests {
         let s = sel(false, "all", ",");
         assert!(selected(&s, &line(&["--only-targets=a"])).planned);
         assert!(!selected(&s, &line(&["--only-targets=b"])).planned);
-        assert!(!selected(&s, &line(&["--only-targets="])).planned);
         // a different option sharing a prefix does not match
         assert!(selected(&s, &line(&["--only-targets-x=b"])).planned);
     }
@@ -154,6 +159,7 @@ mod tests {
         for args in [
             &["--only-targets"][..],
             &["--only-targets", "--rebuild"][..],
+            &["--only-targets="][..],
         ] {
             let err = select_line(&s, &line(args)).unwrap_err();
             assert_eq!(err.code, 2);

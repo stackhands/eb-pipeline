@@ -28,6 +28,14 @@ pub fn store(site: &Site, sbom: &Sbom, run_dir: &Path) -> Result<PathBuf, Fail> 
         )
     })?;
     let out = run_dir.join(FILE);
+    if let Err(error) = std::fs::remove_file(&out) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            return Err(Fail::new(
+                exit::FAILED,
+                format!("cannot replace {}: {error}", out.display()),
+            ));
+        }
+    }
     let log_path = run_dir.join("sbom.log");
     let log = std::fs::File::create(&log_path).map_err(|e| {
         Fail::new(

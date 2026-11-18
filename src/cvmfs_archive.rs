@@ -607,6 +607,9 @@ fn parse_octal(field: &[u8]) -> Result<u128, String> {
         .position(|byte| is_pad(*byte))
         .unwrap_or(field.len() - start);
     let digits = &field[start..start + length];
+    if field[start + length..].iter().any(|byte| !is_pad(*byte)) {
+        return Err(fail("unrecognized archive"));
+    }
     if digits.is_empty() {
         return Ok(0);
     }
@@ -869,6 +872,19 @@ mod tests {
         .unwrap();
         let error = check(&manifest).unwrap_err();
         assert!(error.contains("gid 65536 does not fit u16"), "{error}");
+    }
+
+    #[test]
+    fn numeric_header_fields_reject_bytes_after_the_terminator() {
+        let root = tempfile::tempdir().unwrap();
+        let mut file = header("pkg", b'0', 0, 0, 0);
+        file[108..116].copy_from_slice(b"1\0junk!!");
+        finish(&mut file);
+        let bytes = archive(&[file.to_vec()]);
+        let manifest = place(root.path(), "cache.tar", &bytes);
+
+        let error = check(&manifest).unwrap_err();
+        assert!(error.contains("unrecognized archive"), "{error}");
     }
 
     #[test]

@@ -95,6 +95,36 @@ fn from_commit_preserves_an_eb_stack_signal_exit_code() {
 }
 
 #[test]
+fn a_missing_eb_stack_is_a_usage_error() {
+    let t = setup(
+        r#"
+[site.tools.eb_stack]
+bin = "@ROOT@/missing-eb-stack"
+"#,
+    );
+    let list = t.root().join("stack.yaml");
+    std::fs::write(&list, "easyconfigs: []\n").unwrap();
+    let output = eb_pipeline(
+        &t,
+        &[
+            "check",
+            "--site",
+            &t.site.display().to_string(),
+            "--list",
+            &list.display().to_string(),
+            "--check-from-commit",
+        ],
+        &[],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("cannot run"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
 fn check_from_commit_refuses_a_plain_build_list() {
     let t = setup("");
     let list = t.root().join("site.list");
