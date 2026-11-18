@@ -1773,18 +1773,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
         .filter(|l| l.phase == "build")
         .map(|l| l.status.as_str())
         .collect();
-    let (status, note) = if build.contains(&"failed") {
-        ("failed", None)
-    } else if st.refused && build.iter().all(|s| *s == "skipped") {
-        (
-            "skipped",
-            Some("admission refused before any build line started".to_string()),
-        )
-    } else if st.refused && !build.contains(&"success") {
-        ("refused", None)
-    } else {
-        ("ok", None)
-    };
+    let (status, note) = build_phase_outcome(&build, st.refused, st.pending);
     st.phase("build", status, None, note);
 
     // A site test command sees the tree the build left, including a staged swap.
@@ -2068,6 +2057,27 @@ fn stop_if_signalled(st: &mut State, phase: &str) -> Option<i32> {
     Some(code)
 }
 
+fn build_phase_outcome(
+    build: &[&str],
+    refused: bool,
+    pending: bool,
+) -> (&'static str, Option<String>) {
+    if build.contains(&"failed") {
+        ("failed", None)
+    } else if refused && build.iter().all(|s| *s == "skipped") {
+        (
+            "skipped",
+            Some("admission refused before any build line started".to_string()),
+        )
+    } else if refused && !build.contains(&"success") {
+        ("refused", None)
+    } else if pending {
+        ("pending", None)
+    } else {
+        ("ok", None)
+    }
+}
+
 fn finish(mut st: State, forced: Option<i32>) -> RunResult {
     if let Some(r) = st.reservation.take() {
         release(r, &st.res.target);
@@ -2097,7 +2107,7 @@ fn finish(mut st: State, forced: Option<i32>) -> RunResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{capped_wait, doubled_wait};
+    use super::{build_phase_outcome, capped_wait, doubled_wait};
 
     #[test]
     fn admission_wait_never_exceeds_the_configured_maximum() {
@@ -2110,5 +2120,12 @@ mod tests {
         assert_eq!(doubled_wait(50, 50), 50);
         assert_eq!(doubled_wait(120, 50), 50);
         assert_eq!(capped_wait(5, 0), 0);
+    }
+
+    #[test]
+    fn a_pending_line_makes_the_build_phase_pending() {
+        let (status, note) = build_phase_outcome(&["pending"], false, true);
+        assert_eq!(status, "pending");
+        assert_eq!(note, None);
     }
 }
