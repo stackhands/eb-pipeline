@@ -213,6 +213,15 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     }
 
     if results.is_empty() && summaries.is_empty() && log_root.is_none() {
+        if let Some(result) = eb_pipeline::util::env_value("EB_PIPELINE_RESULT") {
+            results.push(result);
+        }
+    }
+    if target.is_none() {
+        target = eb_pipeline::util::env_value("EB_PIPELINE_TARGET");
+    }
+
+    if results.is_empty() && summaries.is_empty() && log_root.is_none() {
         return Err("--result, --summary or --log-root is required".into());
     }
     if last.is_some() && log_root.is_none() {

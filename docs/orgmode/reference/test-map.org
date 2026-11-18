@@ -26,6 +26,8 @@ eb-test-map (--list FILE | --result FILE) --format eessi-modules [--toolchain NA
 The built-in toolchains are =GCC=, =GCCcore=, =foss=, =gfbf=, =gomkl=, =gompi=, =iimpi=, =intel= and =intel-compilers=.
 
 Pass one of =--list= or =--result=.
+When neither is present, =EB_PIPELINE_LIST= and =EB_PIPELINE_RESULT= supply
+their corresponding options. A command-line input wins.
 Without =--include-resumed=, result input keeps only successful lines, as before.
 With it, result input also keeps lines that a resumed run skipped because their prior successful outputs still exist.
 Other skipped lines and failed lines remain excluded.

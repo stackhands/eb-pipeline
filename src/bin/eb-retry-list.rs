@@ -233,6 +233,16 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
         }
     }
 
+    if parsed.result.is_none() && parsed.summary.is_none() {
+        parsed.result = util::env_value("EB_PIPELINE_RESULT");
+    }
+    if parsed.target.is_none() && parsed.summary.is_some() {
+        parsed.target = util::env_value("EB_PIPELINE_TARGET");
+    }
+    if parsed.list.is_none() && !parsed.recorded_list {
+        parsed.list = util::env_value("EB_PIPELINE_LIST");
+    }
+
     if parsed.result.is_some() && parsed.summary.is_some() {
         return Err("pass either --result or --summary, not both".into());
     }

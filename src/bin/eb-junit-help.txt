@@ -10,6 +10,9 @@ element, skipped is skipped, and any other status is a failure whose type is
 that status. Deselected lines are not cases. eb-junit does not decide why a
 line failed, and it starts no build.
 
+When neither input option is present, `EB_PIPELINE_RESULT` supplies one
+`--result` file. A command-line input wins.
+
 Each --reframe-report is a JSON file written by ReFrame's `--report-file`.
 Each run in that file becomes one extra suite, and each testcase becomes one
 case in that suite. Successful testcases have no child element, skipped cases

@@ -4,27 +4,34 @@
 
 * Environment variables
 
-The variables =eb-pipeline= reads in place of an option or a site file value, the ones a run reads because the site file names them or from the module environment, and the ones it sets for the commands it starts.
+The variables the eb-pipeline commands read in place of an option or a site file value, the ones a run reads because the site file names them or from the module environment, and the ones it sets for the commands it starts.
 
 ** Options
 
 An option that is not on the command line takes its value from its variable.
 An option on the command line wins.
 
-| Variable                 | Option         | Commands                                                        |
-|--------------------------+----------------+-----------------------------------------------------------------|
-| =EB_PIPELINE_SITE=       | =--site=       | =check=, =explain=, =targets=, =status=, =plan=, =run=, =watch= |
-| =EB_PIPELINE_LIST=       | =--list=       | =plan=, =run=                                                   |
-| =EB_PIPELINE_PACKAGE_PLAN= | =--package-plan= | =plan=, =run=                                                |
-| =EB_PIPELINE_TARGET=     | =--target=     | =explain=, =status=, =plan=, =run=, =watch=                     |
-| =EB_PIPELINE_BUILD_TYPE= | =--build-type= | =explain=, =plan=, =run=, =watch=                               |
-| =EB_PIPELINE_RUN_ID=     | =--run-id=     | =plan=, =run=, =watch=                                          |
-| =EB_PIPELINE_LOG_STAMP=  | =--log-stamp=  | =plan=, =run=, =watch=                                          |
-| =EB_PIPELINE_LISTS_DIR=  | =--lists-dir=  | =check=                                                         |
+| Variable                   | Option             | Commands                                                                                                  |
+|----------------------------+--------------------+-----------------------------------------------------------------------------------------------------------|
+| =EB_PIPELINE_SITE=         | =--site=           | =check=, =explain=, =targets=, =status=, =plan=, =run=, =verify=, =watch=, =audit=                         |
+| =EB_PIPELINE_LIST=         | =--list=           | =check=, =plan=, =run=, =verify=, =eb-retry-list=, =eb-test-map=                                          |
+| =EB_PIPELINE_PACKAGE_PLAN= | =--package-plan=   | =plan=, =run=                                                                                             |
+| =EB_PIPELINE_TARGET=       | =--target=         | =check=, =explain=, =status=, =plan=, =run=, =verify=, =watch=, =audit=, =eb-retry-list=, =eb-shard-weights= |
+| =EB_PIPELINE_BUILD_TYPE=   | =--build-type=     | =explain=, =plan=, =run=, =verify=, =watch=                                                               |
+| =EB_PIPELINE_RUN_ID=       | =--run-id=         | =plan=, =run=, =watch=                                                                                    |
+| =EB_PIPELINE_LOG_STAMP=    | =--log-stamp=      | =plan=, =run=, =watch=                                                                                    |
+| =EB_PIPELINE_LISTS_DIR=    | =--lists-dir=      | =check=                                                                                                   |
+| =EB_PIPELINE_RESULT=       | =--result=         | =metrics=, =eb-junit=, =eb-retry-list=, =eb-shard-weights=, =eb-test-map=                                 |
+| =EB_PIPELINE_INIT_HINTS=   | =--hints=          | =init=                                                                                                    |
 
-=--out=, =--result=, =--shard-plan=, =--verify-package-plan=, =--format=,
+=--out=, =run --result=, =--shard-plan=, =--verify-package-plan=, =--format=,
 =--last=, =--dry-run=, =--probe-tools=, =--adopt= and =--plan-out= have no
 variable.
+
+For companion tools, an explicit alternative input wins over an environment
+fallback: =eb-retry-list --summary= ignores =EB_PIPELINE_RESULT=,
+=eb-retry-list --recorded-list= ignores =EB_PIPELINE_LIST=, and
+=eb-junit --reframe-report= ignores =EB_PIPELINE_RESULT=.
 
 ** Site file values
 
