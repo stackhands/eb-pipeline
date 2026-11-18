@@ -17,9 +17,21 @@ pub fn parse(text: &str) -> Result<Site, Fail> {
 pub fn load(path: &Path) -> Result<Site, Fail> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| Fail::usage(format!("cannot read {}: {e}", path.display())))?;
-    let vars: Vec<(String, String)> = std::env::vars()
-        .filter(|(k, _)| k.starts_with(OVERRIDE_PREFIX))
-        .collect();
+    let mut vars = Vec::new();
+    for (name, value) in std::env::vars_os() {
+        let Ok(name) = name.into_string() else {
+            continue;
+        };
+        if !name.starts_with(OVERRIDE_PREFIX) {
+            continue;
+        }
+        let value = value.into_string().map_err(|_| {
+            Fail::usage(format!(
+                "{name}: an environment override must be valid UTF-8"
+            ))
+        })?;
+        vars.push((name, value));
+    }
     parse_with_overrides(&text, &vars)
 }
 
@@ -1095,6 +1107,7 @@ impl Site {
 #[cfg(test)]
 mod override_tests {
     use super::*;
+    use std::os::unix::ffi::OsStringExt;
 
     const BASE: &str = include_str!("../templates/small-cluster.toml");
 
@@ -1176,6 +1189,37 @@ mod override_tests {
         assert_eq!(
             serde_json::to_string(&a).unwrap(),
             serde_json::to_string(&b).unwrap()
+        );
+    }
+
+    #[test]
+    fn an_unrelated_non_unicode_environment_value_does_not_break_loading() {
+        const CHILD: &str = "EB_PIPELINE_PM102_NON_UNICODE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("site.toml");
+            std::fs::write(&path, BASE).unwrap();
+            load(&path).unwrap();
+            return;
+        }
+
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "site::override_tests::an_unrelated_non_unicode_environment_value_does_not_break_loading",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env(
+                "EB_PIPELINE_PM102_UNRELATED",
+                std::ffi::OsString::from_vec(vec![0xff]),
+            )
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 }
