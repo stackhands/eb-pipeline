@@ -148,8 +148,7 @@ fn retry_list_reference_matches_help_on_resumed_skips() {
     assert!(help_text.contains("resumed:"));
     assert!(help_text.contains("--status skipped"));
 
-    let cli_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("docs/orgmode/reference/cli.org");
+    let cli_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/orgmode/reference/cli.org");
     let cli = std::fs::read_to_string(&cli_path).unwrap();
     let section = cli
         .split("*** eb-retry-list")
