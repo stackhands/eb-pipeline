@@ -11,16 +11,18 @@ Each command has its own options; =docs/examples/cli.sh= prints every help text 
 
 #+begin_example
 eb-pipeline <COMMAND>
-eb-pipeline check [OPTIONS] --site <SITE>
+eb-pipeline check [OPTIONS]
 eb-pipeline schema
 eb-pipeline init [OPTIONS]
 eb-pipeline explain [OPTIONS] --site <SITE>
 eb-pipeline targets [OPTIONS] --site <SITE>
 eb-pipeline status [OPTIONS] --site <SITE>
 eb-pipeline metrics [OPTIONS] --result <RESULT>
-eb-pipeline plan [OPTIONS] --site <SITE> --list <LIST> --target <TARGET> --build-type <BUILD_TYPE>
-eb-pipeline run [OPTIONS] --site <SITE> --list <LIST> --target <TARGET> --build-type <BUILD_TYPE>
+eb-pipeline plan [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>
+eb-pipeline run [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>
+eb-pipeline verify [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE> --from <FROM>
 eb-pipeline watch [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>
+eb-pipeline audit [OPTIONS] --site <SITE> --target <TARGET> --out-dir <OUT_DIR>
 #+end_example
 
 =eb-pipeline --help= prints:
@@ -40,7 +42,9 @@ Commands:
   metrics  Print Prometheus text, or a short JSON status, for one result file
   plan     Compute phases, launch lines, environments and tool calls without executing
   run      Execute the plan's phases as subprocesses
+  verify   Recompute the input record and check its inclusion proof
   watch    Rebuild the recorded installs an EESSI change reaches, in dependency order
+  audit    Run eb-stack vulnerability checks and collect rebuild lists
   help     Print this message or the help of the given subcommand(s)
 
 Options:
@@ -53,10 +57,13 @@ Options:
 Examples:
   eb-pipeline init --template small-cluster --out site.toml
   eb-pipeline check --site site.toml
+  eb-pipeline check --list stack.yml --check-from-commit --easyconfigs-repo DIR
+  eb-pipeline check --site site.toml --gap-out DIR --generation NAME --shadow
   eb-pipeline targets --site site.toml --format json
   eb-pipeline plan --site site.toml --list list.txt --target cpu --build-type production --out plan.json
   eb-pipeline run --site site.toml --list list.txt --target cpu --build-type production --result result.json
   eb-pipeline watch --site site.toml --target cpu --build-type production --dry-run
+  eb-pipeline audit --site site.toml --target cpu --findings findings.csv --out-dir audit
   eb-pipeline metrics --result result.json
 
 Companion commands from this package:
@@ -67,19 +74,22 @@ Companion commands from this package:
   eb-cvmfs
 
 Configuration: every flag above falls back to an EB_PIPELINE_<FLAG> variable
-(EB_PIPELINE_SITE, EB_PIPELINE_LIST, EB_PIPELINE_TARGET, EB_PIPELINE_BUILD_TYPE,
-EB_PIPELINE_RUN_ID, EB_PIPELINE_LOG_STAMP, EB_PIPELINE_LISTS_DIR,
-EB_PIPELINE_RESULT); a flag on the command line wins.
+(EB_PIPELINE_SITE, EB_PIPELINE_LIST, EB_PIPELINE_PACKAGE_PLAN,
+EB_PIPELINE_TARGET, EB_PIPELINE_BUILD_TYPE, EB_PIPELINE_RUN_ID,
+EB_PIPELINE_LOG_STAMP, EB_PIPELINE_LISTS_DIR, EB_PIPELINE_RESULT); a flag on
+the command line wins.
 EB_PIPELINE__SECTION__KEY=value sets one site file value, for example
 EB_PIPELINE__FILESYSTEMS__SCRATCH=/scratch/eb; the result is validated like the
 file.
 
 Output streams: stdout carries plan, explain, schema, init, status, targets and
-metrics, and run --dry-run or watch --dry-run output only. Events go to stderr
-as `LEVEL [phase] target: message`. The result JSON goes to --result, and each
-run's summary to summary.json and summary.html in its run directory,
-<log_root>/<log-stamp>/. `metrics` exits 0 when it can read the file, including
-when the run itself failed.
+metrics, and verify, and run --dry-run or watch --dry-run output only. Events go to stderr
+as `LEVEL [phase] target: message`. The result JSON goes to --result, a run's
+requested plan JSON to --plan-out, and each run's summary to summary.json and
+summary.html in its run directory,
+<log_root>/<log-stamp>/. Run --metrics-file atomically replaces a Prometheus
+text file when the run ends. `metrics` exits 0 when it can read the file,
+including when the run itself failed.
 
 Exit codes:
    0  all requested work completed
@@ -107,7 +117,7 @@ when several apply: 1, then 78, then 75, then 0. Codes are never summed.
 =eb-pipeline --version= prints the version of the crate, the same for a release and for a build from source:
 
 #+begin_example
-eb-pipeline 0.3.0
+eb-pipeline 0.3.1
 #+end_example
 
 ** Arguments
@@ -125,8 +135,12 @@ No command takes an argument other than its options.
 | =status=  | Print the last runs under the log root, newest first, from the summary of each run directory.                                                                                                                       |
 | =plan=    | Print the plan of a run as JavaScript Object Notation (JSON): its phases and every command with its launch line and environment. It starts nothing.                                                                 |
 | =run=     | Run the phases of the plan, one command at a time, write the result file, and add the run to the summary of its run directory.                                                                                      |
+| =verify=  | Recompute the input record of a plan or a result and check its RFC 9162 inclusion proof. Needs =[attest] enabled=.                                                                                                  |
 | =watch=   | Compare what each recorded install of a target was built against in EESSI with the EESSI that its module environment loads now, and rebuild the installs that a change reaches, in the order of their dependencies. |
+| =audit=   | Run eb-stack vulnerability subcommands for one target and copy any generated rebuild lists to an output directory for =eb-pipeline run --list=.                                                                        |
 | =help=    | Print the help of the program, or of the command it names.                                                                                                                                                          |
+
+Two hidden packaging subcommands (=completions= and =man=) emit shell completion scripts and the section 1 manual page from the CLI parser.
 
 ** Options
 
@@ -137,18 +151,61 @@ An option with a variable in the table takes its value from that variable when t
 
 *** check
 
-| Option            | Variable                | Meaning                                                                                                                                                                                                                            |
-|-------------------+-------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| =--site FILE=     | =EB_PIPELINE_SITE=      | The site file; required.                                                                                                                                                                                                           |
-| =--lists-dir DIR= | =EB_PIPELINE_LISTS_DIR= | A directory that must hold every file that the =build_lists= of a target names. A missing file is an error of the site file.                                                                                                       |
-| =--probe-tools=   |                         | Start =BIN --version= for each sibling tool that an enabled phase calls, and fail when one cannot start, prints no version, or prints one below the =min_version= of its =[site.tools]= table. Without it, =check= starts nothing. |
+| Option                      | Variable                | Meaning                                                                                                                                                                                                                            |
+|-----------------------------+-------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =--site FILE=               | =EB_PIPELINE_SITE=      | The site file. Required unless =--check-from-commit= is set.                                                                                                                                                                       |
+| =--lists-dir DIR=           | =EB_PIPELINE_LISTS_DIR= | A directory that must contain every file that the =build_lists= of a target names. A missing file is an error of the site file.                                                                                                   |
+| =--probe-tools=             |                         | Start =BIN --version= for each sibling tool that an enabled phase calls, and fail when one cannot start, prints no version, or prints one below the =min_version= of its =[site.tools]= table.                                     |
+| =--list FILE=               | =EB_PIPELINE_LIST=      | The build list or easystack passed to =--stack-checks= or =--check-from-commit=.                                                                                                                                                    |
+| =--target NAME=             | =EB_PIPELINE_TARGET=    | Use only this target's =cpu_target= and expanded source paths. Requires =--stack-checks=. Without it, target-dependent values from every target are used.                                                                          |
+| =--stack-checks LIST=       |                         | Comma-separated =files=, =arch=, =cuda-cc=, =generation=, =provided= or =known-failures=. Each names an =eb-stack stack= subprocess. Requires =--list= and =--site=.                                                              |
+| =--check-from-commit=       |                         | Run =eb-stack stack from-commit --json= on an easystack =--list=; off by default. Requires =--list=.                                                                                                                               |
+| =--easyconfigs-repo DIR=    |                         | Passed to =eb-stack= when the easystack has =from-commit= pins.                                                                                                                                                                    |
+| =--easyblocks-repo DIR=     |                         | Passed to =eb-stack= when the easystack has =include-easyblocks-from-commit= pins.                                                                                                                                                 |
+| =--easybuild-version X.Y.Z= |                         | EasyBuild release version; overrides =eb-X.Y.Z= in the list file name.                                                                                                                                                             |
+| =--gap-out DIR=             |                         | Run =eb-stack stack gap= and write its report files into =DIR=. Requires =--generation=. Without it, no gap or shadow subprocess starts.                                                                                          |
+| =--generation NAME=         |                         | Toolchain generation passed to =stack gap=, such as =2026.1=. Requires =--gap-out=.                                                                                                                                               |
+| =--shadow=                  |                         | Also run =eb-stack stack shadow --json=, write its JavaScript Object Notation (JSON) output to =DIR/shadow.json=, and preserve its failure when a local recipe shadows the base stack. Requires =--gap-out=.                       |
 
 =check= writes =INFO [check] NAME: site file is valid= to stderr when the file is valid, where =NAME= is =site.name=.
+When =--check-from-commit= runs, =eb-pipeline= forwards =eb-stack='s report and exits with its status; exit 1 means at least one pin is already in the release tag. See [[file:../howto/check-from-commit-pins.org][Check from-commit pins before building]].
 Before that line it writes a =WARN= line for each of these settings:
 
 - =modules.unuse_path= with a first =modules.init= entry that is not an absolute path;
 - =admission.required= without =admission.quota_cmd= and =admission.reservations=, so that =run= refuses with exit 78;
 - =admission.quota_cmd= and =admission.reservations= without =admission.live_jobs_cmd=.
+
+Without =--stack-checks=, =check= starts no checks and otherwise behaves as before.
+With it, =check= runs every selected command directly, without =scheduler.launch=:
+
+| Name             | =eb-stack= command and site values                                                                                                                                               |
+|------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =files=          | =stack files --easystack FILE=; adds =[shards].easyconfigs=, =filesystems.configs_repo= and the selected targets' expanded =filesystems.source_paths=.                          |
+| =arch=           | =stack arch --easystack FILE=; adds =[shards].easyconfigs= and the selected targets' =cpu_target= values as =--arch=.                                                           |
+| =cuda-cc=        | =stack cuda-cc --easystack FILE=; adds =[shards].easyconfigs=. =eb-stack= checks its bundled accelerator targets.                                                              |
+| =generation=     | =stack generation --easystack FILE=.                                                                                                                                             |
+| =provided=       | =stack provided --build-list FILE --strict=; adds =[sbom].lock= as =--baseline-lock= when set. It expects a plain build list, and =eb-stack= refuses when no baseline is configured. |
+| =known-failures= | =stack known-failures --easystack FILE --strict=; adds =[shards].easyconfigs= and the selected targets' =cpu_target= values as =--arch=.                                      |
+
+Repeated path and architecture values are passed once.
+The configured =[site.tools.eb_stack].bin= is used, or =eb-stack= on the executable search path (=PATH=).
+All requested subprocesses run even after one fails.
+If one or more exit nonzero or cannot start, =check= reports each failure and exits 1.
+
+With =--gap-out=, =check= passes every target's resolved =modules_root/all= as =stack gap --site=.
+It takes European Environment for Scientific Software Installations (EESSI) base module trees from =shards.installed_modules_dirs=, the variables named by =shards.installed_modules_dirs_from_env=, and =watch.modules_dirs=.
+It takes recipe trees from =shards.easyconfigs= and =watch.easyconfigs=.
+Repeated paths are passed once.
+The configured =[site.tools.eb_stack].bin= is used, or =eb-stack= on the executable search path (=PATH=).
+
+=stack gap= receives the configured trees as repeated =--site=, =--installed= and =--easyconfigs= options, then =--generation= and =--out-dir=.
+Its own report files are written directly into =DIR=.
+=eb-pipeline= writes its standard output to =gap.stdout.log= and its standard error to =gap.stderr.log=.
+It also prints the summary line without changes.
+With =--shadow=, =stack shadow= receives the recipe trees as =--easyconfigs= and the EESSI trees as =--base=, with JavaScript Object Notation (JSON) selected by =--json=.
+Its standard output is =DIR/shadow.json= and its standard error is =DIR/shadow.stderr.log=.
+Each complete stream file atomically replaces an existing file.
+Neither subprocess uses =scheduler.launch=.
 
 *** schema
 
@@ -158,11 +215,12 @@ the key, its type, whether it is required or its default, and what it does.
 
 *** init
 
-| Option            | Meaning                                                                                                                                                                      |
-|-------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| =--template NAME= | The template to print; required unless =--list= is given.                                                                                                                    |
-| =--list=          | Print the name and summary of each template, one per line, and nothing else.                                                                                                 |
-| =--out FILE=      | Write the template to =FILE= instead of stdout, and write =INFO [init] -: wrote template NAME to FILE= to stderr. =-= is stdout. An existing =FILE= is refused, with exit 2. |
+| Option            | Variable                  | Meaning                                                                                                                                                                      |
+|-------------------+---------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =--template NAME= |                           | The template to print; required unless =--list= is given.                                                                                                                    |
+| =--list=          |                           | Print the name and summary of each template, one per line, and nothing else.                                                                                                 |
+| =--out FILE=      |                           | Write the template to =FILE= instead of stdout, and write =INFO [init] -: wrote template NAME to FILE= to stderr. =-= is stdout. An existing =FILE= is refused, with exit 2. |
+| =--hints=         | =EB_PIPELINE_INIT_HINTS=  | After writing a file, print next steps on stderr; also enabled when =EB_PIPELINE_INIT_HINTS=1=.                                                                              |
 
 [[file:templates.org][The site file templates]] shows each template.
 
@@ -187,14 +245,17 @@ It shows =<run-id>= and =<log-stamp>= where a run puts its own.
 
 *** status
 
-| Option            | Variable             | Meaning                                                                                             |
-|-------------------+----------------------+-----------------------------------------------------------------------------------------------------|
-| =--site FILE=     | =EB_PIPELINE_SITE=   | The site file; required.                                                                            |
-| =--target NAME=   | =EB_PIPELINE_TARGET= | Only the runs that have a log directory for the target, with only its entry; every run when absent. |
-| =--last N=        |                      | How many runs to print, from 1 to 65535; 10 when absent. Any other value is refused, with exit 2.   |
-| =--format FORMAT= |                      | =text=, the default, prints a line per run and a line per target; =json= prints one JSON document.  |
+| Option              | Variable             | Meaning                                                                                             |
+|---------------------+----------------------+-----------------------------------------------------------------------------------------------------|
+| =--site FILE=       | =EB_PIPELINE_SITE=   | The site file; required.                                                                            |
+| =--target NAME=     | =EB_PIPELINE_TARGET= | Only the runs that have a log directory for the target, with only its entry; every run when absent. |
+| =--last N=          |                      | How many matching runs to print, from 1 to 65535; 10 when absent. Other values exit 2.               |
+| =--problems-only=   |                      | Keep failed runs and runs without a readable =summary.json=; keep every run when absent.             |
+| =--format FORMAT=   |                      | =text=, the default, prints a line per run and a line per target; =json= prints one JSON document.  |
 
 =status= reads the directories under =filesystems.log_root= whose names are log stamps, newest first, and leaves out every other entry.
+With =--problems-only=, =--last= counts runs after filtering.
+With =--target=, the selected target's exit code decides whether a run is problematic.
 [[file:run-summary.org][The run summary]] shows what it prints.
 
 *** metrics
@@ -204,7 +265,18 @@ It shows =<run-id>= and =<log-stamp>= where a run puts its own.
 | =--result FILE=   | =EB_PIPELINE_RESULT=   | The result file of one run; required.                                                                                            |
 | =--format FORMAT= |                        | =prometheus=, the default, prints Prometheus text; =json= prints one JSON status document.                                       |
 
-=metrics= reads that file and prints gauges =eb_pipeline_info=, =eb_pipeline_exit_code=, =eb_pipeline_lines= and =eb_pipeline_phase=.
+=metrics= reads that file and prints these gauges:
+
+- =eb_pipeline_info=
+- =eb_pipeline_exit_code=
+- =eb_pipeline_last_run_timestamp_seconds=
+- =eb_pipeline_last_run_result=
+- =eb_pipeline_last_run_duration_seconds=
+- =eb_pipeline_items_built=
+- =eb_pipeline_items_failed=
+- =eb_pipeline_lines=
+- =eb_pipeline_phase=
+
 A status the run did not use is 0.
 Log paths stay in the result file.
 Exit 0 means the file was read, including when the run's own exit code is not 0.
@@ -215,32 +287,69 @@ Exit 2 means the file is missing, is not JSON, or its =kind= is not =result=.
 | Option              | Variable                 | Meaning                                                                                                                                                                          |
 |---------------------+--------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | =--site FILE=       | =EB_PIPELINE_SITE=       | The site file; required.                                                                                                                                                         |
-| =--list FILE=       | =EB_PIPELINE_LIST=       | The build list, or an easystack: a file whose name ends in =.yml= or =.yaml=; required.                                                                                          |
+| =--list FILE=       | =EB_PIPELINE_LIST=       | The build list, or an easystack whose name ends in =.yml= or =.yaml=; required unless =--package-plan= is present.                                                            |
+| =--package-plan DIR= | =EB_PIPELINE_PACKAGE_PLAN= | An =eb-stack package plan= bundle. Its emitted recipes replace the build list. Mutually exclusive with =--list=.                                                          |
+| =--verify-package-plan= |                          | Add ecosystem-native verification after the package-plan build. Requires =--package-plan=.                                                                                  |
 | =--target NAME=     | =EB_PIPELINE_TARGET=     | The target to build on; required.                                                                                                                                                |
 | =--build-type NAME= | =EB_PIPELINE_BUILD_TYPE= | The build type; required. A name without a =[targets.build_types.NAME]= table takes the values of the target.                                                                    |
 | =--run-id ID=       | =EB_PIPELINE_RUN_ID=     | The run label passed to the tools; =<run-id>= when absent.                                                                                                                       |
 | =--log-stamp STAMP= | =EB_PIPELINE_LOG_STAMP=  | The name of the run's directory under the log root, a Coordinated Universal Time (UTC) as =YYYYMMDD_HHMMSS=; =<log-stamp>= when absent. Any other value is refused, with exit 2. |
-| =--out FILE=        |                          | Write the plan to =FILE= instead of stdout; =-= is stdout.                                                                                                                       |
+| =--out FILE=        |                          | Atomically replace =FILE= with the complete plan instead of writing stdout; =-= is stdout. =FILE= must differ from the site and list files.                                        |
 | =--shard-plan DIR=  |                          | Read =DIR/plan.json=, written by =eb-stack stack shard=, and plan its units and their lines instead of the list as one unit.                                                     |
+| =--offline-bundle DIR= |                       | Add the opt-in offline planner calls to the sources phase and name the bundle that =run= writes. Needs an active =[sources]= table, a source path and configured easyconfig trees. |
+| =--require-offline= |                          | Place =sources.offline_wrapper= before admission, build, check, cache, log and notification commands. Requires =--offline-bundle= and a non-empty wrapper.                       |
+
+An easystack uses the same YAML anchors, aliases and =<<= merge keys as EasyBuild.
+Comments do not become data, an empty =options= mapping adds no arguments, duplicate entries stay in file order, and top-level keys other than =easyconfigs= are ignored.
+Each easyconfig entry may contain only its =options= mapping after YAML merges are applied.
+Syntax, duplicate-key and encoding errors name the input as =FILE:LINE:COLUMN=.
+UTF-8 byte-order marks and CRLF line endings are accepted.
 
 *** run
 
-=run= takes the first six options of =plan=, and these:
+=run= takes the common input and offline options of =plan=, and these:
 
-| Option             | Meaning                                                                                                                                                                                                       |
-|--------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| =--result FILE=    | Write the result file to =FILE= when the run ends. Without it, no result file is written. An error in the input, which stops the run before it starts, leaves an existing =FILE= as it was.                   |
-| =--shard-plan DIR= | Read the units from a plan previously written by =eb-stack stack shard=. The run does not call the shard planner or require its installed-module-directory environment variables.                           |
-| =--dry-run=        | Print each command of the plan on stdout and start nothing. No result file or summary is written, even with =--result=.                                                                                       |
-| =--oom-preflight=  | Before any package starts, ask =eb-stack stack oom= about the planned packages. Requires =--node=. Without this option no OOM check runs.                                                                       |
-| =--node NODE=      | The node passed to =eb-stack stack oom=, as =CORES:MEMORY_MIB= or =CORES:MEMORY_MIB:TARGET=. Requires =--oom-preflight=.                                                                                      |
+| Option                 | Meaning                                                                                                                                                                                                                         |
+|------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =--result FILE=        | Atomically replace =FILE= with the complete result when the run ends. Without it, no result file is written. An input error leaves an existing =FILE= as it was. It must differ from =--metrics-file=.                              |
+| =--plan-out FILE=      | Atomically replace =FILE= with the plan computed by this invocation before any phase command starts. A dry run writes it too. =FILE= must differ from every result and metrics path.                                               |
+| =--metrics-file FILE=  | Atomically replace =FILE= with Prometheus text when the run ends. Without it, no metrics file is written. A dry run does not write it. It must differ from =--result= and =--resume-result=.                                             |
+| =--resume-result FILE= | Continue from =FILE= when =[resume] enabled= is true and the input digest still matches. Conflicts with =--dry-run=. Without that, exit 2 and no result file. A mismatch, a missing =input_digest=, or an incomplete identity exits 78 and writes the result. |
+| =--shard-plan DIR=     | Read the units from a plan previously written by =eb-stack stack shard=. The run does not call the shard planner or require its installed-module-directory environment variables.                                             |
+| =--dry-run=            | Print each command of a fresh plan on stdout and start nothing. Conflicts with =--resume-result=. No result file, metrics file or summary is written, even with an output option.                                                           |
+| =--oom-preflight=      | Before any package starts, ask =eb-stack stack oom= about the planned packages. Requires =--node=. Without this option no out-of-memory check runs.                                                                             |
+| =--node NODE=          | The node passed to =eb-stack stack oom=, as =CORES:MEMORY_MIB= or =CORES:MEMORY_MIB:TARGET=. Requires =--oom-preflight=.                                                                                                        |
 
 =--run-id= defaults to the log stamp, and =--log-stamp= to the UTC time at which the run starts, taken once.
+Every explicit run output must differ from the site and list files.
+A metrics file records the final result, end time and duration after post-run work such as Software Bill of Materials (SBOM) generation.
+If the plan file cannot be written, =run= exits 1 before starting a phase command.
+When both output files are requested, =run= attempts =--result= first and =--metrics-file= second even if the first write fails, then reports every output failure and exits 1.
+If =--metrics-file= resolves to the same file as either JSON option, =run= exits 2 before it starts work or changes any of those files.
+=--result= may name the same file as =--resume-result=: the complete prior result is read before the completed run atomically replaces it.
 A line that =eb-staged-rebuild= builds passes =RUN_ID-STEM= as its run id, where =STEM= is the easyconfig file name without =.eb=, with =.2=, =.3= and so on added when the list repeats the line.
 When the OOM count is greater than zero, the preflight is refused, every planned package is recorded as skipped, and the run exits 78.
 The command reads only the =oom=N= summary line from eb-stack; eb-pipeline does not estimate memory itself.
 
 With =--dry-run=, a planned command prints as =[PHASE] COMMAND= and a phase that starts nothing as =# [PHASE] STATUS=.
+The preview does not evaluate a prior result, so =--dry-run= and =--resume-result= together exit 2.
+
+*** verify
+
+=verify= takes =--site=, =--target= and =--build-type= as =plan= does, and these:
+
+| Option              | Variable             | Meaning                                                                                              |
+|---------------------+----------------------+------------------------------------------------------------------------------------------------------|
+| =--list FILE=       | =EB_PIPELINE_LIST=   | Recompute from this build list or easystack. Use this or =--recorded-list=.                           |
+| =--recorded-list=   |                      | Recompute from the =list= path in =--from=. Conflicts with =--list=.                                 |
+| =--from FILE=       |                      | The plan or result JSON that holds =input_attestation=. Required. Needs =[attest] enabled=.           |
+
+=verify= recomputes the input record and checks the inclusion proof in =FILE=.
+A relative recorded list path is resolved from the current working directory.
+A record that no longer matches the inputs exits 78.
+A proof that =rfc9162-sidecar verify-proof= rejects exits 1.
+Without =[attest] enabled=, =verify= exits 2.
+[[file:../howto/attest-build-inputs.org][Attest the inputs of a plan]] is the task.
 
 *** watch
 
@@ -253,11 +362,28 @@ With =--dry-run=, a planned command prints as =[PHASE] COMMAND= and a phase that
 | =--log-stamp STAMP= | =EB_PIPELINE_LOG_STAMP=  | The run directory of the rebuild under the log root, as for =run=; the UTC time at which =watch= starts when absent. Any other value is refused, with exit 2. |
 | =--dry-run=         |                          | Print the plan on stdout, and rebuild and record nothing.                                                                                                     |
 | =--adopt=           |                          | Record each install in the module tree of the target against the EESSI loaded now, in place of the record, and rebuild nothing.                               |
-| =--plan-out FILE=   |                          | Write the plan to =FILE= in JSON.                                                                                                                             |
-| =--result FILE=     |                          | Write the result file of the rebuild to =FILE=. Without it, or without a rebuild, no result file is written.                                                  |
+| =--plan-out FILE=   |                          | Atomically replace =FILE= with the complete plan in JSON, including assessed actions when rebuild ordering stops before an order is computed.                  |
+| =--result FILE=     |                          | Atomically replace =FILE= with the complete rebuild result. Without it, or without a rebuild, no result file is written.                                      |
 
+The plan and result destinations must differ from the site file and from each other.
 Without =--dry-run=, =watch= prints the plan to stderr, then runs the rebuild list through the phases of the site file, as =run= runs a build list.
 [[file:watch.org][The watch state and plan]] says what =watch= compares, what its plan holds and how it rebuilds.
+
+*** audit
+
+| Option            | Variable             | Meaning                                                                                                                                                                                                                                  |
+|-------------------+----------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =--site FILE=     | =EB_PIPELINE_SITE=   | The site file; required.                                                                                                                                                                                                                 |
+| =--target NAME=   | =EB_PIPELINE_TARGET= | The target to audit; required.                                                                                                                                                                                                           |
+| =--findings FILE= |                      | Vulnerability scanner Comma-Separated Values (CSV) export for =eb-stack rebuild-set --findings=. Mutually exclusive with =--cve=.                                                                                                     |
+| =--cve ID=        |                      | Common Vulnerabilities and Exposures (CVE) id to pass to =eb-stack stack sbom --cve= and =eb-stack component-reach --cve=. Repeatable. Mutually exclusive with =--findings=.                                                           |
+| =--strict=        |                      | Exit non-zero when eb-stack reports any backport item in its summary output.                                                                                                                                                            |
+| =--out-dir DIR=   |                      | Directory where audit artifacts are written, including copied rebuild lists under =DIR/rebuilds/*.yml=. Required.                                                                                                                      |
+
+=audit= starts eb-stack as a subprocess and does not implement vulnerability matching itself.
+With =--findings=, it runs =eb-stack rebuild-set --findings= and copies the generated files from =rebuilds/= into =--out-dir/rebuilds/=.
+With =--cve=, it runs =eb-stack stack sbom --cve --backport-list= and =eb-stack component-reach --cve=.
+When =--strict= is passed and eb-stack reports backport items, =audit= exits 1.
 
 ** Environment
 
@@ -265,19 +391,24 @@ Each option in the tables above that names a variable reads it when the option i
 =EB_PIPELINE__SECTION__KEY=VALUE= sets one value of the site file, and a run sets variables of its own for the commands it starts.
 [[file:environment.org][Environment variables]] lists all of them.
 
+** Output pipelines
+
+=plan= and =run --dry-run= exit successfully when a pipeline consumer closes standard output after reading enough data.
+Another standard-output write error exits 1.
+
 ** Exit status
 
 | Status | Meaning                                                                                                                                                                                                                                                      |
 |--------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 |      0 | All requested work completed. =watch=: also nothing to rebuild.                                                                                                                                                                                              |
-|      1 | =run=: a line or a phase failed. =watch=: the rebuild failed, or an eb-stack call, the record or the state file did. =plan=: the shard plan could not be read. =status=: the log root could not be read. Any command: an output file could not be written.   |
+|      1 | =run=: a line or a phase failed. =watch=: the rebuild failed, an eb-stack call failed, or the record, state file, plan or rebuild list could not be read or written. =plan=: the shard plan could not be read. =status=: the log root could not be read. Any command: an output file could not be written. |
 |      2 | A usage error, an invalid site file, an unknown target, a list that cannot be read, is empty or has a quote that is not closed, an easystack that gives no lines as written, a tool below its =min_version=, or an =init --out= file that cannot be created. |
-|     75 | =run=: a resource was busy or a step is pending; run it again. =watch=: another watch of the target runs, its module environment did not load, or EESSI cannot be read.                                                                                      |
-|     78 | =run=: a precondition, admission or =eb-staged-rebuild= refused. =watch=: no =[watch]=, no EESSI, another EESSI version, no eb-stack, or no easyconfig tree for a vanished module.                                                                           |
+|     75 | =run=: a resource was busy or a step is pending; run it again. =watch=: another watch of the target runs, its module environment did not load, or EESSI cannot be read. =audit=: the module environment did not load, or EESSI cannot be read. |
+|     78 | =run=: a precondition, admission or =eb-staged-rebuild= refused. =watch=: no =[watch]=, no EESSI, another EESSI version, no eb-stack, or no easyconfig tree for a vanished module. =audit=: no eb-stack, or no EESSI in the module environment. |
 |    130 | =run= and =watch=: interrupted by =SIGINT=.                                                                                                                                                                                                                  |
 |    143 | =run= and =watch=: interrupted by =SIGTERM=.                                                                                                                                                                                                                 |
 
-The commands other than =run= and =watch= exit 0, 1 or 2.
+The commands other than =run=, =watch= and =audit= exit 0, 1 or 2.
 The rebuild of =watch= exits as a run would, and =watch= exits with its status.
 [[file:exit-status.org][Exit status]] has the cases behind each status, how =run= picks one when several apply, and how it reads the exit statuses of the tools it starts.
 
@@ -289,10 +420,16 @@ The rebuild of =watch= exits as a run would, and =watch= exits with its status.
 | the build list, =--list=          | One easyconfig per line, followed by the options =eb= gets for it, as =Name-version-toolchain.eb [eb options]=. Blank lines and lines that start with =#= are skipped. A =.yml= or =.yaml= file is an EasyBuild easystack instead, each of whose =easyconfigs= entries is a line, as [[file:../howto/from-eb-stack.org][Build what eb-stack plans]] shows. |
 | the plan, =plan --out=            | What =plan= prints; [[file:plan-and-result.org][The plan and result files]] lists its keys.                                                                                                                                                                                                                                                         |
 | the result file, =run --result=   | What the run did, line by line and phase by phase; [[file:plan-and-result.org][The plan and result files]] lists its keys.                                                                                                                                                                                                                          |
+| =DIR/manifest.json=, =--offline-bundle DIR= | Version-one checksum index of the bundled files: =url=, =sha256=, =local_name=, =consumer= and the content-addressed =object= path.                                                                                                                                                |
+| =DIR/objects/sha256/=             | Bundle objects, stored once by SHA-256.                                                                                                                                                                                                                                                                                 |
+| =DIR/planner/=                    | =stack order= and =stack files= artifacts, plus one =foreign-NN= package-inspection bundle per =[[sources.foreign]]= input.                                                                                                                                                                                          |
+| the metrics file, =run --metrics-file= | Prometheus text for the completed run, atomically replaced for a textfile collector.                                                                                                                                                                                                                                                     |
 | =LOG_ROOT/LOG_STAMP/TARGET/=      | The log directory of a run, under =filesystems.log_root=; [[file:log-tree.org][The log tree and its locks]] lists its files.                                                                                                                                                                                                                 |
 | =LOG_ROOT/LOG_STAMP/summary.json= | The summary of the runs with that log stamp, which each =run= updates and =status= reads, with =summary.html= beside it; [[file:run-summary.org][The run summary]] lists its keys.                                                                                                                                                              |
 | =STATE_DIR/TARGET.json=           | With =[watch]=, what each install of the target that a run or =watch= built was built against in EESSI, which =watch= compares with EESSI now; [[file:watch.org][The watch state and plan]] lists its keys.                                                                                                                               |
 | the plan, =watch --plan-out=      | What =watch= found for each recorded install and the list it rebuilds; [[file:watch.org][The watch state and plan]] lists its keys.                                                                                                                                                                                                       |
+| =DIR/rebuilds/*.yml=              | Rebuild lists copied from eb-stack by =audit --out-dir DIR=, ready for =eb-pipeline run --list=.                                                                                                                                                                                                 |
+| =DIR=, =check --gap-out DIR=      | Files written by =eb-stack stack gap=, its streams in =gap.stdout.log= and =gap.stderr.log=, and, with =--shadow=, =shadow.json= and =shadow.stderr.log=.                                                                                                                         |
 
 A list line is split into words as a shell splits them, with single and double quotes.
 
@@ -300,10 +437,15 @@ A list line is split into words as a shell splits them, with single and double q
 
 *** eb-retry-list
 
-=eb-retry-list= reads a run result (=--result=) or one target of a run summary (=--summary= with =--target=) together with the original build list or easystack (=--list=), and writes the unfinished lines in their original order with their =eb= options.
+=eb-retry-list= reads a run result (=--result=) or one target of a run summary (=--summary= with =--target=) together with the original build list or easystack, named by =--list= or its recorded path, and writes the unfinished lines in their original order with their =eb= options.
 
 #+begin_example
-eb-retry-list (--result FILE | --summary FILE --target NAME) --list FILE [--status STATUS,...] [--classify] [--out FILE]
+eb-retry-list (--result FILE | --summary FILE --target NAME)
+              (--list FILE | --recorded-list)
+              [--status STATUS,...] [--classify] [--class CLASS,...]
+              [--node CORES:MEMORY_MIB[:TARGET]] [--drop-oom]
+              [--easyconfigs DIR]... [--arch ARCH]... [--out FILE]
+              [--require-lines]
 #+end_example
 
 | Option | Meaning |
@@ -311,22 +453,40 @@ eb-retry-list (--result FILE | --summary FILE --target NAME) --list FILE [--stat
 | =--result FILE= | Result file written by =eb-pipeline run --result=. Mutually exclusive with =--summary=. |
 | =--summary FILE= | Run summary file (=summary.json=). Requires =--target=. |
 | =--target NAME= | Target entry to read from =--summary=. |
-| =--list FILE= | Build list or easystack (=.yml= or =.yaml=) passed to the run. Required. |
+| =--list FILE= | Build list or easystack (=.yml= or =.yaml=) passed to the run. Mutually exclusive with =--recorded-list=. |
+| =--recorded-list= | Read the build-list path from the result or selected summary target and use it as written. Mutually exclusive with =--list=. |
 | =--status STATUS,...= | Comma-separated statuses to keep: =failed=, =refused=, =pending=, =skipped=, =unreached=. Default: all non-=success= lines and unreached lines on a non-zero exit. |
-| =--classify= | Pass each selected line's recorded log to =eb-stack stack bot-classify --json= and keep only the =interrupted=, =resource= and =timeout= sub-classes. |
-| =--out FILE= | Write the retry list to =FILE=; =-= or absent prints to stdout. |
+| =--classify= | Pass each selected line's recorded log to =eb-stack stack bot-classify --json=. Without =--class=, keep the =interrupted=, =resource= and =timeout= sub-classes. |
+| =--class CLASS,...= | Classes to keep instead of that default. A line stays when the JSON =class= or =sub_class= is one of these names. Repeatable. Requires =--classify=. |
+| =--node NODE= | =CORES:MEMORY_MIB= or =CORES:MEMORY_MIB:TARGET=, passed to =eb-stack stack oom --node=. The lines that remain are written to a temporary easystack with their =eb= options and passed as =--easystack=. A line the command warns may run out of memory is named on stderr and still written. Requires =--classify=. |
+| =--drop-oom= | Leave out every line =--node= warned about. Requires =--node=. |
+| =--easyconfigs DIR= | Robot tree passed through to =eb-stack stack oom --easyconfigs=. Repeatable. Requires =--node=. |
+| =--arch ARCH= | CPU target passed through to =eb-stack stack oom --arch=. Repeatable. Requires =--node=. |
+| =--out FILE= | Atomically replace =FILE= with the complete retry list; =-= or absent prints to stdout. It must differ from the result or summary and from the explicit or recorded build list, including through symbolic and hard links. |
+| =--require-lines= | Exit 1 after writing an empty retry list. Without it, an empty retry list exits 0. |
 
-Exit 0 means the retry list was written (empty when every line succeeded, was deselected or was not in a retryable class).
-Exit 2 is a missing or invalid input, a selected line without a recorded log, an =eb-stack= that cannot start or fails, or invalid classifier output.
-Classification never falls back to retaining a line.
+=--result=, =--list= and =--target= fall back to =EB_PIPELINE_RESULT=,
+=EB_PIPELINE_LIST= and =EB_PIPELINE_TARGET=. A command-line option wins.
+=--summary= selects the summary instead of =EB_PIPELINE_RESULT=, and
+=--recorded-list= selects the recorded path instead of =EB_PIPELINE_LIST=.
+
+Exit 0 means the retry list was written (empty when every line succeeded, was deselected, was not in a selected class, or was dropped by =--drop-oom=).
+With =--require-lines=, exit 1 means the retry list was written but is empty.
+Exit 2 is a missing or invalid input, an output path that aliases an input, an absent or unreadable recorded list, a selected line without a recorded log, an =eb-stack= that cannot start or fails, invalid classifier output, or =stack oom= output that has no single =oom=N= line matching its warnings.
+Classification and the memory check never fall back to retaining a line that =eb-stack= did not accept.
+The memory check refuses option forms that an easystack cannot represent and refuses one easyconfig with different option sets.
+=eb-retry-list= does not classify a log or estimate memory itself.
+When =stack oom= rejects its generated easystack, the error names the source build list instead of the deleted temporary file.
 
 *** eb-shard-weights
 
 =eb-shard-weights= turns observed =duration_seconds= of succeeded =build= lines from =result.json=, =summary.json= or =--log-root= into the =MODULE<TAB>SECONDS= table read by =eb-stack stack shard --weights= and =[shards] weights=.
+Each succeeded =build= line in a result must contain a non-negative numeric =duration_seconds=.
 
 #+begin_example
 eb-shard-weights (--result FILE... | --summary FILE... | --log-root DIR [--last N])
-                 [--target NAME] [--existing FILE] [--mode max|latest|mean] [--out FILE]
+                 [--target NAME] [--existing FILE] [--min-samples N]
+                 [--mode max|latest|mean] [--out FILE]
 #+end_example
 
 | Option | Meaning |
@@ -335,10 +495,14 @@ eb-shard-weights (--result FILE... | --summary FILE... | --log-root DIR [--last 
 | =--summary FILE= | Run summary file (=summary.json=). Repeatable. |
 | =--log-root DIR= | Log root holding =LOG_STAMP= run directories to scan. |
 | =--last N= | How many newest run directories under =--log-root= to read (1 to 65535; default 10). |
-| =--target NAME= | Keep observations from this target only. |
+| =--target NAME= | Keep observations from this target only; exit 2 when no input contains it. |
 | =--existing FILE= | Seed weights TSV (=MODULE<TAB>SECONDS=) to merge with new observations. |
+| =--min-samples N= | Update a module only after N selected observations, from 1 to 65535; 1 when absent. Under-sampled existing weights remain unchanged. |
 | =--mode MODE= | Combine durations with =max= (default), =latest= or =mean=. |
-| =--out FILE= | Write the table to =FILE=; =-= or absent prints to stdout. |
+| =--out FILE= | Atomically replace =FILE= with the complete table; =-= or absent prints to stdout. =FILE= must differ from every result, summary and existing weights file. |
+
+With no input option, =EB_PIPELINE_RESULT= supplies one result file.
+=EB_PIPELINE_TARGET= supplies =--target=. A command-line option wins.
 
 Exit 0 means the table was written. Exit 2 is a missing or invalid input.
 
@@ -349,16 +513,35 @@ Exit 0 means the table was written. Exit 2 is a missing or invalid input.
 =run= does not write this report.
 
 #+begin_example
-eb-junit --result FILE... [--out FILE]
+eb-junit [--result FILE]... [--reframe-report FILE]... [--out FILE]
+         [--property NAME=VALUE]... [--fail-on-failure]
 #+end_example
 
 | Option | Meaning |
 |--------+---------|
-| =--result FILE= | A result file written by =eb-pipeline run --result=. Repeat for each file. Required. |
-| =--out FILE= | Write the report to =FILE=. =-= or absent prints it on stdout. |
+| =--result FILE= | A result file written by =eb-pipeline run --result=. Repeat for each file. |
+| =--reframe-report FILE= | A ReFrame report JSON written by =reframe --report-file=. Repeat for each file. |
+| =--out FILE= | Atomically replace =FILE= with the complete report. =-= or absent prints it on stdout. =FILE= must differ from every result and ReFrame report file. |
+| =--property NAME=VALUE= | Add the property to every suite. Repeat for more properties; the last value for a name wins. |
+| =--fail-on-failure= | Write the complete report, then exit 1 when it contains at least one failure. |
+
+With no input option, =EB_PIPELINE_RESULT= supplies one result file.
+A command-line input wins. Otherwise at least one of =--result= or
+=--reframe-report= is required.
 
 Exit 0 means the report was written, including when a run's own exit code is not 0.
+With =--fail-on-failure=, exit 1 means the report was written and contains a failure.
 Exit 2 is a missing file, a file that is not a result of schema version 1, or a report that could not be written.
+
+*** eb-test-map
+
+=eb-test-map= maps a build list, easystack, or =eb-pipeline run --result= file to test names, ReFrame selectors, or EESSI module arguments (=--format eessi-modules=).
+See [[file:test-map.org][The test map]] for all options and exit statuses.
+
+*** eb-cvmfs
+
+=eb-cvmfs= brackets one cache synchronization command in a CVMFS transaction, with optional archive-manifest checks, verification, timeouts, tagging, integrity checks, and Prometheus metrics.
+See [[file:cvmfs.org][The eb-cvmfs command]] for all options and exit statuses.
 
 ** See also
 

@@ -1,1 +1,0 @@
-The module wrapper sources `modules.shell_init` without `set -e` or `set -u`. EESSI 2026.06's Lmod init reads `EESSI_NO_MODULE_PURGE_ON_INIT` without a default, so with it as `shell_init` every module-wrapped step failed before its command started. A `module` call that fails still stops the step.

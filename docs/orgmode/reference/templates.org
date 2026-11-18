@@ -22,7 +22,8 @@ eessi-site       Slurm, CPU and GPU targets on an EESSI site layer, with quota, 
 | =small-cluster= | =cpu=                              | =logs=                                                           |
 | =eessi-site=    | =cpu-a=, =cpu-b=, =gpu-a=, =gpu-b= | =licences=, =shard=, =sources=, =admission=, =caches= and =logs= |
 
-=init --template NAME= prints the template, and =init --template NAME --out FILE= writes it to =FILE=:
+=init --template NAME= prints the template, and =init --template NAME --out FILE= writes it to =FILE=.
+With =--hints=, or with =EB_PIPELINE_INIT_HINTS=1=, =init= also prints next steps on stderr after it writes a file, including the =targets= command for templates with several targets.
 
 #+begin_src bash
 eb-pipeline init --template small-cluster --out small-cluster.toml

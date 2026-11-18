@@ -1,0 +1,1 @@
+Add an opt-in `eb-cvmfs` `--archive-manifest` check that refuses to open a CernVM File System (CVMFS) transaction unless one directory contains exactly the expected non-empty archive, with normalized paths, explicit parent directories, and user and group ids that fit the configured integer type.

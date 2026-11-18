@@ -139,6 +139,18 @@ fn the_cli_reference_lists_targets_among_the_commands_and_streams() {
 }
 
 #[test]
+fn watch_help_describes_exit_one_completely() {
+    let o = bin().args(["watch", "--help"]).output().unwrap();
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert!(
+        out.contains("plan or rebuild list could not be read or written"),
+        "{out}"
+    );
+    assert!(!out.contains("state file did\n"), "{out}");
+}
+
+#[test]
 fn the_ci_example_runs_one_job_per_target() {
     let path = root().join("examples/ci/github-actions.yml");
     let wf = std::fs::read_to_string(&path).unwrap();

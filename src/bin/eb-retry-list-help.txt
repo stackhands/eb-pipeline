@@ -1,19 +1,52 @@
 eb-retry-list: extract the unfinished lines of a build list from a run result or summary.
 
-  eb-retry-list (--result FILE | --summary FILE --target NAME) --list FILE
-                [--status STATUS,...] [--classify] [--out FILE]
+  eb-retry-list (--result FILE | --summary FILE --target NAME)
+                (--list FILE | --recorded-list)
+                [--status STATUS,...] [--classify] [--class CLASS,...]
+                [--node CORES:MEMORY_MIB[:TARGET]] [--drop-oom]
+                [--easyconfigs DIR]... [--arch ARCH]... [--out FILE]
+                [--require-lines]
 
 Reads the result file of `eb-pipeline run --result` or one target of a run
-summary (`summary.json`), matches each line of `--list` (a build list or an
-easystack) against its recorded outcome, and writes the lines that did not
+summary (`summary.json`), matches each line of the selected build list or
+easystack against its recorded outcome, and writes the lines that did not
 succeed in their original order with their original `eb` options.
+
+With `--recorded-list`, the tool reads the build-list path stored in the
+result or selected summary target instead of taking `--list`. The recorded
+path is used as written and must still be readable.
+
+`--result`, `--list` and `--target` fall back to `EB_PIPELINE_RESULT`,
+`EB_PIPELINE_LIST` and `EB_PIPELINE_TARGET`. A command-line option wins.
+`--summary` selects the summary instead of `EB_PIPELINE_RESULT`, and
+`--recorded-list` selects the recorded path instead of `EB_PIPELINE_LIST`.
 
 Without `--status`, every unfinished status (`failed`, `refused`, `pending`,
 `skipped`, and lines not yet reached before a non-zero exit) is included.
-Deselected lines and lines recorded as `success` are left out.
+Deselected lines and lines recorded as `success` are left out. A `skipped`
+line whose note starts with `resumed:` is also left out because its outputs
+were already checked. Pass `--status skipped` to include it explicitly.
 
 With `--classify`, each unfinished line's recorded log is passed to
-`eb-stack stack bot-classify --json`, and only the `interrupted`, `resource`
-and `timeout` sub-classes are written. A missing or failed eb-stack, a missing
+`eb-stack stack bot-classify --json`. Without `--class`, only the
+`interrupted`, `resource` and `timeout` sub-classes are written. `--class`
+names the classes to keep instead: a line stays when its JSON `class` or
+`sub_class` is one of those names. A missing or failed eb-stack, a missing
 log, or invalid classifier output is an error; no unclassified fallback is
 used.
+
+`--class`, `--node`, `--drop-oom`, `--easyconfigs` and `--arch` need
+`--classify`. `--node` is `CORES:MEMORY_MIB` or `CORES:MEMORY_MIB:TARGET`.
+The lines that remain are written to a temporary easystack and passed to
+`eb-stack stack oom --node NODE --easystack FILE`, with each `--easyconfigs`
+and `--arch` added when those options are set. A line eb-stack warns may
+run out of memory is reported on stderr. `--drop-oom` leaves those lines
+out; without it they are still written. `--drop-oom`, `--easyconfigs` and
+`--arch` need `--node`. eb-retry-list does not classify a log or estimate
+memory itself.
+
+`--require-lines` exits 1 after writing when the retry list is empty. Without
+it, an empty retry list exits 0.
+
+`--out` must differ from the result or summary and from the explicit or
+recorded build list. Symbolic and hard-link aliases are refused.

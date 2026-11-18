@@ -1,0 +1,38 @@
+name: integration-smoke
+
+# Mount EESSI and run examples/integration-smoke.sh. The script downloads
+# the published release of each stackhands tool and of eb-stack, then builds
+# one tiny easyconfig and passes it through the rest of the tools. A mount
+# and a build are slow, so this workflow is weekly and on demand. It does
+# not run on a pull request.
+
+on:
+  schedule:
+    - cron: "41 4 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: released tools on EESSI
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # v3.4.0 initializes the 2026.06 stack. Its action file mounts the
+      # repositories with cvmfs-contrib/github-action-cvmfs v5.5.
+      - uses: eessi/github-action-eessi@834df09f7d60de47f10a7cbf59b470d69b9e2852 # v3.4.0
+        with:
+          eessi_stack_version: "2026.06"
+          init_direnv: false
+      - name: Run the integration smoke
+        shell: bash
+        run: bash examples/integration-smoke.sh

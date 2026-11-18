@@ -180,6 +180,93 @@ const ROUTE_ALL: &[&str] = &[
 ];
 const ROUTE_BASIC: &[&str] = &["phase_dir", "log_dir", "work_dir", "target", "phase"];
 
+/// `[attest]` paths, the signing key and the verifier lines.
+fn validate_attest(site: &Site, e: &mut Vec<String>) {
+    if site.attest_on().is_none() {
+        return;
+    }
+    let a = site.attest.as_ref().expect("attest enabled");
+    match a.log_dir.as_deref() {
+        Some(p) if p.starts_with('/') => {}
+        Some(p) => e.push(format!("attest.log_dir: `{p}` is not an absolute path")),
+        None => e.push("attest.log_dir: required when [attest] is enabled".into()),
+    }
+    match a.key.as_deref() {
+        Some(p) if p.starts_with('/') => {}
+        Some(p) => e.push(format!("attest.key: `{p}` is not an absolute path")),
+        None => e.push("attest.key: required when [attest] is enabled".into()),
+    }
+    match a.origin.as_deref() {
+        Some(o) if !o.is_empty() && !o.chars().any(char::is_whitespace) => {}
+        _ => e.push("attest.origin: required when [attest] is enabled, with no whitespace".into()),
+    }
+    if a.trusted.is_empty() {
+        e.push(
+            "attest.trusted: at least one verifier line is required when [attest] is enabled"
+                .into(),
+        );
+    }
+    for line in &a.trusted {
+        if line.is_empty() || line.split('+').count() < 3 {
+            e.push(format!("attest.trusted: `{line}` is not name+keyid+base64"));
+        }
+    }
+    if a.bin.is_empty() {
+        e.push("attest.bin: must not be empty".into());
+    }
+    if let Some(n) = &a.image_digest_env {
+        if !env_name_ok(n) {
+            e.push(format!(
+                "attest.image_digest_env: `{n}` is not an environment variable name"
+            ));
+        }
+    }
+    let trees = crate::attest::easyconfig_trees(site);
+    if trees.is_empty() {
+        e.push(
+            "[attest] enabled needs easyconfigs, on attest.easyconfigs, resume.easyconfigs or shards.easyconfigs"
+                .into(),
+        );
+    }
+    for p in trees.iter().chain(&a.easyblocks).chain(&a.patches) {
+        if !p.starts_with('/') {
+            e.push(format!("attest path: `{p}` is not an absolute path"));
+        }
+    }
+}
+
+/// `[resume]` trees, and the repository that names a requeued workspace.
+fn validate_resume(site: &Site, e: &mut Vec<String>) {
+    if site.resume_on().is_none() {
+        return;
+    }
+    let trees = crate::resume::easyconfig_trees(site);
+    if trees.is_empty() {
+        e.push(
+            "[resume] enabled needs easyconfigs, on resume.easyconfigs or shards.easyconfigs"
+                .into(),
+        );
+    }
+    for p in &trees {
+        if !p.starts_with('/') {
+            e.push(format!("resume easyconfigs: `{p}` is not an absolute path"));
+        }
+    }
+    if site.filesystems.job_dir.is_none() {
+        return;
+    }
+    match &site.filesystems.configs_repo {
+        Some(p) if p.starts_with('/') => {}
+        Some(p) => e.push(format!(
+            "filesystems.configs_repo: `{p}` is not an absolute path, which [resume] needs to name the requeued workspace"
+        )),
+        None => e.push(
+            "filesystems.configs_repo: required when [resume] is enabled and filesystems.job_dir is set"
+                .into(),
+        ),
+    }
+}
+
 /// `filesystems.job_dir` and the paths that name it.
 fn validate_job_dir(site: &Site, e: &mut Vec<String>) {
     let fs = &site.filesystems;
@@ -584,6 +671,57 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
             e.push("shards.easyconfigs: at least one tree is required when count >= 2".into());
         }
     }
+    validate_resume(site, &mut e);
+    validate_attest(site, &mut e);
+    if let Some(s) = &site.sources {
+        for (i, asset) in s.assets.iter().enumerate() {
+            if asset.path.trim().is_empty() {
+                e.push(format!("sources.assets[{i}].path: must not be empty"));
+            }
+            if asset.url.trim().is_empty() {
+                e.push(format!("sources.assets[{i}].url: must not be empty"));
+            }
+            if asset.consumer.trim().is_empty() {
+                e.push(format!("sources.assets[{i}].consumer: must not be empty"));
+            }
+            if asset.sha256.len() != 64
+                || !asset
+                    .sha256
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
+                e.push(format!(
+                    "sources.assets[{i}].sha256: expected 64 lowercase hexadecimal digits"
+                ));
+            }
+            if let Some(name) = &asset.local_name {
+                let p = Path::new(name);
+                if name.is_empty()
+                    || name.contains('\\')
+                    || p.components().count() != 1
+                    || !matches!(p.components().next(), Some(std::path::Component::Normal(_)))
+                {
+                    e.push(format!(
+                        "sources.assets[{i}].local_name: expected one file name"
+                    ));
+                }
+            }
+        }
+        for (i, foreign) in s.foreign.iter().enumerate() {
+            for (key, value) in [
+                ("source", &foreign.source),
+                ("format", &foreign.format),
+                ("toolchain", &foreign.toolchain),
+            ] {
+                if value.trim().is_empty() {
+                    e.push(format!("sources.foreign[{i}].{key}: must not be empty"));
+                }
+            }
+        }
+        if s.offline_wrapper.iter().any(|part| part.is_empty()) {
+            e.push("sources.offline_wrapper: entries must not be empty".into());
+        }
+    }
     for m in site
         .modules
         .init
@@ -784,6 +922,45 @@ pub fn validate(site: &Site, lists_dir: Option<&Path>) -> Vec<String> {
                 e.push(format!("watch.{key}: `{p}` is not an absolute path"));
             }
         }
+        if let Some(a) = &w.abi_drift {
+            if a.enabled && a.probe.is_empty() {
+                e.push(
+                    "watch.abi_drift.probe: at least one field command is required when enabled"
+                        .into(),
+                );
+            }
+            for (field, cmd) in &a.probe {
+                if !name_ok(field) {
+                    e.push(format!(
+                        "watch.abi_drift.probe.{field}: use letters, digits, `.`, `_` and `-`"
+                    ));
+                }
+                if cmd.trim().is_empty() {
+                    e.push(format!(
+                        "watch.abi_drift.probe.{field}: command must not be empty"
+                    ));
+                }
+            }
+            for (field, providers) in &a.providers {
+                if !a.probe.contains_key(field) {
+                    e.push(format!(
+                        "watch.abi_drift.providers.{field}: no matching probe command in watch.abi_drift.probe"
+                    ));
+                }
+                if providers.is_empty() {
+                    e.push(format!(
+                        "watch.abi_drift.providers.{field}: at least one easyconfig file name is required"
+                    ));
+                }
+                for p in providers {
+                    if p.contains('/') || p.trim().is_empty() {
+                        e.push(format!(
+                            "watch.abi_drift.providers.{field}: `{p}` is not a file name"
+                        ));
+                    }
+                }
+            }
+        }
     }
     e
 }
@@ -796,6 +973,14 @@ impl Site {
     /// Shard section when it plans shards.
     pub fn shards_on(&self) -> Option<&Shards> {
         self.shards.as_ref().filter(|s| s.enabled && s.count >= 2)
+    }
+    /// Resume section when a run records an input identity.
+    pub fn resume_on(&self) -> Option<&Resume> {
+        self.resume.as_ref().filter(|r| r.enabled)
+    }
+    /// Attest section when a plan records an input attestation.
+    pub fn attest_on(&self) -> Option<&Attest> {
+        self.attest.as_ref().filter(|a| a.enabled)
     }
     /// Sources section when it prefetches.
     pub fn sources_on(&self) -> Option<&Sources> {

@@ -9,31 +9,43 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::env;
 use std::fs;
-use std::io::{self, Write};
-use std::path::Path;
-use std::process::{Command, ExitCode};
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitCode, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const KNOWN_STATUSES: &[&str] = &["failed", "refused", "pending", "skipped", "unreached"];
+/// Sub-classes `stack bot-classify` reports for a failure worth retrying unchanged.
 const RETRYABLE_CLASSES: &[&str] = &["interrupted", "resource", "timeout"];
+/// The first line `stack oom` prints for a build that does not fit.
+const OOM_MARK: &str = " may run out of memory on ";
 
 struct Args {
     result: Option<String>,
     summary: Option<String>,
     target: Option<String>,
-    list: String,
+    list: Option<String>,
+    recorded_list: bool,
     statuses: Option<BTreeSet<String>>,
     out: Option<String>,
+    require_lines: bool,
     classify: bool,
+    classes: Option<BTreeSet<String>>,
+    node: Option<String>,
+    drop_oom: bool,
+    easyconfigs: Vec<String>,
+    arches: Vec<String>,
 }
 
 #[derive(Clone)]
 struct Outcome {
     status: String,
     log: Option<String>,
+    resumed: bool,
 }
 
 struct RunOutcomes {
     exit_code: i64,
+    list: Option<String>,
     outcomes: BTreeMap<String, VecDeque<Outcome>>,
     deselected: BTreeMap<String, usize>,
 }
@@ -50,29 +62,47 @@ fn main() -> ExitCode {
 
 fn run() -> Result<ExitCode, String> {
     let args = parse(env::args().skip(1))?;
-    let list_path = Path::new(&args.list);
-    let list_text = fs::read_to_string(list_path)
-        .map_err(|e| format!("cannot read list {}: {e}", args.list))?;
-    let lines = if easystack::is_easystack(list_path) {
-        easystack::parse(&list_text).map_err(|e| format!("easystack {}: {e}", args.list))?
-    } else {
-        util::parse_list(&list_text).map_err(|f| f.msg)?
-    };
-    if lines.is_empty() {
-        return Err(format!("list {} holds no lines", args.list));
-    }
-
-    let recorded = match (&args.result, &args.summary, &args.target) {
-        (Some(path), None, None) => read_result(Path::new(path))?,
-        (None, Some(path), Some(target)) => read_summary(Path::new(path), target)?,
+    check_output_alias(
+        args.out.as_deref(),
+        &[
+            ("--result", args.result.as_deref()),
+            ("--summary", args.summary.as_deref()),
+            ("--list", args.list.as_deref()),
+        ],
+    )?;
+    let read_recorded = || match (&args.result, &args.summary, &args.target) {
+        (Some(path), None, None) => read_result(Path::new(path)),
+        (None, Some(path), Some(target)) => read_summary(Path::new(path), target),
         _ => unreachable!("validated in parse"),
     };
-
-    let selected = select_retry_lines(&lines, &recorded, args.statuses.as_ref());
-    let selected = if args.classify {
-        classify_retry_lines(selected)?
+    let (lines, recorded, list_source) = if args.recorded_list {
+        let recorded = read_recorded()?;
+        let list = recorded
+            .list
+            .clone()
+            .ok_or_else(|| "the selected record has no string `list`".to_string())?;
+        check_output_alias(args.out.as_deref(), &[("--list", Some(&list))])?;
+        (read_list(&list)?, recorded, list)
     } else {
-        selected.into_iter().map(|line| line.raw).collect()
+        let list = args.list.as_deref().expect("validated in parse");
+        (read_list(list)?, read_recorded()?, list.to_string())
+    };
+
+    let mut selected = select_retry_lines(&lines, &recorded, args.statuses.as_ref());
+    if args.classify {
+        let classes = args.classes.clone().unwrap_or_else(default_classes);
+        selected = classify_retry_lines(selected, &classes)?;
+    }
+    let selected = match args.node.as_deref() {
+        Some(node) => filter_oom(
+            selected,
+            node,
+            args.drop_oom,
+            &args.easyconfigs,
+            &args.arches,
+            &list_source,
+        )?,
+        None => selected.into_iter().map(|line| line.raw).collect(),
     };
     let mut text = selected.join("\n");
     if !selected.is_empty() {
@@ -80,25 +110,78 @@ fn run() -> Result<ExitCode, String> {
     }
     match args.out.as_deref() {
         Some(path) if path != "-" => {
-            fs::write(path, &text).map_err(|e| format!("cannot write {path}: {e}"))?;
+            util::write_atomic(Path::new(path), text.as_bytes())
+                .map_err(|e| format!("cannot write {path}: {e}"))?;
         }
         _ => {
-            let mut out = io::stdout().lock();
-            out.write_all(text.as_bytes())
+            util::write_stdout(text.as_bytes())
                 .map_err(|e| format!("cannot write retry list: {e}"))?;
         }
     }
-    Ok(ExitCode::SUCCESS)
+    if args.require_lines && selected.is_empty() {
+        Ok(ExitCode::from(1))
+    } else {
+        Ok(ExitCode::SUCCESS)
+    }
+}
+
+fn check_output_alias(out: Option<&str>, inputs: &[(&str, Option<&str>)]) -> Result<(), String> {
+    let paths: Vec<_> = inputs
+        .iter()
+        .map(|(option, path)| (*option, path.map(Path::new)))
+        .collect();
+    util::refuse_output_alias("--out", out.map(Path::new), &paths)
+}
+
+fn read_list(path: &str) -> Result<Vec<ListLine>, String> {
+    let list_path = Path::new(path);
+    let lines = if easystack::is_easystack(list_path) {
+        easystack::read(list_path)?
+    } else {
+        let list_text =
+            fs::read_to_string(list_path).map_err(|e| format!("cannot read list {path}: {e}"))?;
+        util::parse_list(&list_text).map_err(|f| f.msg)?
+    };
+    if lines.is_empty() {
+        return Err(format!("list {path} holds no lines"));
+    }
+    Ok(lines)
+}
+
+struct Parsed {
+    result: Option<String>,
+    summary: Option<String>,
+    target: Option<String>,
+    list: Option<String>,
+    recorded_list: bool,
+    statuses: Option<BTreeSet<String>>,
+    out: Option<String>,
+    require_lines: bool,
+    classify: bool,
+    classes: Option<BTreeSet<String>>,
+    node: Option<String>,
+    drop_oom: bool,
+    easyconfigs: Vec<String>,
+    arches: Vec<String>,
 }
 
 fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
-    let mut result = None;
-    let mut summary = None;
-    let mut target = None;
-    let mut list = None;
-    let mut statuses: Option<BTreeSet<String>> = None;
-    let mut out = None;
-    let mut classify = false;
+    let mut parsed = Parsed {
+        result: None,
+        summary: None,
+        target: None,
+        list: None,
+        recorded_list: false,
+        statuses: None,
+        out: None,
+        require_lines: false,
+        classify: false,
+        classes: None,
+        node: None,
+        drop_oom: false,
+        easyconfigs: Vec::new(),
+        arches: Vec::new(),
+    };
     let mut words = words.peekable();
 
     while let Some(word) = words.next() {
@@ -111,42 +194,37 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 println!("eb-retry-list {}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
             }
-            "--classify" => classify = true,
-            "--result" | "--summary" | "--target" | "--list" | "--status" | "--out" => {
+            "--classify" => parsed.classify = true,
+            "--recorded-list" => parsed.recorded_list = true,
+            "--require-lines" => parsed.require_lines = true,
+            "--drop-oom" => parsed.drop_oom = true,
+            "--result" | "--summary" | "--target" | "--list" | "--status" | "--out" | "--class"
+            | "--node" | "--easyconfigs" | "--arch" => {
                 let value = words
                     .next()
                     .filter(|v| !v.is_empty())
                     .ok_or_else(|| format!("{word} needs a value"))?;
-                assign_flag(
-                    &word,
-                    value,
-                    &mut result,
-                    &mut summary,
-                    &mut target,
-                    &mut list,
-                    &mut statuses,
-                    &mut out,
-                )?;
+                assign_flag(&word, value, &mut parsed)?;
             }
             _ => {
                 if let Some((flag, value)) = word.split_once('=') {
                     if matches!(
                         flag,
-                        "--result" | "--summary" | "--target" | "--list" | "--status" | "--out"
+                        "--result"
+                            | "--summary"
+                            | "--target"
+                            | "--list"
+                            | "--status"
+                            | "--out"
+                            | "--class"
+                            | "--node"
+                            | "--easyconfigs"
+                            | "--arch"
                     ) {
                         if value.is_empty() {
                             return Err(format!("{flag} needs a value"));
                         }
-                        assign_flag(
-                            flag,
-                            value.to_string(),
-                            &mut result,
-                            &mut summary,
-                            &mut target,
-                            &mut list,
-                            &mut statuses,
-                            &mut out,
-                        )?;
+                        assign_flag(flag, value.to_string(), &mut parsed)?;
                         continue;
                     }
                 }
@@ -155,48 +233,112 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
         }
     }
 
-    if result.is_some() && summary.is_some() {
+    if parsed.result.is_none() && parsed.summary.is_none() {
+        parsed.result = util::env_value("EB_PIPELINE_RESULT");
+    }
+    if parsed.target.is_none() && parsed.summary.is_some() {
+        parsed.target = util::env_value("EB_PIPELINE_TARGET");
+    }
+    if parsed.list.is_none() && !parsed.recorded_list {
+        parsed.list = util::env_value("EB_PIPELINE_LIST");
+    }
+
+    if parsed.result.is_some() && parsed.summary.is_some() {
         return Err("pass either --result or --summary, not both".into());
     }
-    if result.is_none() && summary.is_none() {
+    if parsed.result.is_none() && parsed.summary.is_none() {
         return Err("--result or --summary is required".into());
     }
-    if result.is_some() && target.is_some() {
+    if parsed.result.is_some() && parsed.target.is_some() {
         return Err("--target is used with --summary, not --result".into());
     }
-    if summary.is_some() && target.is_none() {
+    if parsed.summary.is_some() && parsed.target.is_none() {
         return Err("--target is required with --summary".into());
     }
+    for (flag, set) in [
+        ("--class", parsed.classes.is_some()),
+        ("--node", parsed.node.is_some()),
+        ("--drop-oom", parsed.drop_oom),
+        ("--easyconfigs", !parsed.easyconfigs.is_empty()),
+        ("--arch", !parsed.arches.is_empty()),
+    ] {
+        if set && !parsed.classify {
+            return Err(format!("{flag} requires --classify"));
+        }
+    }
+    if parsed.drop_oom && parsed.node.is_none() {
+        return Err("--drop-oom requires --node".into());
+    }
+    for (flag, set) in [
+        ("--easyconfigs", !parsed.easyconfigs.is_empty()),
+        ("--arch", !parsed.arches.is_empty()),
+    ] {
+        if set && parsed.node.is_none() {
+            return Err(format!("{flag} requires --node"));
+        }
+    }
+    if let Some(node) = &parsed.node {
+        check_node(node)?;
+    }
+    if parsed.list.is_some() && parsed.recorded_list {
+        return Err("pass either --list or --recorded-list, not both".into());
+    }
+    if parsed.list.is_none() && !parsed.recorded_list {
+        return Err("--list is required".into());
+    }
     Ok(Args {
-        result,
-        summary,
-        target,
-        list: list.ok_or_else(|| "--list is required".to_string())?,
-        statuses,
-        out,
-        classify,
+        result: parsed.result,
+        summary: parsed.summary,
+        target: parsed.target,
+        list: parsed.list,
+        recorded_list: parsed.recorded_list,
+        statuses: parsed.statuses,
+        out: parsed.out,
+        require_lines: parsed.require_lines,
+        classify: parsed.classify,
+        classes: parsed.classes,
+        node: parsed.node,
+        drop_oom: parsed.drop_oom,
+        easyconfigs: parsed.easyconfigs,
+        arches: parsed.arches,
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn assign_flag(
-    flag: &str,
-    value: String,
-    result: &mut Option<String>,
-    summary: &mut Option<String>,
-    target: &mut Option<String>,
-    list: &mut Option<String>,
-    statuses: &mut Option<BTreeSet<String>>,
-    out: &mut Option<String>,
-) -> Result<(), String> {
+fn assign_once(slot: &mut Option<String>, flag: &str, value: String) -> Result<(), String> {
+    if slot.is_some() {
+        return Err(format!("{flag} was given twice"));
+    }
+    *slot = Some(value);
+    Ok(())
+}
+
+fn assign_flag(flag: &str, value: String, parsed: &mut Parsed) -> Result<(), String> {
     match flag {
-        "--result" => *result = Some(value),
-        "--summary" => *summary = Some(value),
-        "--target" => *target = Some(value),
-        "--list" => *list = Some(value),
-        "--out" => *out = Some(value),
+        "--result" => assign_once(&mut parsed.result, flag, value)?,
+        "--summary" => assign_once(&mut parsed.summary, flag, value)?,
+        "--target" => assign_once(&mut parsed.target, flag, value)?,
+        "--list" => assign_once(&mut parsed.list, flag, value)?,
+        "--out" => assign_once(&mut parsed.out, flag, value)?,
+        "--node" => assign_once(&mut parsed.node, flag, value)?,
+        "--easyconfigs" => parsed.easyconfigs.push(value),
+        "--arch" => parsed.arches.push(value),
+        "--class" => {
+            let set = parsed.classes.get_or_insert_with(BTreeSet::new);
+            let mut any = false;
+            for part in value.split(',') {
+                let class = part.trim();
+                if class.is_empty() {
+                    return Err("--class needs a class name".into());
+                }
+                set.insert(class.to_string());
+                any = true;
+            }
+            if !any {
+                return Err("--class needs a class name".into());
+            }
+        }
         "--status" => {
-            let set = statuses.get_or_insert_with(BTreeSet::new);
+            let set = parsed.statuses.get_or_insert_with(BTreeSet::new);
             for part in value.split(',') {
                 let s = part.trim();
                 if s.is_empty() || !KNOWN_STATUSES.contains(&s) {
@@ -209,6 +351,32 @@ fn assign_flag(
             }
         }
         _ => unreachable!(),
+    }
+    Ok(())
+}
+
+/// `CORES:MEMORY_MIB` or `CORES:MEMORY_MIB:TARGET`, the form `stack oom --node` takes.
+fn check_node(text: &str) -> Result<(), String> {
+    let Some((cores, rest)) = text.split_once(':') else {
+        return Err(format!(
+            "--node {text} is CORES:MEMORY_MIB or CORES:MEMORY_MIB:TARGET"
+        ));
+    };
+    let (memory, target) = match rest.split_once(':') {
+        Some((memory, target)) => (memory, Some(target)),
+        None => (rest, None),
+    };
+    let cores: u32 = cores
+        .parse()
+        .map_err(|_| format!("--node {text} cores are not an integer"))?;
+    let memory_mib: u64 = memory
+        .parse()
+        .map_err(|_| format!("--node {text} memory is not an integer number of MiB"))?;
+    if cores == 0 || memory_mib == 0 {
+        return Err(format!("--node {text} needs positive cores and memory"));
+    }
+    if target.is_some_and(str::is_empty) {
+        return Err(format!("--node {text} has an empty target"));
     }
     Ok(())
 }
@@ -263,6 +431,7 @@ fn read_result(path: &Path) -> Result<RunOutcomes, String> {
     }
     Ok(RunOutcomes {
         exit_code,
+        list: obj.get("list").and_then(Value::as_str).map(str::to_string),
         outcomes,
         deselected,
     })
@@ -327,6 +496,10 @@ fn read_summary(path: &Path, target: &str) -> Result<RunOutcomes, String> {
     }
     Ok(RunOutcomes {
         exit_code,
+        list: t_obj
+            .get("list")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         outcomes,
         deselected,
     })
@@ -356,9 +529,15 @@ fn collect_outcomes(
             .and_then(Value::as_str)
             .ok_or_else(|| format!("{}: {field}[{i}].status must be a string", path.display()))?;
         let log = obj.get("log").and_then(Value::as_str).map(str::to_string);
+        let resumed = ["note", "reason"].iter().any(|key| {
+            obj.get(*key)
+                .and_then(Value::as_str)
+                .is_some_and(|note| note.starts_with("resumed:"))
+        });
         map.entry(ec.to_string()).or_default().push_back(Outcome {
             status: status.to_string(),
             log,
+            resumed,
         });
     }
     Ok(map)
@@ -366,6 +545,8 @@ fn collect_outcomes(
 
 struct RetryLine {
     raw: String,
+    easyconfig: String,
+    args: Vec<String>,
     log: Option<String>,
 }
 
@@ -384,11 +565,13 @@ fn select_retry_lines(
         {
             let keep = match explicit_statuses {
                 Some(set) => set.contains(&outcome.status),
-                None => outcome.status != "success",
+                None => outcome.status != "success" && !outcome.resumed,
             };
             if keep {
                 out.push(RetryLine {
                     raw: line.raw.clone(),
+                    easyconfig: line.easyconfig.clone(),
+                    args: line.args.clone(),
                     log: outcome.log,
                 });
             }
@@ -406,6 +589,8 @@ fn select_retry_lines(
             if keep {
                 out.push(RetryLine {
                     raw: line.raw.clone(),
+                    easyconfig: line.easyconfig.clone(),
+                    args: line.args.clone(),
                     log: None,
                 });
             }
@@ -414,7 +599,17 @@ fn select_retry_lines(
     out
 }
 
-fn classify_retry_lines(lines: Vec<RetryLine>) -> Result<Vec<String>, String> {
+fn default_classes() -> BTreeSet<String> {
+    RETRYABLE_CLASSES
+        .iter()
+        .map(|class| (*class).to_string())
+        .collect()
+}
+
+fn classify_retry_lines(
+    lines: Vec<RetryLine>,
+    classes: &BTreeSet<String>,
+) -> Result<Vec<RetryLine>, String> {
     let mut retryable = Vec::new();
     for line in lines {
         let log = line
@@ -424,6 +619,7 @@ fn classify_retry_lines(lines: Vec<RetryLine>) -> Result<Vec<String>, String> {
         let output = Command::new("eb-stack")
             .args(["stack", "bot-classify", "--json"])
             .arg(log)
+            .stdin(Stdio::null())
             .output()
             .map_err(|e| format!("cannot run eb-stack for {log}: {e}"))?;
         if !output.status.success() {
@@ -451,15 +647,251 @@ fn classify_retry_lines(lines: Vec<RetryLine>) -> Result<Vec<String>, String> {
                 jobs.len()
             ));
         }
-        if jobs[0]
-            .get("sub_class")
-            .and_then(Value::as_str)
-            .is_some_and(|class| RETRYABLE_CLASSES.contains(&class))
-        {
-            retryable.push(line.raw);
+        if job_matches(&jobs[0], classes) {
+            retryable.push(line);
         }
     }
     Ok(retryable)
+}
+
+/// True when `stack bot-classify --json` put this job in one of `classes`.
+///
+/// The names are the `class` and `sub_class` strings of that JSON. eb-retry-list
+/// does not decide the class.
+fn job_matches(job: &Value, classes: &BTreeSet<String>) -> bool {
+    let named = |key: &str| {
+        job.get(key)
+            .and_then(Value::as_str)
+            .is_some_and(|name| classes.contains(name))
+    };
+    named("sub_class") || named("class")
+}
+
+#[derive(Debug)]
+struct OomHit {
+    file: String,
+    required_by: Vec<String>,
+    line: String,
+}
+
+struct TempFile(PathBuf);
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+/// Ask `stack oom` which of `lines` it warns about, and drop those when asked.
+fn filter_oom(
+    lines: Vec<RetryLine>,
+    node: &str,
+    drop: bool,
+    easyconfigs: &[String],
+    arches: &[String],
+    list_source: &str,
+) -> Result<Vec<String>, String> {
+    if lines.is_empty() {
+        return Ok(Vec::new());
+    }
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let path = env::temp_dir().join(format!("eb-retry-list-{}-{nanos}.yml", std::process::id()));
+    let temp = TempFile(path);
+    write_easystack(&temp.0, &lines)?;
+    let mut command = Command::new("eb-stack");
+    command
+        .args(["stack", "oom", "--node", node, "--easystack"])
+        .arg(&temp.0);
+    for dir in easyconfigs {
+        command.arg("--easyconfigs").arg(dir);
+    }
+    for arch in arches {
+        command.arg("--arch").arg(arch);
+    }
+    let output = command
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("cannot run eb-stack stack oom: {e}"))?;
+    if !output.status.success() {
+        let code = output
+            .status
+            .code()
+            .map_or_else(|| output.status.to_string(), |code| code.to_string());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let generated = temp.0.to_string_lossy();
+        let source = format!("generated retry easystack from {list_source}");
+        let detail = stderr.trim().replace(generated.as_ref(), &source);
+        let detail = if detail.is_empty() {
+            String::new()
+        } else {
+            format!(": {detail}")
+        };
+        return Err(format!("eb-stack stack oom exited {code}{detail}"));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let hits = parse_oom_report(&stdout)?;
+    for hit in &hits {
+        if !lines.iter().any(|line| hit_names(hit, line)) {
+            return Err(format!(
+                "eb-stack stack oom warned about `{}`, which is not a selected line",
+                hit.file
+            ));
+        }
+    }
+    for hit in &hits {
+        eprintln!("eb-retry-list: {}", hit.line);
+    }
+    Ok(lines
+        .into_iter()
+        .filter(|line| !(drop && hits.iter().any(|hit| hit_names(hit, line))))
+        .map(|line| line.raw)
+        .collect())
+}
+
+fn write_easystack(path: &Path, lines: &[RetryLine]) -> Result<(), String> {
+    let mut seen = BTreeMap::new();
+    let mut easyconfigs = Vec::new();
+    for line in lines {
+        let name = basename(&line.easyconfig).to_string();
+        if let Some(previous) = seen.get(&name) {
+            if previous != &line.raw {
+                return Err(format!(
+                    "cannot check `{name}` for memory with more than one set of eb options"
+                ));
+            }
+            continue;
+        }
+        seen.insert(name.clone(), line.raw.clone());
+        easyconfigs.push(easystack_entry(&name, &line.args)?);
+    }
+    let mut document = serde_yaml::Mapping::new();
+    document.insert(
+        serde_yaml::Value::String("easyconfigs".into()),
+        serde_yaml::Value::Sequence(easyconfigs),
+    );
+    let value = serde_yaml::Value::Mapping(document);
+    let text = serde_yaml::to_string(&value).map_err(|e| format!("cannot make easystack: {e}"))?;
+    fs::write(path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+fn easystack_entry(name: &str, args: &[String]) -> Result<serde_yaml::Value, String> {
+    if args.is_empty() {
+        return Ok(serde_yaml::Value::String(name.to_string()));
+    }
+    let mut options = serde_yaml::Mapping::new();
+    let mut index = 0;
+    while index < args.len() {
+        let argument = &args[index];
+        let Some(long) = argument.strip_prefix("--") else {
+            return Err(format!(
+                "cannot represent eb option `{argument}` in the generated easystack"
+            ));
+        };
+        let (key, value, consumed) = if let Some((key, value)) = long.split_once('=') {
+            (key, serde_yaml::Value::String(value.to_string()), 1)
+        } else if args
+            .get(index + 1)
+            .is_some_and(|value| !value.starts_with('-'))
+        {
+            (long, serde_yaml::Value::String(args[index + 1].clone()), 2)
+        } else {
+            (long, serde_yaml::Value::Bool(true), 1)
+        };
+        if key.is_empty() {
+            return Err("cannot represent an empty eb option in the generated easystack".into());
+        }
+        if options
+            .insert(serde_yaml::Value::String(key.to_string()), value)
+            .is_some()
+        {
+            return Err(format!(
+                "cannot represent repeated eb option `--{key}` in the generated easystack"
+            ));
+        }
+        index += consumed;
+    }
+    let mut spec = serde_yaml::Mapping::new();
+    spec.insert(
+        serde_yaml::Value::String("options".into()),
+        serde_yaml::Value::Mapping(options),
+    );
+    let mut entry = serde_yaml::Mapping::new();
+    entry.insert(
+        serde_yaml::Value::String(name.to_string()),
+        serde_yaml::Value::Mapping(spec),
+    );
+    Ok(serde_yaml::Value::Mapping(entry))
+}
+
+fn parse_oom_report(stdout: &str) -> Result<Vec<OomHit>, String> {
+    let mut count: Option<usize> = None;
+    let mut hits = Vec::new();
+    for line in stdout.lines() {
+        if let Some(raw) = line
+            .split_whitespace()
+            .next()
+            .and_then(|word| word.strip_prefix("oom="))
+        {
+            if count.is_some() {
+                return Err("eb-stack stack oom printed more than one `oom=N` line".into());
+            }
+            let parsed = raw
+                .parse()
+                .map_err(|_| format!("eb-stack stack oom printed an invalid count `oom={raw}`"))?;
+            count = Some(parsed);
+            continue;
+        }
+        if count.is_some() {
+            continue;
+        }
+        let Some(at) = line.find(OOM_MARK) else {
+            continue;
+        };
+        let file = line[..at].trim();
+        if file.is_empty() {
+            return Err("eb-stack stack oom printed a warning with no easyconfig".into());
+        }
+        hits.push(OomHit {
+            file: file.to_string(),
+            required_by: required_by(line),
+            line: line.to_string(),
+        });
+    }
+    let Some(oom) = count else {
+        return Err("eb-stack stack oom printed no `oom=N` line".into());
+    };
+    if hits.len() != oom {
+        return Err(format!(
+            "eb-stack stack oom printed oom={oom} but {} warning line(s)",
+            hits.len()
+        ));
+    }
+    Ok(hits)
+}
+
+fn required_by(line: &str) -> Vec<String> {
+    let Some((_, rest)) = line.rsplit_once(" (required by ") else {
+        return Vec::new();
+    };
+    let names = rest.strip_suffix(')').unwrap_or(rest);
+    names
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn hit_names(hit: &OomHit, line: &RetryLine) -> bool {
+    let file = basename(&line.easyconfig);
+    basename(&hit.file) == file || hit.required_by.iter().any(|name| basename(name) == file)
+}
+
+fn basename(path: &str) -> &str {
+    path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
 #[cfg(test)]
@@ -484,6 +916,7 @@ mod tests {
         deselected.insert("Skip.eb".into(), 1);
         let rec = RunOutcomes {
             exit_code: 1,
+            list: None,
             outcomes,
             deselected,
         };
@@ -510,6 +943,7 @@ mod tests {
         outcomes.insert("B.eb".into(), VecDeque::from([outcome("skipped")]));
         let rec = RunOutcomes {
             exit_code: 1,
+            list: None,
             outcomes,
             deselected: BTreeMap::new(),
         };
@@ -524,10 +958,47 @@ mod tests {
         );
     }
 
+    #[test]
+    fn oom_report_names_the_easyconfig_and_who_requires_it() {
+        let stdout = "\
+Big.eb may run out of memory on x86_64/amd/zen4 (label): 10.0 GiB, the job has 1.0 GiB
+  parallel 8: 8 cores
+  remedy: fewer cores
+Dep.eb may run out of memory on x86_64/amd/zen4 (label): 9.0 GiB, the job has 1.0 GiB (required by Parent.eb, Other.eb)
+oom=2 fits=1 builds=3 nodes=1
+
+  libxc: current 4 (hook)
+";
+        let hits = parse_oom_report(stdout).unwrap();
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].file, "Big.eb");
+        assert!(hits[0].required_by.is_empty());
+        assert_eq!(hits[1].required_by, vec!["Parent.eb", "Other.eb"]);
+    }
+
+    #[test]
+    fn oom_report_refuses_a_count_that_does_not_match_the_warnings() {
+        let err = parse_oom_report("oom=1 fits=0 builds=1 nodes=1\n").unwrap_err();
+        assert!(err.contains("oom=1 but 0 warning"), "{err}");
+        let err = parse_oom_report("no summary\n").unwrap_err();
+        assert!(err.contains("no `oom=N` line"), "{err}");
+    }
+
+    #[test]
+    fn node_form_matches_the_eb_stack_flag() {
+        assert!(check_node("32:65536").is_ok());
+        assert!(check_node("32:65536:x86_64/amd/zen4").is_ok());
+        assert!(check_node("cores:65536").is_err());
+        assert!(check_node("0:65536").is_err());
+        assert!(check_node("32:65536:").is_err());
+        assert!(check_node("32").is_err());
+    }
+
     fn outcome(status: &str) -> Outcome {
         Outcome {
             status: status.into(),
             log: None,
+            resumed: false,
         }
     }
 }

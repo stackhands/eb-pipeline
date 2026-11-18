@@ -1,1 +1,0 @@
-`plan` and `run` refuse, with exit 78, when `[modules] init` names an EESSI generation other than the one the target's watch record was built against. The message says to give the new generation its own prefix, to plan `roots.txt` from `eb-stack stack gap`, and to record that prefix with `watch --adopt`.

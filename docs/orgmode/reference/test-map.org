@@ -4,23 +4,55 @@
 
 * The test map
 
-=eb-test-map= reads a map and a build list and prints the test names that cover the applications in the list.
+=eb-test-map= reads a build list and prints the tests that cover the applications in it.
+For a plain build list, each line's easyconfig selects the application and its following =eb= options do not become part of the name.
+The default uses a map of software name to test name.
+=--format eessi-modules= does not read a map. It prints the module names the European Environment for Scientific Software Installations (EESSI) test suite selects with ReFrame.
 
 #+begin_example
-eb-test-map --map FILE --list FILE [--toolchain NAME]... [--allow-unmapped]
+eb-test-map --map FILE (--list FILE | --result FILE) [--toolchain NAME]... [--allow-unmapped] [--include-resumed] [--format FORMAT]
+eb-test-map (--list FILE | --result FILE) --format eessi-modules [--toolchain NAME]... [--include-resumed]
 #+end_example
 
 | Option | Meaning |
 |--------+---------|
-| =--map FILE= | One software name and one test name per line, separated by whitespace. A line that starts with =#= is a comment. Required. |
-| =--list FILE= | Easyconfig file names, or paths to them, one per line. The software name is the file name before the version, the first component that starts with a digit. Required. |
+| =--map FILE= | One software name and one test name per line, separated by whitespace. A line that starts with =#= is a comment. Required for =--format text= and =reframe=. Not read for =--format eessi-modules=. |
+| =--list FILE= | Build list file. With =.yml= or =.yaml= it is read as an EasyBuild easystack and its =easyconfigs= entries become the list lines. |
+| =--result FILE= | Result JSON written by =eb-pipeline run --result=. Only lines with =status = "success"= are kept. |
+| =--include-resumed= | Also keep a skipped result line whose note starts with =resumed:=. Requires =--result=. |
 | =--toolchain NAME= | A software name that needs no test, besides the built-in toolchains. |
-| =--allow-unmapped= | Print the tests that exist and exit 0 when an application has no row. Without it, that application prints nothing and exits 2. |
+| =--allow-unmapped= | With =--format text= or =reframe=, print the tests that exist and exit 0 when an application has no row. Without it, that application prints nothing and exits 2. |
+| =--format FORMAT= | =text= (default): one test name per line. =reframe=: one selector per line as =-n ^...$=, with regex characters escaped. =eessi-modules=: one ReFrame argument, ~--setvar modules=Name/Version,...~. |
 
 The built-in toolchains are =GCC=, =GCCcore=, =foss=, =gfbf=, =gomkl=, =gompi=, =iimpi=, =intel= and =intel-compilers=.
 
-Stdout is the test names, sorted, each once, one per line. Messages go to stderr.
+Pass one of =--list= or =--result=.
+When neither is present, =EB_PIPELINE_LIST= and =EB_PIPELINE_RESULT= supply
+their corresponding options. A command-line input wins.
+Without =--include-resumed=, result input keeps only successful lines, as before.
+With it, result input also keeps lines that a resumed run skipped because their prior successful outputs still exist.
+Other skipped lines and failed lines remain excluded.
 
-Exit 0 means every application in the list has a test, or =--allow-unmapped= was set. Exit 2 is a missing file, a bad line, or an application with no test.
+With =--format text= or =reframe=, stdout is the test names, sorted, each once; =--format= chooses how each line is written.
+With =--format eessi-modules=, stdout is one line when the list has an application:
+
+#+begin_example
+--setvar modules=FFTW/3.3.10-GCC-13.2.0,GROMACS/2024.1-foss-2023b
+#+end_example
+
+=Name/Version= is the easyconfig file name with the software name and the rest joined by =/=.
+=GROMACS-2024.1-foss-2023b.eb= becomes =GROMACS/2024.1-foss-2023b=.
+=zlib-1.3.1.eb= becomes =zlib/1.3.1=.
+A suffix stays in the version, so =GROMACS-2024.1-foss-2023b-CUDA-12.1.0.eb= becomes =GROMACS/2024.1-foss-2023b-CUDA-12.1.0=.
+The names are sorted, and a name that appears twice is printed once.
+ReFrame's =--setvar= splits that value on commas and does not drop spaces, which is how =eessi.testsuite.hooks.set_modules= receives the list of module names.
+A comma or a space in a module name is a refusal, because it would not stay one entry.
+When every line is a comment, blank, or a toolchain, the command prints nothing.
+
+Messages go to stderr.
+
+Exit 0 with =--format text= or =reframe= means every application in the list has a test, or =--allow-unmapped= was set.
+Exit 0 with =--format eessi-modules= means every application became a module name, or the list had no application.
+Exit 2 is a missing file, a bad line, an unknown format, or, for =--format text= or =reframe=, an application with no test.
 
 [[file:../howto/run-tests-for-what-you-built.org][Run the tests that cover what you built]] uses it as the checks command.

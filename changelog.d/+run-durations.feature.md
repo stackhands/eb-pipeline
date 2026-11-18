@@ -1,1 +1,0 @@
-The result file records, as `duration_seconds`, how long the run took, how long each line's command ran, and how long each phase's commands ran together. A phase that ran no command, such as `preflight`, has none.

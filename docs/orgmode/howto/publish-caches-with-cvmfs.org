@@ -4,14 +4,14 @@
 
 * Publish cache updates with CVMFS
 
-Use =eb-cvmfs= when the command in =[caches]= writes directly into a CVMFS repository and the whole synchronization must be one transaction.
+Use =eb-cvmfs= when the command in =[caches]= writes directly into a CernVM File System (CVMFS) repository and the whole synchronization must be one transaction.
 =eb-pipeline run= does not add this bracket on its own; a site opts in by putting it in =caches.command=.
 
 ** 1. Check the synchronization command
 
 Run the site's synchronization command without CVMFS first and confirm that it updates the intended repository tree.
 The command must do only the synchronization that belongs inside the transaction.
-=eb-cvmfs= does not build or publish tarballs.
+=eb-cvmfs= does not build or publish tarballs, and it reads an archive only when you pass =--archive-manifest=.
 
 ** 2. Preview the bracket
 
@@ -24,7 +24,79 @@ eb-cvmfs --dry-run repo.example -- /opt/site/bin/sync-module-cache
 The preview prints the transaction-state check, transaction, synchronization and publish commands, plus the abort command used when synchronization fails.
 It runs none of them.
 
-** 3. Put the bracket in =[caches]=
+** 3. Add a pre-publish check
+
+Use =--verify-cmd= when the synchronized files must pass a check before they become a published repository revision:
+
+#+begin_src bash
+eb-cvmfs --dry-run \
+  --verify-cmd '/opt/site/bin/check-module-cache --root "/cvmfs/repo.example"' \
+  repo.example -- /opt/site/bin/sync-module-cache
+#+end_src
+
+The complete CMD is one argument to =--verify-cmd=, so quote it in the outer shell.
+The example is parsed into a command and argument vector and starts =/opt/site/bin/check-module-cache= directly, without a shell.
+If a verifier needs shell operations, quote the expression so that the outer shell does not evaluate it:
+
+#+begin_src bash
+eb-cvmfs --verify-cmd 'test -s "$CACHE_ROOT/spiderT.lua" && test -r "$CACHE_ROOT/moduleT.lua"' \
+  repo.example -- /opt/site/bin/sync-module-cache
+#+end_src
+
+That expression contains expansion and =&&=, so =eb-cvmfs= runs it as =sh -c CMD= inside the transaction.
+A failed verifier keeps its standard output and standard error visible, triggers =cvmfs_server abort -f= and returns its status.
+The synchronization command and verifier are not retried by =eb-cvmfs=.
+
+** 4. Bound synchronization, verification and publish
+
+Add =--sync-timeout SEC= when synchronization must stop after a fixed number of seconds.
+Add =--verify-timeout SEC= with =--verify-cmd= to bound the verifier separately:
+Add =--publish-timeout SEC= to bound =cvmfs_server publish=:
+
+#+begin_src bash
+eb-cvmfs \
+  --sync-timeout 900 \
+  --verify-cmd '/opt/site/bin/check-module-cache --root "/cvmfs/repo.example"' \
+  --verify-timeout 120 \
+  --publish-timeout 300 \
+  repo.example -- /opt/site/bin/sync-module-cache
+#+end_src
+
+Choose deadlines that cover a normal run at the publishing site.
+All three values are positive whole seconds.
+When a deadline expires, =eb-cvmfs= terminates the complete command process group, waits the documented one-second grace period between =TERM= and =KILL=, and aborts the transaction once.
+The timed-out command is not retried.
+After a synchronization or verification timeout, no publish starts.
+After a publish timeout, no integrity check starts.
+Exit status 124 and the optional metrics file distinguish a timeout from a command failure.
+
+** 5. Name the publish and check the repository
+
+Use =--tag= and =--tag-description= when operators want a named rollback point on the published revision:
+
+#+begin_src bash
+eb-cvmfs --dry-run \
+  --tag module-cache-2026-03 \
+  --tag-description 'module cache refresh before rollout' \
+  repo.example -- /opt/site/bin/sync-module-cache
+#+end_src
+
+The tag name and description are passed to =cvmfs_server publish= as =-a= and =-m=.
+Use =--check= when the published revision must pass =cvmfs_server check= before the command is considered successful:
+
+#+begin_src bash
+eb-cvmfs --dry-run \
+  --check \
+  --check-timeout 300 \
+  repo.example -- /opt/site/bin/sync-module-cache
+#+end_src
+
+The integrity check runs only after publish succeeds.
+A failed check returns the check command's exit status and does not roll back the published revision.
+The optional deadline is a positive whole number of seconds.
+When it expires, =eb-cvmfs= terminates the check process group, returns 124 and leaves the published revision in place.
+
+** 6. Put the bracket in =[caches]=
 
 Set the site's cache command to the same command without =--dry-run=:
 
@@ -41,8 +113,9 @@ config = "/opt/site/cache/cpu.toml"
 After a clean build, the cache phase checks that the repository is not already in a transaction, opens one, and runs the configured synchronization.
 A successful synchronization is published.
 A failed synchronization is aborted with =cvmfs_server abort -f=, and its exit status becomes the cache command's exit status.
+When =--verify-cmd= is configured, verification runs after synchronization and before publish; its failure is aborted and returned in the same way.
 
-** 4. Test the configured command
+** 7. Test the configured command
 
 Run a dry plan to see that the cache phase names =eb-cvmfs=:
 
@@ -50,9 +123,49 @@ Run a dry plan to see that the cache phase names =eb-cvmfs=:
 eb-pipeline plan --site site.toml --list build.list --target cpu --build-type production
 #+end_src
 
-Then run the =eb-cvmfs --dry-run= command from step 2 under the same module and account environment that publishes the repository.
+Then run the =eb-cvmfs --dry-run= command from steps 2 through 5 under the same module and account environment that publishes the repository.
+
+** 8. Optionally check an ingest archive first
+
+Pass =--archive-manifest= when the synchronization command ingests one tar archive and a missing parent directory, or a user or group id the repository cannot store, would make a later publish fail.
+The check is off unless you pass the option.
+
+Write a manifest next to a directory that contains exactly one archive.
+=directory= is resolved from the manifest file, so keep the manifest outside that directory.
+=sha256= is the SHA-256 digest of the archive file.
+
+#+begin_src json
+{
+  "directory": "ingest",
+  "name": "cache.tar",
+  "sha256": "paste the 64 lowercase hexadecimal digits of cache.tar here",
+  "uid_type": "i32",
+  "gid_type": "i32"
+}
+#+end_src
+
+=i32= accepts ids from 0 through 2147483647.
+Use it when the repository stores ids in a signed 32-bit field: 4294967295, the unsigned form of a 32-bit -1, does not fit and is refused.
+=u32= accepts that value, and =u16= stops at 65535.
+The reference describes normalized paths and the explicit directory rule.
+
+Preview the bracket.
+=eb-cvmfs= reads the archive and, when the check passes, prints the same commands as a preview without the option:
+
+#+begin_src bash
+eb-cvmfs --dry-run --archive-manifest ingest.json repo.example -- /opt/site/bin/sync-module-cache
+#+end_src
+
+A refused archive prints the reason on standard error, prints no commands, and does not start =cvmfs_server=.
+Put the same option, without =--dry-run=, on the cache command when the real transaction should stop first:
+
+#+begin_src toml
+[caches]
+command = "eb-cvmfs --archive-manifest /opt/site/ingest.json repo.example -- /opt/site/bin/sync-module-cache"
+#+end_src
 
 ** Related
 
+- [[file:publish-cvmfs-metrics.org][Publish CVMFS transaction metrics with the node exporter]]
 - [[file:../reference/cvmfs.org][The eb-cvmfs command]]
 - [[file:../reference/site-file.org][The site file]], for =[caches]=

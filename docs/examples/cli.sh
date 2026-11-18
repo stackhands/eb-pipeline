@@ -13,16 +13,18 @@ expect_status 0
 expect_line "eb-pipeline $(crate_version)"
 
 synopsis=(
-    'check [OPTIONS] --site <SITE>'
+    'check [OPTIONS]'
     'schema'
     'init [OPTIONS]'
     'explain [OPTIONS] --site <SITE>'
     'targets [OPTIONS] --site <SITE>'
     'status [OPTIONS] --site <SITE>'
     'metrics [OPTIONS] --result <RESULT>'
-    'plan [OPTIONS] --site <SITE> --list <LIST> --target <TARGET> --build-type <BUILD_TYPE>'
-    'run [OPTIONS] --site <SITE> --list <LIST> --target <TARGET> --build-type <BUILD_TYPE>'
+    'plan [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>'
+    'run [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>'
+    'verify [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE> --from <FROM>'
     'watch [OPTIONS] --site <SITE> --target <TARGET> --build-type <BUILD_TYPE>'
+    'audit [OPTIONS] --site <SITE> --target <TARGET> --out-dir <OUT_DIR>'
 )
 for usage in "${synopsis[@]}"; do
     run "eb-pipeline ${usage%% *} --help"

@@ -1,1 +1,0 @@
-When the job directory wrapper of `filesystems.job_dir` stops the job of `eb-stack stack shard` that `watch` runs to order a rebuild, as when the job's node has no directory for it, the error of `watch` quotes the first line in which the wrapper says why, after the path of `order.log`, as it does for the probe and for `rebuild-set`. Before, it gave the path only.

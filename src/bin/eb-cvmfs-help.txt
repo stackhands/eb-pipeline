@@ -1,13 +1,50 @@
 eb-cvmfs: run a cache synchronization inside one CVMFS transaction.
 
-  eb-cvmfs [--dry-run] REPOSITORY -- COMMAND [ARG...]
+  eb-cvmfs [--dry-run] [--metrics-file PATH] [--archive-manifest FILE]
+           [--sync-timeout SEC] [--verify-cmd CMD] [--verify-timeout SEC]
+           [--publish-timeout SEC]
+           [--tag NAME] [--tag-description TEXT]
+           [--check] [--check-timeout SEC]
+           REPOSITORY -- COMMAND [ARG...]
 
 Checks that REPOSITORY is not already in a transaction, starts
 `cvmfs_server transaction REPOSITORY`, and runs COMMAND with its arguments.
-If COMMAND succeeds, publishes REPOSITORY. If COMMAND fails or cannot start,
-aborts it with `cvmfs_server abort -f REPOSITORY` and returns COMMAND's exit
-status.
+If COMMAND succeeds and --verify-cmd is present, runs CMD before publishing.
+External commands without shell syntax are split into arguments and started
+directly; shell built-ins or commands with shell syntax run as `sh -c CMD`.
+Quote CMD as one argument to eb-cvmfs. If COMMAND or CMD fails or cannot
+start, aborts the transaction and returns that command's exit status without
+hiding its output.
+
+`--sync-timeout SEC`, `--verify-timeout SEC`, `--publish-timeout SEC`, and
+`--check-timeout SEC` are optional positive, whole-second deadlines. The
+verification deadline requires --verify-cmd, and the check deadline requires
+--check. A command with a deadline starts in a separate process group. On
+timeout, eb-cvmfs sends TERM to the group, waits one second, sends KILL to the
+group, and exits 124. It aborts once after a sync, verification, or publish
+timeout. A check timeout does not abort the published revision.
+
+Optional --tag NAME and --tag-description TEXT are passed to
+`cvmfs_server publish` as -a and -m. --tag-description requires --tag.
+Optional --check runs `cvmfs_server check REPOSITORY` after a successful
+publish and returns its exit status. Optional --check-timeout bounds that
+integrity check.
 
 This command only brackets the configured synchronization. It does not build
 or package tarballs. `--dry-run` prints the check, transaction, sync, publish,
-and failure-abort commands without running them.
+optional verification, optional integrity check, and failure-abort commands
+without running them.
+
+`--metrics-file PATH` atomically replaces Prometheus text after every valid
+invocation, including `--dry-run` and command failures. It preserves the mode
+of an existing file. Invocations sharing PATH are serialized. A timeout adds
+an `eb_cvmfs_timeout` gauge whose `phase` label is `sync`, `verify`, `publish`,
+or `check`.
+
+`--archive-manifest FILE` is optional. When it is set, eb-cvmfs reads FILE
+before it runs any cvmfs_server command. The directory named there must contain
+exactly one non-empty archive with the expected name and SHA-256 digest, every
+member path must be normalized, every ancestor must be an explicit directory,
+and every user id and group id must fit the configured type. A refusal exits 2
+and does not open a transaction. When the option is omitted, no archive is
+read and the command output is unchanged.

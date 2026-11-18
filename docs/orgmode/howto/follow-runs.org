@@ -42,6 +42,15 @@ The output on this page comes from =docs/examples/summary.sh=, which runs both t
    The command is =watch= for a rebuild that [[file:rebuild-when-eessi-changes.org][Rebuild what an EESSI change reaches]] sets up.
    Without =--last=, =status= lists 10 runs; =--target zen4= keeps the runs of one target, and =--format json= prints their summaries.
 
+   To focus on runs that need attention:
+
+   #+begin_src bash
+   eb-pipeline status --site site.toml --problems-only --last 5
+   #+end_src
+
+   This view includes failed runs and runs without a readable =summary.json=.
+   =--last= counts matching runs, so newer successful runs do not hide an older failure.
+
 3. List the lines of a run that did not succeed, with their logs, from its =summary.json=:
 
    #+begin_src bash
@@ -157,7 +166,32 @@ fi
 #+end_src
 
 Lines recorded as =success= and lines deselected by =[targets.select]= are left out, so =--rebuild= lines that already succeeded are not rebuilt.
+A line skipped by =--resume-result= because its outputs were already checked is also left out.
+Pass =--status skipped= when you explicitly want that line together with other skipped lines.
+Keep =retry.list= separate from the result, summary and build list.
+=eb-retry-list= refuses an =--out= path that aliases one of those inputs through a symbolic or hard link, before it writes the output.
 Use =--result result.json= in place of =--summary= and =--target=, and =--status failed= to narrow to specific line statuses.
+When the build-list path recorded in the result or selected target is still readable, reuse it instead of naming it again:
+
+#+begin_src bash
+eb-retry-list --result result.json --recorded-list --out retry.list
+#+end_src
+
+The recorded path is used as written.
+Keep =--list= when the list moved or when you run the command from another working directory.
+
+To branch on the command status instead of inspecting the output file, add =--require-lines=:
+
+#+begin_src bash
+if eb-retry-list --result result.json --recorded-list \
+     --out retry.list --require-lines; then
+    eb-pipeline run --site site.toml --list retry.list \
+      --target zen2 --build-type production
+fi
+#+end_src
+
+The option exits 1 after writing an empty retry list and exits 0 after writing one or more lines.
+Input and processing errors still exit 2.
 
 To retry only failures that =eb-stack= identifies as transient, add =--classify=:
 
@@ -168,6 +202,30 @@ eb-retry-list --result result.json --list build.list --classify --out retry.list
 This starts =eb-stack stack bot-classify --json= once for each unfinished line's recorded log and keeps only =interrupted=, =resource= and =timeout=.
 Install =eb-stack= on =PATH= before using the option.
 If a line has no recorded log, =eb-stack= is missing or fails, or its output cannot be read, =eb-retry-list= exits 2 and writes no retry list instead of treating every line as retryable.
+
+=--class= names the classes to keep instead of those three.
+A class is the =class= or =sub_class= string in that JSON, such as =timeout= or =source=.
+=--class= needs =--classify=, and it replaces the default rather than adding to it:
+
+#+begin_src bash
+eb-retry-list --result result.json --list build.list --classify --class source,checksum --out retry.list
+#+end_src
+
+To see which of the remaining lines =eb-stack= predicts will not fit a node, add =--node=.
+The value is =CORES:MEMORY_MIB= or =CORES:MEMORY_MIB:TARGET=.
+=eb-retry-list= writes those lines to a temporary easystack and starts =eb-stack stack oom --node NODE --easystack= on that file.
+Each warning is printed on stderr.
+The lines stay in the retry list unless you also pass =--drop-oom=:
+
+#+begin_src bash
+eb-retry-list --result result.json --list build.list --classify \
+  --node 32:65536:x86_64/amd/zen4 --drop-oom --out retry.list
+#+end_src
+
+=--arch= and =--easyconfigs= are passed through to the same =stack oom= command when you set them.
+=--node=, =--drop-oom=, =--arch= and =--easyconfigs= need =--classify=, and =--drop-oom=, =--arch= and =--easyconfigs= need =--node=.
+=eb-retry-list= does not classify a log or estimate memory itself.
+With no lines left after classification, =stack oom= is not started.
 
 ** If it fails
 

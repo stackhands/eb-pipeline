@@ -16,6 +16,8 @@ fn result() -> &'static str {
   "run_id": "demo",
   "sharded": false,
   "exit_code": 1,
+  "ended_at": "2026-11-17T20:00:00Z",
+  "duration_seconds": 12.5,
   "counts": {"success": 2, "failed": 1},
   "phases": [{"name": "build", "status": "failed"}],
   "lines": [{"log": "/secret/path/Foo.log"}]
@@ -45,6 +47,17 @@ fn metrics_prints_prometheus_for_a_failed_run() {
     assert!(text.contains("status=\"failed\"} 1\n"), "{text}");
     assert!(text.contains("status=\"success\"} 2\n"), "{text}");
     assert!(text.contains("status=\"pending\"} 0\n"), "{text}");
+    assert!(
+        text.contains("eb_pipeline_last_run_timestamp_seconds{"),
+        "{text}"
+    );
+    assert!(
+        text.contains("eb_pipeline_last_run_duration_seconds{"),
+        "{text}"
+    );
+    assert!(text.contains("eb_pipeline_items_built{"), "{text}");
+    assert!(text.contains("eb_pipeline_items_failed{"), "{text}");
+    assert!(!text.contains("retried"), "{text}");
     assert!(!text.contains("/secret/path"), "{text}");
     assert!(
         o.stderr.is_empty(),

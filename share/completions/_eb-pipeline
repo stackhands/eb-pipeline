@@ -1,0 +1,477 @@
+#compdef eb-pipeline
+
+autoload -U is-at-least
+
+_eb-pipeline() {
+    typeset -A opt_args
+    typeset -a _arguments_options
+    local ret=1
+
+    if is-at-least 5.2; then
+        _arguments_options=(-s -S -C)
+    else
+        _arguments_options=(-s -C)
+    fi
+
+    local context curcontext="$curcontext" state line
+    _arguments "${_arguments_options[@]}" : \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'-V[Print version]' \
+'--version[Print version]' \
+":: :_eb-pipeline_commands" \
+"*::: :->eb-pipeline" \
+&& ret=0
+    case $state in
+    (eb-pipeline)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:eb-pipeline-command-$line[1]:"
+        case $line[1] in
+            (check)
+_arguments "${_arguments_options[@]}" : \
+'--site=[Site file]:SITE:_files' \
+'--lists-dir=[Directory that must hold every build list a target names]:LISTS_DIR:_files' \
+'--list=[Build list or easystack to pass to requested eb-stack checks]:LIST:_files' \
+'--target=[Limit target-dependent settings to this target]:TARGET:_default' \
+'*--stack-checks=[Comma-separated eb-stack checks to run before any allocation]:STACK_CHECKS:((files\:"\`stack files\`, with robot trees, the easyconfig repository and source paths"
+arch\:"\`stack arch\`, with each selected target'\''s \`cpu_target\` as \`--arch\`"
+cuda-cc\:"\`stack cuda-cc\`, with the robot trees. \`eb-stack\` checks its accelerator targets"
+generation\:"\`stack generation\` on the easystack"
+provided\:"\`stack provided\` on a plain build list, with \`\[sbom\].lock\` as \`--baseline-lock\`"
+known-failures\:"\`stack known-failures\`, with robot trees and each selected \`cpu_target\`"))' \
+'--easyconfigs-repo=[easybuild-easyconfigs checkout for \`from-commit\` pins]:EASYCONFIGS_REPO:_files' \
+'--easyblocks-repo=[easybuild-easyblocks checkout for \`include-easyblocks-from-commit\`]:EASYBLOCKS_REPO:_files' \
+'--easybuild-version=[EasyBuild release \`X.Y.Z\`. Overrides \`eb-X.Y.Z\` in the list file name]:EASYBUILD_VERSION:_default' \
+'--gap-out=[Write eb-stack'\''s gap report files into this directory]:GAP_OUT:_files' \
+'--generation=[Toolchain generation passed to \`eb-stack stack gap\`]:GENERATION:_default' \
+'--probe-tools[Run each needed tool'\''s \`--version\` and enforce min_version]' \
+'--check-from-commit[Ask \`eb-stack stack from-commit\` whether pins are already in the EasyBuild release tag]' \
+'--shadow[Also write \`stack shadow\` JavaScript Object Notation (JSON) output to \`DIR/shadow.json\`]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(schema)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(init)
+_arguments "${_arguments_options[@]}" : \
+'--template=[Template name; \`--list\` prints the names]:TEMPLATE:_default' \
+'--out=[Write here; absent or \`-\` prints on stdout. An existing file is refused]:OUT:_files' \
+'--list[Print the template names and summaries]' \
+'--hints[After writing a file, print next steps on stderr (also when \`EB_PIPELINE_INIT_HINTS=1\`)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(explain)
+_arguments "${_arguments_options[@]}" : \
+'--site=[Site file]:SITE:_files' \
+'--target=[Target name; all targets when absent]:TARGET:_default' \
+'--build-type=[Apply this build type'\''s overrides]:BUILD_TYPE:_default' \
+'--format=[Output format]:FORMAT:(toml json)' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(targets)
+_arguments "${_arguments_options[@]}" : \
+'--site=[Site file]:SITE:_files' \
+'--format=[\`text\`\: one name per line; \`json\`\: a JSON array on one line]:FORMAT:(text json)' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'--site=[Site file]:SITE:_files' \
+'--target=[Only the runs of this target, with only its entry]:TARGET:_default' \
+'--last=[How many runs]:LAST:_default' \
+'--format=[\`text\`\: a line per run and per target; \`json\`\: one JSON document]:FORMAT:(text json)' \
+'--problems-only[Keep only nonzero runs and runs without a readable summary]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(metrics)
+_arguments "${_arguments_options[@]}" : \
+'--result=[Result file written by \`run --result\`]:RESULT:_files' \
+'--format=[\`prometheus\`, the default, or \`json\`]:FORMAT:(prometheus json)' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(plan)
+_arguments "${_arguments_options[@]}" : \
+'--site=[Site file]:SITE:_files' \
+'(--package-plan)--list=[Build list file\: one \`Name-version-toolchain.eb \[eb options\]\` per line, or an EasyBuild easystack, a \`.yml\` or \`.yaml\` file]:LIST:_files' \
+'(--list)--package-plan=[Directory written by \`eb-stack package plan\`; builds its emitted recipes]:PACKAGE_PLAN:_files' \
+'--target=[Target name]:TARGET:_default' \
+'--build-type=[Build type name (selects per-build-type overrides)]:BUILD_TYPE:_default' \
+'--run-id=[Run label recorded in the result and passed to tools; a staged rebuild line passes \`<run-id>-<easyconfig stem>\`. Default\: the log stamp for \`run\`, \`<run-id>\` for \`plan\`]:RUN_ID:_default' \
+'--log-stamp=[Timestamp directory under the log root\: a UTC time as \`YYYYMMDD_HHMMSS\`, the name \`eb-keep-logs rotate\` ages. Default\: the current UTC time, taken once per run; \`<log-stamp>\` for \`plan\`]:LOG_STAMP:_default' \
+'--offline-bundle=[Build a checksum-indexed bundle of prefetched and configured assets]:OFFLINE_BUNDLE:_files' \
+'--out=[Write the plan JSON here; \`-\` or absent prints it on stdout]:OUT:_files' \
+'--shard-plan=[Directory written by \`stack shard\`; expands its units and build lines]:SHARD_PLAN:_files' \
+'--verify-package-plan[Run ecosystem-native checks after a package-plan build]' \
+'--require-offline[Run phases after source prefetch through sources.offline_wrapper]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(run)
+_arguments "${_arguments_options[@]}" : \
+'--site=[Site file]:SITE:_files' \
+'(--package-plan)--list=[Build list file\: one \`Name-version-toolchain.eb \[eb options\]\` per line, or an EasyBuild easystack, a \`.yml\` or \`.yaml\` file]:LIST:_files' \
+'(--list)--package-plan=[Directory written by \`eb-stack package plan\`; builds its emitted recipes]:PACKAGE_PLAN:_files' \
+'--target=[Target name]:TARGET:_default' \
+'--build-type=[Build type name (selects per-build-type overrides)]:BUILD_TYPE:_default' \
+'--run-id=[Run label recorded in the result and passed to tools; a staged rebuild line passes \`<run-id>-<easyconfig stem>\`. Default\: the log stamp for \`run\`, \`<run-id>\` for \`plan\`]:RUN_ID:_default' \
+'--log-stamp=[Timestamp directory under the log root\: a UTC time as \`YYYYMMDD_HHMMSS\`, the name \`eb-keep-logs rotate\` ages. Default\: the current UTC time, taken once per run; \`<log-stamp>\` for \`plan\`]:LOG_STAMP:_default' \
+'--offline-bundle=[Build a checksum-indexed bundle of prefetched and configured assets]:OFFLINE_BUNDLE:_files' \
+'--result=[Write the result JSON here]:RESULT:_files' \
+'--plan-out=[Write the plan computed by this run before starting any phase command]:PLAN_OUT:_files' \
+'--metrics-file=[Atomically write Prometheus metrics here when the run ends]:METRICS_FILE:_files' \
+'--shard-plan=[Directory written by \`stack shard\`; reuse its units without replanning]:SHARD_PLAN:_files' \
+'--node=[Node size for \`--oom-preflight\`, as \`CORES\:MEMORY_MIB\[\:TARGET\]\`]:NODE:_default' \
+'--resume-result=[Continue from this result when its input digest still matches. Needs \`\[resume\] enabled\`]:FILE:_files' \
+'--verify-package-plan[Run ecosystem-native checks after a package-plan build]' \
+'--require-offline[Run phases after source prefetch through sources.offline_wrapper]' \
+'(--resume-result)--dry-run[Print the commands that would run and start nothing]' \
+'--oom-preflight[Ask \`eb-stack stack oom\` whether any planned package exceeds this node]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(verify)
+_arguments "${_arguments_options[@]}" : \
+'--site=[Site file]:SITE:_files' \
+'(--recorded-list)--list=[Build list file, or an EasyBuild easystack]:LIST:_files' \
+'--target=[Target name]:TARGET:_default' \
+'--build-type=[Build type name]:BUILD_TYPE:_default' \
+'--from=[Plan or result JSON that holds \`input_attestation\`]:FROM:_files' \
+'--recorded-list[Read the list path recorded in the plan or result]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(watch)
+_arguments "${_arguments_options[@]}" : \
+'--site=[Site file]:SITE:_files' \
+'--target=[Target name]:TARGET:_default' \
+'--build-type=[Build type of the rebuild (selects per-build-type overrides)]:BUILD_TYPE:_default' \
+'--run-id=[Run label of the rebuild. Default\: the log stamp]:RUN_ID:_default' \
+'--log-stamp=[Timestamp directory of the rebuild under the log root, as for \`run\`. Default\: the current UTC time]:LOG_STAMP:_default' \
+'--plan-out=[Write the plan JSON here]:PLAN_OUT:_files' \
+'--result=[Write the rebuild'\''s result JSON here]:RESULT:_files' \
+'--dry-run[Print the plan and rebuild nothing]' \
+'--adopt[Record every install in the target'\''s module tree against the EESSI loaded now, in place of the record, and rebuild nothing]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(audit)
+_arguments "${_arguments_options[@]}" : \
+'--site=[Site file]:SITE:_files' \
+'--target=[Target name]:TARGET:_default' \
+'(--cve)--findings=[Vulnerability scanner CSV for \`eb-stack rebuild-set --findings\`]:FINDINGS:_files' \
+'*--cve=[CVE id to audit. Repeat for multiple advisories]:CVE:_default' \
+'--out-dir=[Output directory for audit artifacts and copied rebuild lists]:OUT_DIR:_files' \
+'--strict[Exit non-zero when eb-stack reports backport items]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(completions)
+_arguments "${_arguments_options[@]}" : \
+'--shell=[Target shell]:SHELL:(bash zsh fish)' \
+'--out-dir=[Output directory]:OUT_DIR:_files' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(man)
+_arguments "${_arguments_options[@]}" : \
+'--out-dir=[Output directory]:OUT_DIR:_files' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_eb-pipeline__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:eb-pipeline-help-command-$line[1]:"
+        case $line[1] in
+            (check)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(schema)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(init)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(explain)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(targets)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(metrics)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(plan)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(run)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(verify)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(watch)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(audit)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(completions)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(man)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+}
+
+(( $+functions[_eb-pipeline_commands] )) ||
+_eb-pipeline_commands() {
+    local commands; commands=(
+'check:Parse and validate a site file' \
+'schema:Print the site file reference\: every key, type, default and meaning' \
+'init:Write a starter site file from a built-in template' \
+'explain:Print the resolved configuration of one or all targets' \
+'targets:Print the target names in file order, for a CI matrix or a shell loop' \
+'status:Print the last runs under the log root, newest first, from their summaries' \
+'metrics:Print Prometheus text, or a short JSON status, for one result file' \
+'plan:Compute phases, launch lines, environments and tool calls without executing' \
+'run:Execute the plan'\''s phases as subprocesses' \
+'verify:Recompute the input record and check its inclusion proof' \
+'watch:Rebuild the recorded installs an EESSI change reaches, in dependency order' \
+'audit:Run eb-stack vulnerability checks and collect rebuild lists' \
+'completions:Generate shell completion scripts from the clap command definition' \
+'man:Generate a section 1 man page from the clap command definition' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'eb-pipeline commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__audit_commands] )) ||
+_eb-pipeline__subcmd__audit_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline audit commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__check_commands] )) ||
+_eb-pipeline__subcmd__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline check commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__completions_commands] )) ||
+_eb-pipeline__subcmd__completions_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline completions commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__explain_commands] )) ||
+_eb-pipeline__subcmd__explain_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline explain commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__help_commands] )) ||
+_eb-pipeline__subcmd__help_commands() {
+    local commands; commands=(
+'check:Parse and validate a site file' \
+'schema:Print the site file reference\: every key, type, default and meaning' \
+'init:Write a starter site file from a built-in template' \
+'explain:Print the resolved configuration of one or all targets' \
+'targets:Print the target names in file order, for a CI matrix or a shell loop' \
+'status:Print the last runs under the log root, newest first, from their summaries' \
+'metrics:Print Prometheus text, or a short JSON status, for one result file' \
+'plan:Compute phases, launch lines, environments and tool calls without executing' \
+'run:Execute the plan'\''s phases as subprocesses' \
+'verify:Recompute the input record and check its inclusion proof' \
+'watch:Rebuild the recorded installs an EESSI change reaches, in dependency order' \
+'audit:Run eb-stack vulnerability checks and collect rebuild lists' \
+'completions:Generate shell completion scripts from the clap command definition' \
+'man:Generate a section 1 man page from the clap command definition' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'eb-pipeline help commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__help__subcmd__audit_commands] )) ||
+_eb-pipeline__subcmd__help__subcmd__audit_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline help audit commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__help__subcmd__check_commands] )) ||
+_eb-pipeline__subcmd__help__subcmd__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline help check commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__help__subcmd__completions_commands] )) ||
+_eb-pipeline__subcmd__help__subcmd__completions_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline help completions commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__help__subcmd__explain_commands] )) ||
+_eb-pipeline__subcmd__help__subcmd__explain_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline help explain commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__help__subcmd__help_commands] )) ||
+_eb-pipeline__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline help help commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__help__subcmd__init_commands] )) ||
+_eb-pipeline__subcmd__help__subcmd__init_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline help init commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__help__subcmd__man_commands] )) ||
+_eb-pipeline__subcmd__help__subcmd__man_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline help man commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__help__subcmd__metrics_commands] )) ||
+_eb-pipeline__subcmd__help__subcmd__metrics_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline help metrics commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__help__subcmd__plan_commands] )) ||
+_eb-pipeline__subcmd__help__subcmd__plan_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline help plan commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__help__subcmd__run_commands] )) ||
+_eb-pipeline__subcmd__help__subcmd__run_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline help run commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__help__subcmd__schema_commands] )) ||
+_eb-pipeline__subcmd__help__subcmd__schema_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline help schema commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__help__subcmd__status_commands] )) ||
+_eb-pipeline__subcmd__help__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline help status commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__help__subcmd__targets_commands] )) ||
+_eb-pipeline__subcmd__help__subcmd__targets_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline help targets commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__help__subcmd__verify_commands] )) ||
+_eb-pipeline__subcmd__help__subcmd__verify_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline help verify commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__help__subcmd__watch_commands] )) ||
+_eb-pipeline__subcmd__help__subcmd__watch_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline help watch commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__init_commands] )) ||
+_eb-pipeline__subcmd__init_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline init commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__man_commands] )) ||
+_eb-pipeline__subcmd__man_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline man commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__metrics_commands] )) ||
+_eb-pipeline__subcmd__metrics_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline metrics commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__plan_commands] )) ||
+_eb-pipeline__subcmd__plan_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline plan commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__run_commands] )) ||
+_eb-pipeline__subcmd__run_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline run commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__schema_commands] )) ||
+_eb-pipeline__subcmd__schema_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline schema commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__status_commands] )) ||
+_eb-pipeline__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline status commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__targets_commands] )) ||
+_eb-pipeline__subcmd__targets_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline targets commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__verify_commands] )) ||
+_eb-pipeline__subcmd__verify_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline verify commands' commands "$@"
+}
+(( $+functions[_eb-pipeline__subcmd__watch_commands] )) ||
+_eb-pipeline__subcmd__watch_commands() {
+    local commands; commands=()
+    _describe -t commands 'eb-pipeline watch commands' commands "$@"
+}
+
+if [ "$funcstack[1]" = "_eb-pipeline" ]; then
+    _eb-pipeline "$@"
+else
+    compdef _eb-pipeline eb-pipeline
+fi

@@ -1,1 +1,0 @@
-The first-build tutorial's dry run, run log and result include the checks phase, which a build of the published main prints between build and caches when the site file has no `[checks]` table. The checkout the tutorial names is that main.

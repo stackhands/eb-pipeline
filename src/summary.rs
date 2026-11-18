@@ -333,6 +333,27 @@ pub struct RunEntry {
 /// The newest `last` run directories under `log_root`, newest first. With
 /// `target`, only the runs that have a directory for it, with only its entry.
 pub fn runs(log_root: &Path, target: Option<&str>, last: usize) -> Result<Vec<RunEntry>, String> {
+    selected_runs(log_root, target, last, false)
+}
+
+/// The newest `last` problematic run directories under `log_root`.
+///
+/// A run is problematic when its selected summary has a nonzero exit code,
+/// or when its summary is absent or unreadable.
+pub fn problem_runs(
+    log_root: &Path,
+    target: Option<&str>,
+    last: usize,
+) -> Result<Vec<RunEntry>, String> {
+    selected_runs(log_root, target, last, true)
+}
+
+fn selected_runs(
+    log_root: &Path,
+    target: Option<&str>,
+    last: usize,
+    problems_only: bool,
+) -> Result<Vec<RunEntry>, String> {
     let entries = match std::fs::read_dir(log_root) {
         Ok(rd) => rd,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
@@ -366,9 +387,23 @@ pub fn runs(log_root: &Path, target: Option<&str>, last: usize) -> Result<Vec<Ru
                 "no {JSON}: the run is still going, or ended before writing one"
             ))
         };
-        out.push(RunEntry { run, dir, summary });
+        let entry = RunEntry { run, dir, summary };
+        if !problems_only || is_problem(&entry, target) {
+            out.push(entry);
+        }
     }
     Ok(out)
+}
+
+fn is_problem(entry: &RunEntry, target: Option<&str>) -> bool {
+    match &entry.summary {
+        Err(_) => true,
+        Ok(summary) if target.is_some() => summary
+            .targets
+            .first()
+            .is_none_or(|selected| selected.exit_code != exit::OK),
+        Ok(summary) => summary.exit_code != exit::OK,
+    }
 }
 
 /// `status` as text: a line per run, then a line per target, in columns

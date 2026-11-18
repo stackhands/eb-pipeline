@@ -41,6 +41,21 @@ Its target =zen4= installs hiredis, which builds with the CMake of EESSI and lin
    INFO [check] example: site file is valid
    #+end_example
 
+   To include host ABI drift in the same selective rebuild flow, add an opt-in =[watch.abi_drift]= table:
+
+   #+begin_src toml
+   [watch.abi_drift]
+   enabled = true
+   [watch.abi_drift.probe]
+   os_release = ". /etc/os-release; printf '%s-%s' \"$ID\" \"$VERSION_ID\""
+   glibc = "ldd --version | sed -n '1p'"
+   [watch.abi_drift.providers]
+   os_release = ["glibc-2.39.eb"]
+   glibc = ["glibc-2.39.eb", "OpenSSL-3.3.2.eb"]
+   #+end_src
+
+   Each probe command is run in the target environment; when a field changes, =watch= gives the mapped provider easyconfig names to =eb-stack rebuild-set --changed=.
+
 2. Build as before.
    At its end, a run records each install that it built or changed, with the EESSI it was built against:
 

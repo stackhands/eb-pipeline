@@ -7,7 +7,7 @@
 Install the =eb-pipeline= command for the account that runs the builds, from a release or from source.
 
 These pages describe the code on the main branch.
-Release 0.3.0 is older: it has no =targets= command, no ={target}= in =[filesystems]= paths, no =rebuild.lock_timeout= and no rotation locks, and it prints the same version, =eb-pipeline 0.3.0=.
+Release 0.3.0 is older: it has no =targets= command, no ={target}= in =[filesystems]= paths, no =rebuild.lock_timeout=, no rotation locks, and only the =eb-pipeline= binary (without the five companion commands added after 0.3.0), and it prints =eb-pipeline 0.3.0= instead of =eb-pipeline 0.3.1=.
 Until the next release, install from source to have them.
 
 ** Before you start
@@ -54,13 +54,13 @@ Until the next release, install from source to have them.
    eb-pipeline
    #+end_example
 
-   Release 0.3.0 ships =eb-pipeline= only.
-   The companion commands =eb-retry-list=, =eb-shard-weights=, =eb-test-map=, =eb-junit= and =eb-cvmfs= need a source install below.
+   Release 0.3.0 ships =eb-pipeline= alone; releases after 0.3.0 (and installing from source below) ship all six commands:
+   =eb-pipeline=, =eb-retry-list=, =eb-shard-weights=, =eb-test-map=, =eb-junit= and =eb-cvmfs=.
 
 3. Install the binary:
 
    #+begin_src bash
-   install -D -m 755 eb-pipeline-x86_64-unknown-linux-musl/eb-pipeline ~/.local/bin/eb-pipeline
+   install -D -m 755 "eb-pipeline-x86_64-unknown-linux-musl/eb-pipeline" "$HOME/.local/bin/eb-pipeline"
    #+end_src
 
 ** Install from source
@@ -93,7 +93,7 @@ eb-pipeline --version
 
 #+begin_example
 $HOME/.local/bin/eb-pipeline
-eb-pipeline 0.3.0
+eb-pipeline 0.3.1
 #+end_example
 
 A build from source also has the =targets= command:

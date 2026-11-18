@@ -71,6 +71,17 @@ The site file on this page builds for two kinds of node, =zen2= and =zen4=, each
 
 The script exits as one run of eb-pipeline would, from what the runs of its targets came to; [[file:../reference/exit-status.org][Exit status]] gives the order.
 
+7. To archive the plan that a run computed, add =--plan-out= beside =--result=:
+
+   #+begin_src bash
+   eb-pipeline run --site site.toml --list build.list --target zen2 \
+     --build-type production --plan-out plan-zen2.json \
+     --result result-zen2.json
+   #+end_src
+
+   Upload both files as CI artifacts.
+   The plan is written before any phase command starts and uses the same run id, log stamp and resolved paths as the run.
+
 ** Check that it worked
 
 Each run prints its lines as it goes, and the script the exit status of each target.
@@ -123,6 +134,16 @@ When =[shards]= is set in the site file, =eb-stack stack shard= balances shards 
 #+begin_src bash
 eb-shard-weights --log-root site/logs --target zen4 --existing weights-zen4.tsv --out weights-zen4.tsv
 #+end_src
+
+To keep an existing weight until at least three new timings support its replacement:
+
+#+begin_src bash
+eb-shard-weights --log-root site/logs --target zen4 --existing weights-zen4.tsv \
+  --min-samples 3 --out weights-zen4.tsv
+#+end_src
+
+An under-sampled module keeps its existing weight.
+A module without an existing weight appears only after it reaches the threshold.
 
 ** If it fails
 

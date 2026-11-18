@@ -91,6 +91,8 @@ So every job that a run or =watch= starts needs the directory, whatever its phas
 | =filesystems=    | table          | required | The paths.                                                                      |
 | =admission=      | table          | none     | Admission of each build unit under an inode quota, with =eb-stack stack admit=. |
 | =shards=         | table          | none     | Splitting a list into shards, with =eb-stack stack shard=.                      |
+| =resume=         | table          | none     | Recording an input identity and resuming a run from a prior result.             |
+| =attest=         | table          | none     | Attesting the exact inputs of a finalized plan in an RFC 9162 sidecar log.      |
 | =sources=        | table          | none     | Fetching the sources of every line before the first build.                      |
 | =modules=        | table          | required | The environment modules each command loads.                                     |
 | =caches=         | table          | none     | The command that writes module caches after a clean build.                      |
@@ -117,7 +119,7 @@ So every job that a run or =watch= starts needs the directory, whatever its phas
 
 | Key                 | Type  | Default                   | Meaning                                                                      |
 |---------------------+-------+---------------------------+------------------------------------------------------------------------------|
-| =eb_stack=          | table | =bin= =eb-stack=          | eb-stack, which runs =stack shard= and =stack admit=.                        |
+| =eb_stack=          | table | =bin= =eb-stack=          | eb-stack, which plans shards, admission and offline bundles. With =[resume]= enabled, =run= also calls =stack order --hashes-out=. With =[attest]= enabled, =plan= and =run= call =stack order= and may call =recipe easyblock=. |
 | =eb_keep_logs=      | table | =bin= =eb-keep-logs=      | eb-keep-logs, which runs =failed= and =rotate=.                              |
 | =eb_staged_rebuild= | table | =bin= =eb-staged-rebuild= | eb-staged-rebuild, which runs =run= for a line that rebuilds a live install. |
 
@@ -231,6 +233,7 @@ A build list can mark a line for some targets only, with an option of the line t
 =plan= and =run= apply the selection to the whole list, or to each shard unit, and drop a unit left without lines.
 With a selection, =run= writes the lines it keeps, in list order and with =strip= applied, to =LOG_DIR/selected-TARGET.list=, and passes that file to =stack shard --build-list=.
 The plan and the result list the lines left out under =deselected=, and no status count includes them.
+The separate-token form needs a value before the next option; otherwise =plan= and =run= exit 2 and name the list line.
 
 *** =[targets.hardware]=
 
@@ -321,18 +324,108 @@ A record that another writer has replaced since, such as a =forecast= or =waitin
 It writes its plan to =SHARD_DIR/RUN_ID/plan.json=, and =plan --shard-plan DIR= reads such a plan.
 A shard list holds lines of the input list only, so a line whose dependencies are not installed needs =--robot= to build them.
 
+** =[resume]=
+
+Set =enabled= to record the input identity of a run and to allow =run --resume-result FILE=.
+The identity is the file =eb-stack stack order --hashes-out= writes.
+=run= refuses to resume when that digest differs from the one in =FILE=, or when =stack order= reports =incomplete= other than 0.
+A unit is skipped only when every line of it succeeded in =FILE= and every module file that line declared is still present.
+=cpu-prerequisites=, =prelude= and =all= are prefixes: a prefix that cannot be skipped blocks every later unit.
+Without the table, or with =enabled= false, a run records no identity and =--resume-result= is refused.
+
+When =filesystems.job_dir= is set, =filesystems.configs_repo= is required and must be an absolute path.
+A requeued Slurm job, one whose =SLURM_RESTART_COUNT= is not 0, then uses =JOB_DIR/REPO.rCOUNT= as its workspace, where =REPO= is that path with every character outside =A-Za-z0-9._-= replaced by =_=.
+A count of 0 keeps the directory =filesystems.job_dir= names.
+
+| Key           | Type            | Default | Meaning                                                                                                                                                                                                                          |
+|---------------+-----------------+---------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =enabled=     | boolean         | =false= | =true= records the input identity and each successful line's module files, and allows =run --resume-result=. =false= records neither.                                                                                             |
+| =easyconfigs= | array of string | =[]=    | Easyconfig trees for =eb-stack stack order --easyconfigs= and, when =shards= is at least 2 and =[shards]= is not planning, for =eb-stack stack shard --easyconfigs=. At least one when enabled, unless =shards.easyconfigs= names one. =resume.easyconfigs= wins when it is not empty. |
+| =shards=      | integer         | =1=     | When =[shards]= is not planning, =stack shard --shards= for the prelude and shard restart boundaries. Below 2, the list stays one unit.                                                                                          |
+
+** =[attest]=
+
+Set =enabled= to hash the exact inputs of a finalized plan and append that record to an RFC 9162 sidecar log.
+=plan= does this when it writes the plan.
+=run= does it when the run starts, and not for =--dry-run=.
+The record covers the build list, every easyconfig =eb-stack stack order --out= resolves, the easyblock class and patches those files name, the site file, the container image digest and the route receipt.
+=verify= recomputes the record and checks the inclusion proof stored on the plan or the result.
+Without the table, or with =enabled= false, a plan and a result are unchanged and =verify= is a usage error.
+
+=log_dir= is a directory kept for this log.
+=rfc9162-sidecar sync= records every file in it, so other files placed there become part of the log.
+=key= is a PKCS#8 PEM file and =origin= is the checkpoint origin.
+Each =trusted= line is =name+keyid+base64= for that origin, the text =rfc9162-sidecar verify-proof --trusted= takes.
+=bin= is the =rfc9162-sidecar= program.
+It is started as a subprocess and is not probed with =--version=.
+
+=easyconfigs= are the trees given to =eb-stack stack order --easyconfigs=.
+When that list is empty, =resume.easyconfigs= is used, then =shards.easyconfigs=.
+=easyblocks= are directories searched for the Python file that defines each class.
+A quoted =easyblock= assignment is read anywhere in the easyconfig, regardless of earlier assignments.
+A class with no file is recorded with an empty path.
+=patches= are extra directories searched, together with the easyconfig's own directory and the easyconfig trees, for a quoted name that ends in =.patch=.
+Two files of the same name with different contents refuse the attestation.
+=image_digest_env=, when set, must hold the container image digest or the attestation is refused.
+The route receipt is the value of the target's =receipt_digest_env= when that variable is set, and otherwise empty; an empty receipt does not by itself refuse the attestation.
+
+| Key                | Type            | Default           | Meaning                                                                                                                                                          |
+|--------------------+-----------------+-------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =enabled=          | boolean         | =false=           | =true= appends an input record on =plan= and on =run=. =false= records nothing, and =verify= is refused.                                                         |
+| =log_dir=          | string          | none              | Directory of the sidecar log. Required when enabled. A directory kept for this log: =rfc9162-sidecar sync= records every file in it.                            |
+| =key=              | string          | none              | PKCS#8 PEM file passed to =rfc9162-sidecar snapshot --key=. Required when enabled.                                                                               |
+| =origin=           | string          | none              | Checkpoint origin passed to =rfc9162-sidecar snapshot --origin=. Required when enabled. A trusted line names this origin.                                       |
+| =trusted=          | array of string | =[]=              | Verifier lines =name+keyid+base64= passed to =rfc9162-sidecar verify-proof --trusted=. At least one when enabled.                                                |
+| =bin=              | string          | =rfc9162-sidecar= | The =rfc9162-sidecar= program. It is not probed with =--version=.                                                                                                |
+| =image_digest_env= | string          | none              | Environment variable that holds the container image digest. When set, an empty value refuses the attestation.                                                   |
+| =easyconfigs=      | array of string | =[]=              | Easyconfig trees for =eb-stack stack order --easyconfigs=. When empty, =resume.easyconfigs= is used, then =shards.easyconfigs=.                                  |
+| =easyblocks=       | array of string | =[]=              | Directories searched for the Python file that defines each resolved easyblock class. A class with no file is recorded with an empty path.                       |
+| =patches=          | array of string | =[]=              | Extra directories searched, with the easyconfig's directory and the easyconfig trees, for a patch a resolved easyconfig names.                                  |
+
 ** =[sources]=
 
-| Key          | Type            | Default | Meaning                                                                                                 |
-|--------------+-----------------+---------+---------------------------------------------------------------------------------------------------------|
-| =enabled=    | boolean         | =true=  | =false= turns the phase off.                                                                            |
-| =prefetch=   | boolean         | =true=  | Run =eb EASYCONFIG --fetch --robot= for every line before the first build; =false= turns the phase off. |
-| =extra_args= | array of string | =[]=    | Arguments of each prefetch command, after the line's own options.                                       |
+| Key               | Type            | Default | Meaning                                                                                                                        |
+|-------------------+-----------------+---------+--------------------------------------------------------------------------------------------------------------------------------|
+| =enabled=         | boolean         | =true=  | =false= turns the phase off.                                                                                                   |
+| =prefetch=        | boolean         | =true=  | Run =eb EASYCONFIG --fetch --robot= for every line before the first build; =false= turns the phase off.                        |
+| =extra_args=      | array of string | =[]=    | Arguments of each prefetch command, after the line's own options.                                                              |
+| =easyconfigs=     | array of string | =[]=    | Robot trees for =stack order= and =stack files= with =--offline-bundle=; falls back to =shards.easyconfigs=.                  |
+| =assets=          | array of table  | =[]=    | Test and runtime files copied into an offline bundle; one =[[sources.assets]]= per file.                                       |
+| =foreign=         | array of table  | =[]=    | Foreign package inputs passed to =eb-stack package inspect=; one =[[sources.foreign]]= per input.                             |
+| =offline_wrapper= | array of string | =[]=    | Command and arguments placed before later phase commands by =run --require-offline=; it must refuse network access.           |
 
 A prefetch command gets the options of its line, except those that start with =--rebuild=.
 A line whose prefetch fails is =failed= and is not built.
 =--fetch= takes no account of installed modules, so =--robot= fetches the sources of every dependency, those EESSI provides included.
 With =--disable-robot= in =extra_args=, a line fetches its own sources only: the prefetch command has no =--robot=, the line's =--robot= is dropped, and the paths of the line's =--robot=PATH= go first in =--robot-paths=, so that its easyconfig is still found.
+
+=--offline-bundle DIR= needs this phase, at least one =filesystems.source_paths=
+entry and =easyconfigs= here or under =[shards]=.
+It runs the three planner commands named above as subprocesses and does not
+interpret their dependency or recipe logic.
+After every fetch succeeds, it copies regular files under the source paths
+and every configured asset into =DIR/objects/sha256=, indexes the planner
+outputs there too, and writes =DIR/manifest.json=.
+The directory must not exist; a rerun therefore cannot overwrite or mix an
+earlier valid bundle.
+
+*** =[[sources.assets]]=
+
+| Key          | Type   | Default           | Meaning                                                     |
+|--------------+--------+-------------------+-------------------------------------------------------------|
+| =path=       | string | required          | Local regular file to copy.                                 |
+| =url=        | string | required          | Upstream URL recorded in the manifest.                      |
+| =sha256=     | string | required          | Expected 64-digit lowercase SHA-256 of =path=.              |
+| =consumer=   | string | required          | Test, package or command that consumes the file.            |
+| =local_name= | string | file name of path | One portable file name recorded in the manifest.            |
+
+*** =[[sources.foreign]]=
+
+| Key         | Type   | Default  | Meaning                                            |
+|-------------+--------+----------+----------------------------------------------------|
+| =source=    | string | required | Value of =package inspect --source=.               |
+| =format=    | string | required | Value of =package inspect --format=.               |
+| =toolchain= | string | required | Value of =package inspect --toolchain=.            |
 
 ** =[modules]=
 
@@ -487,6 +580,7 @@ A POST that cannot start, fails or runs out of time is a =WARN= line, and the ru
 With the table, a clean =run= starts =eb-stack stack sbom --lock LOCK --out LOG_ROOT/LOG_STAMP/sbom.cdx.json= and keeps that file beside =summary.json=.
 A build that did not exit 0 does not start it, and neither does =run --dry-run=.
 A command that cannot be started, or that exits with a status other than 0, fails the run with that status and leaves no =sbom.cdx.json=.
+When a signal ends the command, the run uses =128 + SIGNAL=, such as 143 for =SIGTERM=.
 eb-stack reads the lock and writes the document; eb-pipeline does not compute a bill of materials of its own.
 
 | Key       | Type    | Default | Meaning                                                                                                        |
@@ -506,10 +600,22 @@ With the table, each =run= records what every install it builds was built agains
 | =modules_dirs=   | array of string | =EESSI_MODULEPATH=, =EESSI_MODULEPATH_ACCEL= | The EESSI module trees, in order, in place of the ones that the module environment sets.                                                                                                                                                   |
 | =easyconfigs=    | array of string | =$EBROOTEASYBUILD/easybuild/easyconfigs=     | The easyconfig trees that =watch= gives =eb-stack stack shard= under those of EESSI and of the target, in which it finds the easyconfig of an EESSI module that vanished; the default reads =EBROOTEASYBUILD= from the module environment. |
 | =rebuild_review= | boolean         | =true=                                       | Whether =watch= rebuilds an install when a dependency that =eb-stack rebuild-set= classes =review= changed or vanished; =false= keeps the install, with a =WARN= line.                                                                     |
+| =abi_drift=      | table           | none                                         | Opt-in host ABI drift checks for =watch=. Changed fields map to provider easyconfigs, which =watch= gives to =eb-stack rebuild-set --changed=.                                               |
 
 The paths are absolute, which =check= checks.
 The install prefix is the =site_prefix= of the target, else =filesystems.install_root=.
 A record that fails is a =WARN= line, and the run exits as it would have without the table.
+
+** =[watch.abi_drift]=
+
+With the table and =enabled = true=, =watch= runs each command of =probe= in the target environment, trims each command's standard output, and compares the resulting field map with the baseline in the watch state.
+For each field whose value changed, =watch= reads =providers.FIELD= and passes those easyconfig file names to =eb-stack rebuild-set --changed=.
+
+| Key         | Type                     | Default | Meaning                                                                                                                                             |
+|-------------+--------------------------+---------+-----------------------------------------------------------------------------------------------------------------------------------------------------|
+| =enabled=   | boolean                  | =false= | =true= enables ABI drift checks; =false= leaves =watch= byte-identical to earlier behavior.                                                       |
+| =probe=     | table of string          | ={}=    | One shell command per field; each command's trimmed standard output is the field value. Required when enabled.                                    |
+| =providers= | table of array of string | ={}=    | One provider easyconfig file-name list per field. A changed field with no providers is refused, as =watch= cannot compute a selective rebuild set. |
 
 ** See also
 

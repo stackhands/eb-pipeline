@@ -59,7 +59,7 @@ fn scrub(text: &str, url: &str) -> String {
 /// POST `summary` when `[notify]` asks for it after a target's run that
 /// ended with `exit_code`. Each outcome is an event on stderr, and none
 /// changes the run's exit code.
-pub fn send(site: &Site, target: &str, exit_code: i32, summary: &Path) {
+pub fn send(site: &Site, target: &str, exit_code: i32, summary: &Path, wrapper: &[String]) {
     let Some(n) = site.notify_on() else {
         return;
     };
@@ -100,7 +100,7 @@ pub fn send(site: &Site, target: &str, exit_code: i32, summary: &Path) {
     }
     let shown = redacted(&url);
     let name = summary.file_name().unwrap_or_default().to_string_lossy();
-    match post(n, &url, summary) {
+    match post(n, &url, summary, wrapper) {
         Ok(()) => log(
             "INFO",
             "notify",
@@ -116,9 +116,11 @@ pub fn send(site: &Site, target: &str, exit_code: i32, summary: &Path) {
     }
 }
 
-fn post(n: &Notify, url: &str, body: &Path) -> Result<(), String> {
-    let mut child = Command::new(&n.curl)
-        .args([
+fn post(n: &Notify, url: &str, body: &Path, wrapper: &[String]) -> Result<(), String> {
+    let mut argv = wrapper.to_vec();
+    argv.push(n.curl.clone());
+    argv.extend(
+        [
             "--silent",
             "--show-error",
             "--fail",
@@ -131,14 +133,19 @@ fn post(n: &Notify, url: &str, body: &Path) -> Result<(), String> {
             "--header",
             "Expect:",
             "--data-binary",
-        ])
-        .arg(format!("@{}", body.display()))
-        .args(["--config", "-"])
+        ]
+        .map(str::to_string),
+    );
+    argv.push(format!("@{}", body.display()));
+    argv.extend(["--config".into(), "-".into()]);
+    let program = argv.remove(0);
+    let mut child = Command::new(&program)
+        .args(argv)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("cannot start {}: {e}", n.curl))?;
+        .map_err(|e| format!("cannot start {program}: {e}"))?;
     // check_url refused the quote and backslash that would need escaping here
     let written = child
         .stdin

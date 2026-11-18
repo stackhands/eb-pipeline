@@ -2,15 +2,18 @@
 
 use crate::exit::{self, Fail};
 use crate::plan::{
-    build_plan, read_units, shell_line, valid_job_id, Cmd, Deselected, Planner, StemSeq, Unit,
-    PHASES,
+    build_plan, read_units, shell_line, valid_job_id, Cmd, Deselected, Plan, Planner, StemSeq,
+    Unit, PHASES,
 };
 use crate::resolve::Role;
+use crate::resume::{self, Prior};
 use crate::tools::{help_lists, map_rotate, map_staged, RotateOutcome, StagedOutcome, Tool};
-use crate::util::ListLine;
+use crate::util::{self, ListLine};
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::fs::File;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -138,6 +141,9 @@ pub struct LineResult {
     /// Time the line's command ran; absent for a line that did not start.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_seconds: Option<f64>,
+    /// Module files a successful line left, when `[resume]` recorded them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<String>,
 }
 
 /// What one unit's admission came to.
@@ -183,6 +189,16 @@ pub struct RunResult {
     pub exit_code: i32,
     /// Whether the lines were built in the units of a shard plan.
     pub sharded: bool,
+    /// SHA-256 of the `stack order --hashes-out` file, when `[resume]` recorded it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_digest: Option<String>,
+    /// SHA-256 of the eb-stack `package.plan.json`, for a package-plan input.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package_plan_digest: Option<String>,
+    /// Checkpoint and inclusion proof of the input record, when `[attest]` is
+    /// enabled. Absent, the result JSON is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_attestation: Option<crate::attest::InputAttestation>,
     /// How many lines came to each status.
     pub counts: BTreeMap<String, usize>,
     /// The phases the site file leaves out.
@@ -237,6 +253,16 @@ fn exec(cmd: &Cmd, base_env: &BTreeMap<String, String>, log: &Path) -> Result<Ex
         .stdin(Stdio::null())
         .stdout(Stdio::from(out))
         .stderr(Stdio::from(err));
+    // SAFETY: setpgid is async-signal-safe and runs before the child execs.
+    unsafe {
+        c.pre_exec(|| {
+            if libc::setpgid(0, 0) == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        });
+    }
     let started = Instant::now();
     let mut child = match c.spawn() {
         Ok(ch) => ch,
@@ -251,20 +277,20 @@ fn exec(cmd: &Cmd, base_env: &BTreeMap<String, String>, log: &Path) -> Result<Ex
     };
     let mut forwarded = 0;
     let status = loop {
+        if let Some(sig) = interrupted() {
+            if forwarded != sig {
+                // SAFETY: the negative pid names the process group created for this child.
+                unsafe {
+                    libc::kill(-(child.id() as libc::pid_t), sig);
+                }
+                forwarded = sig;
+            }
+        }
         match child.try_wait() {
             Ok(Some(s)) => break s,
             Ok(None) => {}
             Err(e) => {
                 return Err(Fail::new(exit::FAILED, format!("wait failed: {e}")));
-            }
-        }
-        if let Some(sig) = interrupted() {
-            if forwarded != sig {
-                // SAFETY: the pid belongs to a child this process started.
-                unsafe {
-                    libc::kill(child.id() as libc::pid_t, sig);
-                }
-                forwarded = sig;
             }
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -497,11 +523,28 @@ pub struct Options<'a> {
     pub shard_units: Option<&'a [Unit]>,
     /// Node passed to `eb-stack stack oom`; absent leaves the run unchanged.
     pub oom_node: Option<&'a str>,
+    /// Prior result to resume from, when `--resume-result` named one.
+    pub resume: Option<&'a Prior>,
+    /// Why `--resume-result` is refused before any command, when it is.
+    pub resume_refused: Option<&'a str>,
+    /// File that receives the plan before any phase command starts.
+    pub plan_out: Option<&'a Path>,
 }
 
 #[derive(Serialize)]
 struct OomPlan<'a> {
     easyconfigs: Vec<&'a str>,
+}
+
+fn write_plan(path: &Path, plan: &Plan) -> Result<(), Fail> {
+    let value = serde_json::to_value(plan).expect("plan is serializable");
+    let text = serde_json::to_string_pretty(&value).expect("plan is serializable") + "\n";
+    util::write_atomic(path, text.as_bytes()).map_err(|e| {
+        Fail::new(
+            exit::FAILED,
+            format!("cannot write plan {}: {e}", path.display()),
+        )
+    })
 }
 
 fn parse_oom_count(stdout: &str) -> Result<usize, Fail> {
@@ -645,6 +688,9 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
             duration_seconds: 0.0,
             exit_code: 0,
             sharded: false,
+            input_digest: None,
+            package_plan_digest: p.package_plan.as_ref().map(|input| input.digest.clone()),
+            input_attestation: None,
             counts: BTreeMap::new(),
             not_configured: vec![],
             admission: vec![],
@@ -663,7 +709,19 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
         spent: BTreeMap::new(),
     };
 
-    let plan = match build_plan(p, lines, None) {
+    if let Some(msg) = opts.resume_refused {
+        log("ERROR", "shard", &target, msg);
+        st.phase(
+            "shard",
+            "refused",
+            Some(exit::REFUSED),
+            Some(msg.to_string()),
+        );
+        st.res.message = Some(msg.to_string());
+        return finish(st, Some(exit::REFUSED));
+    }
+
+    let mut plan = match build_plan(p, lines, None) {
         Ok(pl) => pl,
         Err(f) => {
             st.res.message = Some(f.msg.clone());
@@ -672,17 +730,62 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
     };
 
     if opts.dry_run {
+        if let Some(path) = opts.plan_out {
+            if let Err(f) = write_plan(path, &plan) {
+                st.res.message = Some(f.msg);
+                return finish(st, Some(f.code));
+            }
+        }
+        let mut output = String::new();
         for ph in &plan.phases {
             if ph.status != "planned" {
-                println!("# [{}] {}", ph.name, ph.status);
+                writeln!(output, "# [{}] {}", ph.name, ph.status).expect("writing to a string");
                 continue;
             }
             for c in &ph.commands {
-                println!("[{}] {}", ph.name, shell_line(c));
+                writeln!(output, "[{}] {}", ph.name, shell_line(c)).expect("writing to a string");
             }
+        }
+        if let Err(e) = util::write_stdout(output.as_bytes()) {
+            st.res.message = Some(format!("cannot write stdout: {e}"));
+            return finish(st, Some(exit::FAILED));
         }
         log("INFO", "run", &target, "dry run: nothing executed");
         return finish(st, None);
+    }
+
+    if let Some(conf) = site.attest_on() {
+        if p.package_plan.is_some() {
+            st.res.message = Some("attest needs --list".into());
+            return finish(st, Some(exit::USAGE));
+        }
+        let Some(site_path) = p.scope.site_file.as_deref() else {
+            st.res.message = Some("attest needs the site file path".into());
+            return finish(st, Some(exit::USAGE));
+        };
+        match crate::attest::append(&crate::attest::Request {
+            site,
+            attest: conf,
+            site_path: Path::new(site_path),
+            list_path: Path::new(&p.list_path),
+            lines,
+            target: &target,
+        }) {
+            Ok(att) => {
+                plan.input_attestation = Some(att.clone());
+                st.res.input_attestation = Some(att);
+            }
+            Err(f) => {
+                st.res.message = Some(f.msg);
+                return finish(st, Some(f.code));
+            }
+        }
+    }
+    if let Some(path) = opts.plan_out {
+        if let Err(f) = write_plan(path, &plan) {
+            st.res.message = Some(f.msg);
+            return finish(st, Some(f.code));
+        }
     }
 
     // Phases that are not configured are recorded, not failed.
@@ -798,6 +901,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                                 log: p.log_stdout(&stem),
                                 note: Some(msg.clone()),
                                 duration_seconds: None,
+                                outputs: Vec::new(),
                             });
                         }
                     }
@@ -870,6 +974,76 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
         );
     }
     st.res.deselected = deselected;
+
+    if site.resume_on().is_some() && !kept.is_empty() {
+        match p.order_cmd(&kept) {
+            Err(f) => {
+                log("ERROR", "shard", &target, &f.msg);
+                st.phase("shard", "failed", Some(f.code), Some(f.msg.clone()));
+                st.res.message = Some(f.msg);
+                return finish(st, Some(f.code));
+            }
+            Ok(cmd) => {
+                let hashes = resume::hashes_path(&p.scope.log_dir());
+                let ex = match st.exec("shard", &cmd, &env, &log_dir.join("order.log")) {
+                    Ok(e) => e,
+                    Err(f) => {
+                        st.res.message = Some(f.msg);
+                        return finish(st, Some(f.code));
+                    }
+                };
+                if let Some(c) = stop_if_signalled(&mut st, "shard") {
+                    return finish(st, Some(c));
+                }
+                if ex.code != 0 {
+                    let code = if ex.code == 2 {
+                        exit::USAGE
+                    } else {
+                        exit::FAILED
+                    };
+                    let msg = format!("stack order exited {} (see {})", ex.code, ex.log.display());
+                    log("ERROR", "shard", &target, &msg);
+                    st.phase("shard", "failed", Some(ex.code), Some(msg.clone()));
+                    st.res.message = Some(msg);
+                    return finish(st, Some(code));
+                }
+                match resume::digest_from_log(&ex.log, &hashes) {
+                    Ok(dig) => {
+                        if let Some(prior) = opts.resume {
+                            if prior.digest != dig {
+                                let msg = format!(
+                                    "input digest mismatch: prior result has {}, this plan has {dig}",
+                                    prior.digest
+                                );
+                                log("ERROR", "shard", &target, &msg);
+                                st.phase(
+                                    "shard",
+                                    "refused",
+                                    Some(exit::REFUSED),
+                                    Some(msg.clone()),
+                                );
+                                st.res.message = Some(msg);
+                                return finish(st, Some(exit::REFUSED));
+                            }
+                        }
+                        log("INFO", "shard", &target, "recorded the input identity");
+                        st.res.input_digest = Some(dig);
+                    }
+                    Err(f) => {
+                        let status = if f.code == exit::REFUSED {
+                            "refused"
+                        } else {
+                            "failed"
+                        };
+                        log("ERROR", "shard", &target, &f.msg);
+                        st.phase("shard", status, Some(f.code), Some(f.msg.clone()));
+                        st.res.message = Some(f.msg);
+                        return finish(st, Some(f.code));
+                    }
+                }
+            }
+        }
+    }
 
     // shard
     let mut units: Vec<Unit> = if let Some(saved) = opts.shard_units {
@@ -980,7 +1154,113 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                 }
             }
         }
+    } else if site.resume_on().is_some_and(|r| r.shards >= 2)
+        && opts.shard_units.is_none()
+        && !units.is_empty()
+    {
+        let count = site.resume_on().map(|r| r.shards).unwrap_or(1);
+        let unsharded = site
+            .shards
+            .as_ref()
+            .map(|s| s.planner_exit_unsharded)
+            .unwrap_or(3);
+        match p.boundary_shard_cmd() {
+            Err(f) => {
+                st.res.message = Some(f.msg);
+                return finish(st, Some(f.code));
+            }
+            Ok(cmd) => {
+                log(
+                    "INFO",
+                    "shard",
+                    &target,
+                    &format!("planning {count} shards"),
+                );
+                let ex = match st.exec("shard", &cmd, &env, &log_dir.join("shard.log")) {
+                    Ok(e) => e,
+                    Err(f) => {
+                        st.res.message = Some(f.msg);
+                        return finish(st, Some(f.code));
+                    }
+                };
+                if let Some(c) = stop_if_signalled(&mut st, "shard") {
+                    return finish(st, Some(c));
+                }
+                if ex.code == 0 {
+                    match read_units(Path::new(&p.shard_dir())) {
+                        Ok(u) if !u.is_empty() => {
+                            units = u;
+                            st.res.sharded = true;
+                            st.phase("shard", "ok", Some(0), None);
+                        }
+                        Ok(_) => {
+                            st.phase(
+                                "shard",
+                                "ok",
+                                Some(0),
+                                Some("plan holds no lines; building the list as one unit".into()),
+                            );
+                        }
+                        Err(f) => {
+                            log("ERROR", "shard", &target, &f.msg);
+                            st.phase("shard", "failed", Some(0), Some(f.msg.clone()));
+                            st.res.message = Some(f.msg);
+                            return finish(st, Some(exit::FAILED));
+                        }
+                    }
+                } else if ex.code == unsharded {
+                    log(
+                        "INFO",
+                        "shard",
+                        &target,
+                        &format!(
+                            "planner declined to shard (exit {}); building unsharded",
+                            ex.code
+                        ),
+                    );
+                    st.phase(
+                        "shard",
+                        "unsharded",
+                        Some(ex.code),
+                        Some(format!(
+                            "exit {code} means the plan was built unsharded; plan built unsharded",
+                            code = ex.code
+                        )),
+                    );
+                } else {
+                    let code = if ex.code == 2 {
+                        exit::USAGE
+                    } else {
+                        exit::FAILED
+                    };
+                    let msg = format!("stack shard exited {} (see {})", ex.code, ex.log.display());
+                    log("ERROR", "shard", &target, &msg);
+                    st.phase("shard", "failed", Some(ex.code), Some(msg.clone()));
+                    st.res.message = Some(msg);
+                    return finish(st, Some(code));
+                }
+            }
+        }
     }
+    if site.resume_on().is_some()
+        && st.res.input_digest.is_some()
+        && !st.res.phases.iter().any(|ph| ph.name == "shard")
+    {
+        st.phase(
+            "shard",
+            "ok",
+            Some(0),
+            Some("recorded the input identity".into()),
+        );
+    }
+
+    let skip: BTreeSet<String> = match opts.resume {
+        Some(prior) => resume::units_to_skip(
+            units.iter().map(|u| (u.name.as_str(), u.lines.as_slice())),
+            prior,
+        ),
+        None => BTreeSet::new(),
+    };
 
     // the route's receipt digest is read once a CPU-role unit needs it
     let mut routed = p.clone();
@@ -1016,7 +1296,71 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
     let mut fetch_failed: Vec<String> = Vec::new();
     if site.sources_on().is_some() {
         let mut any_failed = false;
+        let bundle_lines: Vec<ListLine> = units
+            .iter()
+            .flat_map(|unit| unit.lines.iter().cloned())
+            .collect();
+        let planner_cmds = match p.offline_planner_cmds(&bundle_lines) {
+            Ok(commands) => commands,
+            Err(f) => {
+                st.res.message = Some(f.msg);
+                return finish(st, Some(f.code));
+            }
+        };
+        if let Some(bundle) = &p.offline_bundle {
+            if let Err(f) = crate::offline::prepare(bundle) {
+                st.res.message = Some(f.msg);
+                return finish(st, Some(f.code));
+            }
+            if let Err(e) = std::fs::create_dir(bundle.join("planner")) {
+                let msg = format!(
+                    "cannot create offline planner directory {}: {e}",
+                    bundle.join("planner").display()
+                );
+                st.res.message = Some(msg);
+                return finish(st, Some(exit::FAILED));
+            }
+        }
+        for (i, cmd) in planner_cmds.iter().enumerate() {
+            let ex = match st.exec(
+                "sources",
+                cmd,
+                &env,
+                &log_dir.join(format!("offline-planner-{:02}.log", i + 1)),
+            ) {
+                Ok(ex) => ex,
+                Err(f) => {
+                    st.res.message = Some(f.msg);
+                    return finish(st, Some(f.code));
+                }
+            };
+            if let Some(c) = stop_if_signalled(&mut st, "sources") {
+                return finish(st, Some(c));
+            }
+            if ex.code != 0 {
+                let msg = format!("{} exited {} (see {})", cmd.name, ex.code, ex.log.display());
+                log("ERROR", "sources", &target, &msg);
+                st.phase("sources", "failed", Some(ex.code), Some(msg.clone()));
+                st.res.message = Some(msg);
+                return finish(st, Some(exit::FAILED));
+            }
+            if let Some(bundle) = &p.offline_bundle {
+                let copy = bundle.join("planner").join(format!(
+                    "call-{:02}-{}.log",
+                    i + 1,
+                    cmd.name.replace(':', "-")
+                ));
+                if let Err(e) = std::fs::copy(&ex.log, &copy) {
+                    let msg = format!("cannot copy planner log to {}: {e}", copy.display());
+                    st.res.message = Some(msg);
+                    return finish(st, Some(exit::FAILED));
+                }
+            }
+        }
         for (u, ss) in units.iter().zip(&unit_stems) {
+            if skip.contains(&u.name) && p.offline_bundle.is_none() {
+                continue;
+            }
             for (l, s) in u.lines.iter().zip(ss) {
                 make_route_dirs(p, u.role, "sources");
                 let cmd = match p.prefetch_cmd(l, s, u.role) {
@@ -1060,8 +1404,32 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                         log: ex.log.display().to_string(),
                         note: Some("source fetch failed; line not built".into()),
                         duration_seconds: Some(seconds(ex.elapsed)),
+                        outputs: Vec::new(),
                     });
                     st.failed = true;
+                }
+            }
+        }
+        if !any_failed {
+            if let Some(bundle) = &p.offline_bundle {
+                let assets = &site.sources_on().expect("sources active").assets;
+                match crate::offline::write(bundle, &p.scope, assets) {
+                    Ok(manifest) => log(
+                        "INFO",
+                        "sources",
+                        &target,
+                        &format!(
+                            "wrote offline bundle {} with {} file(s)",
+                            bundle.display(),
+                            manifest.files.len()
+                        ),
+                    ),
+                    Err(f) => {
+                        log("ERROR", "sources", &target, &f.msg);
+                        st.phase("sources", "failed", Some(exit::FAILED), Some(f.msg.clone()));
+                        st.res.message = Some(f.msg);
+                        return finish(st, Some(exit::FAILED));
+                    }
                 }
             }
         }
@@ -1071,6 +1439,10 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
             None,
             None,
         );
+        if any_failed && p.offline_bundle.is_some() {
+            st.res.message = Some("source prefetch failed; no offline bundle was published".into());
+            return finish(st, Some(exit::FAILED));
+        }
     }
 
     // admission and builds, unit by unit
@@ -1092,6 +1464,36 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                     log: p.log_stdout(s),
                     note: Some("an earlier unit was refused".into()),
                     duration_seconds: None,
+                    outputs: Vec::new(),
+                });
+            }
+            continue;
+        }
+        if skip.contains(&u.name) {
+            for (l, s) in u.lines.iter().zip(ss) {
+                let outputs = opts
+                    .resume
+                    .map(|pr| resume::outputs_for(pr, &l.easyconfig))
+                    .unwrap_or_default();
+                log(
+                    "INFO",
+                    "build",
+                    &target,
+                    &format!("{s}: resumed; outputs still present"),
+                );
+                st.res.lines.push(LineResult {
+                    easyconfig: l.easyconfig.clone(),
+                    unit: u.name.clone(),
+                    phase: "build".into(),
+                    status: "skipped".into(),
+                    exit_code: None,
+                    translated_from: None,
+                    log: p.log_stdout(s),
+                    note: Some(
+                        "resumed: the unit succeeded and its outputs are still present".into(),
+                    ),
+                    duration_seconds: None,
+                    outputs,
                 });
             }
             continue;
@@ -1209,6 +1611,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                             log: p.log_stdout(s),
                             note: Some("admission refused".into()),
                             duration_seconds: None,
+                            outputs: Vec::new(),
                         });
                     }
                     continue;
@@ -1256,6 +1659,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                 log: ex.log.display().to_string(),
                 note: staged.then(|| "ran through eb-staged-rebuild".into()),
                 duration_seconds: Some(seconds(ex.elapsed)),
+                outputs: Vec::new(),
             };
             if ex.code != 0 {
                 let outcome = if staged {
@@ -1321,6 +1725,9 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                     }
                 }
             } else {
+                if site.resume_on().is_some() {
+                    lr.outputs = p.declared_outputs(l);
+                }
                 log("INFO", "build", &target, &format!("{s}: ok"));
             }
             st.res.lines.push(lr);
@@ -1407,6 +1814,66 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
         Err(f) => {
             st.res.message = Some(f.msg);
             return finish(st, Some(f.code));
+        }
+    }
+
+    if p.package_plan.is_some() && p.verify_package_plan {
+        match p.verification_cmds() {
+            Ok(commands) if !st.failed && !st.refused && !st.pending => {
+                let mut failed = None;
+                for (index, cmd) in commands.iter().enumerate() {
+                    log(
+                        "INFO",
+                        "verification",
+                        &target,
+                        &format!("{}: start", cmd.name),
+                    );
+                    match st.exec(
+                        "verification",
+                        cmd,
+                        &env,
+                        &log_dir.join(format!("verification-{}.log", index + 1)),
+                    ) {
+                        Ok(ex) if ex.code == 0 => {
+                            log(
+                                "INFO",
+                                "verification",
+                                &target,
+                                &format!("{}: ok", cmd.name),
+                            );
+                        }
+                        Ok(ex) => {
+                            let message = format!("{} exited {}", cmd.name, ex.code);
+                            log("ERROR", "verification", &target, &message);
+                            failed.get_or_insert((ex.code, message));
+                        }
+                        Err(f) => {
+                            st.res.message = Some(f.msg);
+                            return finish(st, Some(f.code));
+                        }
+                    }
+                    if let Some(c) = stop_if_signalled(&mut st, "verification") {
+                        return finish(st, Some(c));
+                    }
+                }
+                match failed {
+                    Some((code, message)) => {
+                        st.phase("verification", "failed", Some(code), Some(message));
+                        st.failed = true;
+                    }
+                    None => st.phase("verification", "ok", Some(0), None),
+                }
+            }
+            Ok(_) => st.phase(
+                "verification",
+                "skipped",
+                None,
+                Some("the build did not finish cleanly".into()),
+            ),
+            Err(f) => {
+                st.res.message = Some(f.msg);
+                return finish(st, Some(f.code));
+            }
         }
     }
 
@@ -1549,6 +2016,7 @@ fn note_skipped(
                 log: p.log_stdout(s),
                 note: Some("interrupted before this line started".into()),
                 duration_seconds: None,
+                outputs: Vec::new(),
             });
         }
     }

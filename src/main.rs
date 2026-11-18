@@ -1,22 +1,29 @@
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::{generate_to, shells};
 use eb_pipeline::exit::{self, Fail};
+use eb_pipeline::package_plan;
 use eb_pipeline::plan::{build_plan, read_units, Planner};
 use eb_pipeline::resolve::{explain, Scope};
 use eb_pipeline::run::{install_handlers, log, run, Options, RunResult};
 use eb_pipeline::{
-    easystack, eessi, metrics, notify, sbom, schema, site, summary, templates, tools, util, watch,
+    audit, easystack, eessi, from_commit, metrics, notify, sbom, schema, site, stack_checks,
+    summary, templates, tools, util, watch,
 };
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 const ROOT_HELP: &str = "\
 Examples:
   eb-pipeline init --template small-cluster --out site.toml
   eb-pipeline check --site site.toml
+  eb-pipeline check --list stack.yml --check-from-commit --easyconfigs-repo DIR
+  eb-pipeline check --site site.toml --gap-out DIR --generation NAME --shadow
   eb-pipeline targets --site site.toml --format json
   eb-pipeline plan --site site.toml --list list.txt --target cpu --build-type production --out plan.json
   eb-pipeline run --site site.toml --list list.txt --target cpu --build-type production --result result.json
   eb-pipeline watch --site site.toml --target cpu --build-type production --dry-run
+  eb-pipeline audit --site site.toml --target cpu --findings findings.csv --out-dir audit
   eb-pipeline metrics --result result.json
 
 Companion commands from this package:
@@ -27,19 +34,22 @@ Companion commands from this package:
   eb-cvmfs
 
 Configuration: every flag above falls back to an EB_PIPELINE_<FLAG> variable
-(EB_PIPELINE_SITE, EB_PIPELINE_LIST, EB_PIPELINE_TARGET, EB_PIPELINE_BUILD_TYPE,
-EB_PIPELINE_RUN_ID, EB_PIPELINE_LOG_STAMP, EB_PIPELINE_LISTS_DIR,
-EB_PIPELINE_RESULT); a flag on the command line wins.
+(EB_PIPELINE_SITE, EB_PIPELINE_LIST, EB_PIPELINE_PACKAGE_PLAN,
+EB_PIPELINE_TARGET, EB_PIPELINE_BUILD_TYPE, EB_PIPELINE_RUN_ID,
+EB_PIPELINE_LOG_STAMP, EB_PIPELINE_LISTS_DIR, EB_PIPELINE_RESULT); a flag on
+the command line wins.
 EB_PIPELINE__SECTION__KEY=value sets one site file value, for example
 EB_PIPELINE__FILESYSTEMS__SCRATCH=/scratch/eb; the result is validated like the
 file.
 
 Output streams: stdout carries plan, explain, schema, init, status, targets and
-metrics, and run --dry-run or watch --dry-run output only. Events go to stderr
-as `LEVEL [phase] target: message`. The result JSON goes to --result, and each
-run's summary to summary.json and summary.html in its run directory,
-<log_root>/<log-stamp>/. `metrics` exits 0 when it can read the file, including
-when the run itself failed.
+metrics, and verify, and run --dry-run or watch --dry-run output only. Events go to stderr
+as `LEVEL [phase] target: message`. The result JSON goes to --result, a run's
+requested plan JSON to --plan-out, and each run's summary to summary.json and
+summary.html in its run directory,
+<log_root>/<log-stamp>/. Run --metrics-file atomically replaces a Prometheus
+text file when the run ends. `metrics` exits 0 when it can read the file,
+including when the run itself failed.
 
 ";
 
@@ -48,7 +58,8 @@ Exit codes of watch:
   0    nothing to rebuild: no install is recorded, EESSI is as recorded, or no
        recorded install needs a rebuild; --dry-run printed the plan; --adopt
        recorded the installs; or the rebuild succeeded
-  1    the rebuild failed, or an eb-stack call, the record or the state file did
+  1    the rebuild failed, an eb-stack call failed, or the record, state
+       file, plan or rebuild list could not be read or written
   2    invalid arguments or site file, or eb-stack below its min_version
   75   another watch of the target holds its lock, the module environment did
        not load, or the EESSI repository or a module tree cannot be read
@@ -78,14 +89,42 @@ enum Cmd {
     /// Parse and validate a site file.
     Check {
         /// Site file.
-        #[arg(long, env = "EB_PIPELINE_SITE")]
-        site: PathBuf,
+        #[arg(
+            long,
+            env = "EB_PIPELINE_SITE",
+            required_unless_present = "check_from_commit"
+        )]
+        site: Option<PathBuf>,
         /// Directory that must hold every build list a target names.
         #[arg(long, env = "EB_PIPELINE_LISTS_DIR")]
         lists_dir: Option<PathBuf>,
         /// Run each needed tool's `--version` and enforce min_version.
         #[arg(long)]
         probe_tools: bool,
+        /// Build list or easystack to pass to requested eb-stack checks.
+        #[arg(long, env = "EB_PIPELINE_LIST")]
+        list: Option<PathBuf>,
+        /// Limit target-dependent settings to this target.
+        #[arg(long, env = "EB_PIPELINE_TARGET", requires = "stack_checks")]
+        target: Option<String>,
+        /// Comma-separated eb-stack checks to run before any allocation.
+        #[arg(long, value_delimiter = ',', requires = "list", value_enum)]
+        stack_checks: Vec<stack_checks::StackCheck>,
+        /// Ask `eb-stack stack from-commit` whether pins are already in the
+        /// EasyBuild release tag.
+        #[arg(long, requires = "list")]
+        check_from_commit: bool,
+        /// easybuild-easyconfigs checkout for `from-commit` pins.
+        #[arg(long, requires = "check_from_commit")]
+        easyconfigs_repo: Option<PathBuf>,
+        /// easybuild-easyblocks checkout for `include-easyblocks-from-commit`.
+        #[arg(long, requires = "check_from_commit")]
+        easyblocks_repo: Option<PathBuf>,
+        /// EasyBuild release `X.Y.Z`. Overrides `eb-X.Y.Z` in the list file name.
+        #[arg(long, requires = "check_from_commit")]
+        easybuild_version: Option<String>,
+        #[command(flatten)]
+        gap: eb_pipeline::gap::GapArgs,
     },
     /// Print the site file reference: every key, type, default and meaning.
     Schema,
@@ -100,6 +139,9 @@ enum Cmd {
         /// Write here; absent or `-` prints on stdout. An existing file is refused.
         #[arg(long)]
         out: Option<PathBuf>,
+        /// After writing a file, print next steps on stderr (also when `EB_PIPELINE_INIT_HINTS=1`).
+        #[arg(long, env = "EB_PIPELINE_INIT_HINTS", value_parser = clap::builder::BoolishValueParser::new())]
+        hints: bool,
     },
     /// Print the resolved configuration of one or all targets.
     Explain {
@@ -136,6 +178,9 @@ enum Cmd {
         /// How many runs.
         #[arg(long, default_value_t = 10, value_parser = clap::value_parser!(u16).range(1..))]
         last: u16,
+        /// Keep only nonzero runs and runs without a readable summary.
+        #[arg(long)]
+        problems_only: bool,
         /// `text`: a line per run and per target; `json`: one JSON document.
         #[arg(long, value_enum, default_value_t = TextOrJson::Text)]
         format: TextOrJson,
@@ -168,11 +213,19 @@ enum Cmd {
         /// Write the result JSON here.
         #[arg(long)]
         result: Option<PathBuf>,
+        /// Write the plan computed by this run before starting any phase command.
+        #[arg(long)]
+        plan_out: Option<PathBuf>,
+        /// Atomically write Prometheus metrics here when the run ends.
+        ///
+        /// Must differ from `--result` and `--resume-result`.
+        #[arg(long)]
+        metrics_file: Option<PathBuf>,
         /// Directory written by `stack shard`; reuse its units without replanning.
         #[arg(long)]
         shard_plan: Option<PathBuf>,
         /// Print the commands that would run and start nothing.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "resume_result")]
         dry_run: bool,
         /// Ask `eb-stack stack oom` whether any planned package exceeds this node.
         #[arg(long, requires = "node")]
@@ -180,6 +233,36 @@ enum Cmd {
         /// Node size for `--oom-preflight`, as `CORES:MEMORY_MIB[:TARGET]`.
         #[arg(long, requires = "oom_preflight")]
         node: Option<String>,
+        /// Continue from this result when its input digest still matches.
+        /// Needs `[resume] enabled`.
+        #[arg(long, value_name = "FILE")]
+        resume_result: Option<PathBuf>,
+    },
+    /// Recompute the input record and check its inclusion proof.
+    Verify {
+        /// Site file.
+        #[arg(long, env = "EB_PIPELINE_SITE")]
+        site: PathBuf,
+        /// Build list file, or an EasyBuild easystack.
+        #[arg(
+            long,
+            env = "EB_PIPELINE_LIST",
+            required_unless_present = "recorded_list",
+            conflicts_with = "recorded_list"
+        )]
+        list: Option<PathBuf>,
+        /// Read the list path recorded in the plan or result.
+        #[arg(long)]
+        recorded_list: bool,
+        /// Target name.
+        #[arg(long, env = "EB_PIPELINE_TARGET")]
+        target: String,
+        /// Build type name.
+        #[arg(long, env = "EB_PIPELINE_BUILD_TYPE")]
+        build_type: String,
+        /// Plan or result JSON that holds `input_attestation`.
+        #[arg(long)]
+        from: PathBuf,
     },
     /// Rebuild the recorded installs an EESSI change reaches, in dependency order.
     #[command(after_long_help = WATCH_EXIT)]
@@ -214,6 +297,44 @@ enum Cmd {
         #[arg(long)]
         result: Option<PathBuf>,
     },
+    /// Run eb-stack vulnerability checks and collect rebuild lists.
+    Audit {
+        /// Site file.
+        #[arg(long, env = "EB_PIPELINE_SITE")]
+        site: PathBuf,
+        /// Target name.
+        #[arg(long, env = "EB_PIPELINE_TARGET")]
+        target: String,
+        /// Vulnerability scanner CSV for `eb-stack rebuild-set --findings`.
+        #[arg(long, required_unless_present = "cve", conflicts_with = "cve")]
+        findings: Option<PathBuf>,
+        /// CVE id to audit. Repeat for multiple advisories.
+        #[arg(long, required_unless_present = "findings")]
+        cve: Vec<String>,
+        /// Exit non-zero when eb-stack reports backport items.
+        #[arg(long)]
+        strict: bool,
+        /// Output directory for audit artifacts and copied rebuild lists.
+        #[arg(long)]
+        out_dir: PathBuf,
+    },
+    /// Generate shell completion scripts from the clap command definition.
+    #[command(hide = true)]
+    Completions {
+        /// Target shell.
+        #[arg(long, value_enum)]
+        shell: CompletionShell,
+        /// Output directory.
+        #[arg(long)]
+        out_dir: PathBuf,
+    },
+    /// Generate a section 1 man page from the clap command definition.
+    #[command(hide = true)]
+    Man {
+        /// Output directory.
+        #[arg(long)]
+        out_dir: PathBuf,
+    },
 }
 
 #[derive(Args)]
@@ -223,8 +344,24 @@ struct Common {
     site: PathBuf,
     /// Build list file: one `Name-version-toolchain.eb [eb options]` per line,
     /// or an EasyBuild easystack, a `.yml` or `.yaml` file.
-    #[arg(long, env = "EB_PIPELINE_LIST")]
-    list: PathBuf,
+    #[arg(
+        long,
+        env = "EB_PIPELINE_LIST",
+        required_unless_present = "package_plan",
+        conflicts_with = "package_plan"
+    )]
+    list: Option<PathBuf>,
+    /// Directory written by `eb-stack package plan`; builds its emitted recipes.
+    #[arg(
+        long,
+        env = "EB_PIPELINE_PACKAGE_PLAN",
+        required_unless_present = "list",
+        conflicts_with = "list"
+    )]
+    package_plan: Option<PathBuf>,
+    /// Run ecosystem-native checks after a package-plan build.
+    #[arg(long, requires = "package_plan")]
+    verify_package_plan: bool,
     /// Target name.
     #[arg(long, env = "EB_PIPELINE_TARGET")]
     target: String,
@@ -241,6 +378,12 @@ struct Common {
     /// current UTC time, taken once per run; `<log-stamp>` for `plan`.
     #[arg(long, env = "EB_PIPELINE_LOG_STAMP")]
     log_stamp: Option<String>,
+    /// Build a checksum-indexed bundle of prefetched and configured assets.
+    #[arg(long)]
+    offline_bundle: Option<PathBuf>,
+    /// Run phases after source prefetch through sources.offline_wrapper.
+    #[arg(long, requires = "offline_bundle")]
+    require_offline: bool,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -262,19 +405,28 @@ enum StatusFormat {
     Json,
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum CompletionShell {
+    Bash,
+    Zsh,
+    Fish,
+}
+
 fn to_sorted<T: Serialize>(v: &T) -> serde_json::Value {
     serde_json::to_value(v).expect("serializable")
+}
+
+fn write_stdout_text(text: &str) -> Result<(), Fail> {
+    util::write_stdout(text.as_bytes())
+        .map_err(|e| Fail::new(exit::FAILED, format!("cannot write stdout: {e}")))
 }
 
 fn write_json(v: &serde_json::Value, path: Option<&Path>) -> Result<(), Fail> {
     let text = serde_json::to_string_pretty(v).expect("serializable") + "\n";
     match path {
-        Some(p) if p != Path::new("-") => std::fs::write(p, text)
+        Some(p) if p != Path::new("-") => util::write_atomic(p, text.as_bytes())
             .map_err(|e| Fail::new(exit::FAILED, format!("cannot write {}: {e}", p.display()))),
-        _ => {
-            print!("{text}");
-            Ok(())
-        }
+        _ => write_stdout_text(&text),
     }
 }
 
@@ -302,46 +454,85 @@ fn site_file(path: &Path) -> Option<String> {
         .and_then(|p| p.to_str().map(str::to_string))
 }
 
-fn cmd_check(site_path: &Path, lists_dir: Option<&Path>, probe: bool) -> Result<i32, Fail> {
-    let s = load_valid(site_path, lists_dir)?;
-    let m = &s.modules;
-    if let Some(first) = m
-        .init
-        .first()
-        .filter(|f| m.unuse_path && !f.starts_with('/'))
-    {
-        log(
-            "WARN",
-            "check",
-            &s.site.name,
-            &format!(
-                "modules.unuse_path clears MODULEPATH after shell_init, so `{first}` has no path to load from; load it by absolute path or drop unuse_path"
-            ),
-        );
-    }
-    if let Some(a) = s.admission_on() {
-        if a.required && (a.quota_cmd.is_none() || a.reservations.is_none()) {
+struct OptInChecks<'a> {
+    from_commit: Option<(&'a Path, from_commit::Options<'a>)>,
+    gap: &'a eb_pipeline::gap::GapArgs,
+}
+
+fn cmd_check(
+    site_path: Option<&Path>,
+    lists_dir: Option<&Path>,
+    probe: bool,
+    list: Option<&Path>,
+    target: Option<&str>,
+    stack_checks: &[stack_checks::StackCheck],
+    opt_in: OptInChecks<'_>,
+) -> Result<i32, Fail> {
+    let site = match site_path {
+        Some(path) => Some(load_valid(path, lists_dir)?),
+        None if opt_in.from_commit.is_none() || !stack_checks.is_empty() => {
+            return Err(Fail::usage(
+                "pass --site or --check-from-commit with --list",
+            ));
+        }
+        None => None,
+    };
+    let mut code = exit::OK;
+    if let Some(s) = &site {
+        let m = &s.modules;
+        if let Some(first) = m
+            .init
+            .first()
+            .filter(|f| m.unuse_path && !f.starts_with('/'))
+        {
             log(
                 "WARN",
                 "check",
                 &s.site.name,
-                "admission.required is set without quota_cmd and reservations; `run` will refuse with exit 78",
+                &format!(
+                    "modules.unuse_path clears MODULEPATH after shell_init, so `{first}` has no path to load from; load it by absolute path or drop unuse_path"
+                ),
             );
         }
-        if a.live_jobs_cmd.is_none() && a.quota_cmd.is_some() && a.reservations.is_some() {
-            log(
-                "WARN",
-                "check",
-                &s.site.name,
-                "admission.live_jobs_cmd is unset; stack admit then counts every other job's reservation, including those of jobs that ended without removing theirs",
-            );
+        if let Some(a) = s.admission_on() {
+            if a.required && (a.quota_cmd.is_none() || a.reservations.is_none()) {
+                log(
+                    "WARN",
+                    "check",
+                    &s.site.name,
+                    "admission.required is set without quota_cmd and reservations; `run` will refuse with exit 78",
+                );
+            }
+            if a.live_jobs_cmd.is_none() && a.quota_cmd.is_some() && a.reservations.is_some() {
+                log(
+                    "WARN",
+                    "check",
+                    &s.site.name,
+                    "admission.live_jobs_cmd is unset; stack admit then counts every other job's reservation, including those of jobs that ended without removing theirs",
+                );
+            }
+        }
+        if probe {
+            tools::check_versions(s, true)?;
+        }
+        if !stack_checks.is_empty() {
+            stack_checks::run(
+                s,
+                list.expect("clap requires --list with --stack-checks"),
+                target,
+                stack_checks,
+            )?;
+        }
+        eb_pipeline::gap::run(s, opt_in.gap)?;
+        log("INFO", "check", &s.site.name, "site file is valid");
+    }
+    if let Some((list, opts)) = opt_in.from_commit {
+        let fc = from_commit::run(site.as_ref(), list, &opts)?;
+        if fc != exit::OK {
+            code = fc;
         }
     }
-    if probe {
-        tools::check_versions(&s, true)?;
-    }
-    log("INFO", "check", &s.site.name, "site file is valid");
-    Ok(exit::OK)
+    Ok(code)
 }
 
 fn cmd_explain(
@@ -354,11 +545,11 @@ fn cmd_explain(
     let v = explain(&s, site_file(site_path).as_deref(), target, build_type)?;
     match format {
         Format::Json => write_json(&v, None)?,
-        Format::Toml => print!(
-            "{}",
-            toml::to_string_pretty(&v)
-                .map_err(|e| Fail::new(exit::FAILED, format!("cannot render TOML: {e}")))?
-        ),
+        Format::Toml => {
+            let rendered = toml::to_string_pretty(&v)
+                .map_err(|e| Fail::new(exit::FAILED, format!("cannot render TOML: {e}")))?;
+            write_stdout_text(&rendered)?;
+        }
     }
     Ok(exit::OK)
 }
@@ -368,13 +559,17 @@ fn cmd_targets(site_path: &Path, format: TextOrJson) -> Result<i32, Fail> {
     let names: Vec<&str> = s.targets.iter().map(|t| t.name.as_str()).collect();
     match format {
         TextOrJson::Text => {
+            let mut out = String::new();
             for n in &names {
-                println!("{n}");
+                out.push_str(n);
+                out.push('\n');
             }
+            write_stdout_text(&out)?;
         }
         // Compact, unlike write_json: GITHUB_OUTPUT and the like take one `name=value` line.
         TextOrJson::Json => {
-            println!("{}", serde_json::to_string(&names).expect("serializable"))
+            let line = format!("{}\n", serde_json::to_string(&names).expect("serializable"));
+            write_stdout_text(&line)?;
         }
     }
     Ok(exit::OK)
@@ -384,6 +579,7 @@ fn cmd_status(
     site_path: &Path,
     target: Option<&str>,
     last: u16,
+    problems_only: bool,
     format: TextOrJson,
 ) -> Result<i32, Fail> {
     let s = load_valid(site_path, None)?;
@@ -391,17 +587,27 @@ fn cmd_status(
         s.target(t)?;
     }
     let root = Path::new(&s.filesystems.log_root);
-    let runs = summary::runs(root, target, last.into()).map_err(|e| Fail::new(exit::FAILED, e))?;
+    let runs = if problems_only {
+        summary::problem_runs(root, target, last.into())
+    } else {
+        summary::runs(root, target, last.into())
+    }
+    .map_err(|e| Fail::new(exit::FAILED, e))?;
     if runs.is_empty() {
+        let what = if problems_only {
+            "no problematic runs under"
+        } else {
+            "no runs under"
+        };
         log(
             "INFO",
             "status",
             target.unwrap_or("-"),
-            &format!("no runs under {}", root.display()),
+            &format!("{what} {}", root.display()),
         );
     }
     match format {
-        TextOrJson::Text => print!("{}", summary::status_text(&runs)),
+        TextOrJson::Text => write_stdout_text(&summary::status_text(&runs))?,
         TextOrJson::Json => write_json(&summary::status_json(root, &runs), None)?,
     }
     Ok(exit::OK)
@@ -414,17 +620,45 @@ fn cmd_metrics(path: &Path, format: StatusFormat) -> Result<i32, Fail> {
         .map_err(|e| Fail::usage(format!("cannot parse {}: {e}", path.display())))?;
     let status = metrics::from_result(&value)?;
     match format {
-        StatusFormat::Prometheus => print!("{}", metrics::prometheus(&status)),
-        StatusFormat::Json => print!("{}", metrics::status_json(&status)),
+        StatusFormat::Prometheus => write_stdout_text(&metrics::prometheus(&status))?,
+        StatusFormat::Json => write_stdout_text(&metrics::status_json(&status))?,
     }
     Ok(exit::OK)
 }
 
-fn cmd_init(template: Option<&str>, list: bool, out: Option<&Path>) -> Result<i32, Fail> {
+fn cmd_audit(
+    site_path: &Path,
+    target_name: &str,
+    findings: Option<&Path>,
+    cves: &[String],
+    strict: bool,
+    out_dir: &Path,
+) -> Result<i32, Fail> {
+    let s = load_valid(site_path, None)?;
+    let target = s.target(target_name)?;
+    audit::run(audit::Args {
+        site: &s,
+        site_file: site_file(site_path),
+        target,
+        findings,
+        cves,
+        strict,
+        out_dir,
+    })
+}
+
+fn cmd_init(
+    template: Option<&str>,
+    list: bool,
+    out: Option<&Path>,
+    hints: bool,
+) -> Result<i32, Fail> {
     if list {
+        let mut out = String::new();
         for t in templates::TEMPLATES {
-            println!("{:<16} {}", t.name, t.summary);
+            out.push_str(&format!("{:<16} {}\n", t.name, t.summary));
         }
+        write_stdout_text(&out)?;
         return Ok(exit::OK);
     }
     let name = template.unwrap_or_default();
@@ -438,16 +672,29 @@ fn cmd_init(template: Option<&str>, list: bool, out: Option<&Path>) -> Result<i3
                 .join(", ")
         ))
     })?;
-    match out {
-        None => print!("{}", t.text),
-        Some(p) if p == Path::new("-") => print!("{}", t.text),
+    let wrote_path = match out {
+        None => {
+            write_stdout_text(t.text)?;
+            None
+        }
+        Some(p) if p == Path::new("-") => {
+            write_stdout_text(t.text)?;
+            None
+        }
         Some(p) => {
             use std::io::Write;
             let mut f = std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .open(p)
-                .map_err(|e| Fail::usage(format!("cannot create {}: {e}", p.display())))?;
+                .map_err(|e| {
+                    let message = format!("cannot create {}: {e}", p.display());
+                    if e.kind() == std::io::ErrorKind::AlreadyExists {
+                        Fail::usage(message)
+                    } else {
+                        Fail::new(exit::FAILED, message)
+                    }
+                })?;
             f.write_all(t.text.as_bytes()).map_err(|e| {
                 Fail::new(exit::FAILED, format!("cannot write {}: {e}", p.display()))
             })?;
@@ -457,8 +704,90 @@ fn cmd_init(template: Option<&str>, list: bool, out: Option<&Path>) -> Result<i3
                 "-",
                 &format!("wrote template {} to {}", t.name, p.display()),
             );
+            Some(p)
+        }
+    };
+    if hints {
+        if let Some(p) = wrote_path {
+            eprintln!(
+                "INFO [init] hint: check the site file with `eb-pipeline check --site {}`",
+                p.display()
+            );
+            if t.name == "eessi-site" || t.name == "small-cluster" {
+                eprintln!(
+                    "INFO [init] hint: list target names with `eb-pipeline targets --site {}` (needs a build from the main branch; release 0.3.0 has no targets command)",
+                    p.display()
+                );
+                eprintln!(
+                    "INFO [init] hint: see docs/orgmode/howto/install.org to install from source"
+                );
+            }
+        } else {
+            eprintln!(
+                "INFO [init] hint: write the template with --out site.toml to print next steps"
+            );
         }
     }
+    Ok(exit::OK)
+}
+
+fn cmd_completions(shell: CompletionShell, out_dir: &Path) -> Result<i32, Fail> {
+    let mut cmd = Cli::command();
+    std::fs::create_dir_all(out_dir).map_err(|e| {
+        Fail::new(
+            exit::FAILED,
+            format!("cannot create {}: {e}", out_dir.display()),
+        )
+    })?;
+    match shell {
+        CompletionShell::Bash => generate_to(shells::Bash, &mut cmd, "eb-pipeline", out_dir)
+            .map_err(|e| {
+                Fail::new(
+                    exit::FAILED,
+                    format!("cannot write completions in {}: {e}", out_dir.display()),
+                )
+            })?,
+        CompletionShell::Zsh => generate_to(shells::Zsh, &mut cmd, "eb-pipeline", out_dir)
+            .map_err(|e| {
+                Fail::new(
+                    exit::FAILED,
+                    format!("cannot write completions in {}: {e}", out_dir.display()),
+                )
+            })?,
+        CompletionShell::Fish => generate_to(shells::Fish, &mut cmd, "eb-pipeline", out_dir)
+            .map_err(|e| {
+                Fail::new(
+                    exit::FAILED,
+                    format!("cannot write completions in {}: {e}", out_dir.display()),
+                )
+            })?,
+    };
+    Ok(exit::OK)
+}
+
+fn cmd_man(out_dir: &Path) -> Result<i32, Fail> {
+    std::fs::create_dir_all(out_dir).map_err(|e| {
+        Fail::new(
+            exit::FAILED,
+            format!("cannot create {}: {e}", out_dir.display()),
+        )
+    })?;
+    let cmd = Cli::command();
+    let man = clap_mangen::Man::new(cmd.clone());
+    let mut out = Vec::new();
+    man.render(&mut out).map_err(|e| {
+        Fail::new(
+            exit::FAILED,
+            format!("cannot render man page for {}: {e}", cmd.get_name()),
+        )
+    })?;
+    let path = out_dir.join("eb-pipeline.1");
+    std::fs::write(&path, out).map_err(|e| {
+        Fail::new(
+            exit::FAILED,
+            format!("cannot write {}: {e}", path.display()),
+        )
+    })?;
     Ok(exit::OK)
 }
 
@@ -469,21 +798,64 @@ fn timestamp_id() -> String {
 struct Mode<'a> {
     out: Option<&'a Path>,
     result: Option<&'a Path>,
+    plan_out: Option<&'a Path>,
+    metrics_file: Option<&'a Path>,
     shard_plan: Option<&'a Path>,
     dry: bool,
     is_run: bool,
     oom_node: Option<&'a str>,
+    resume_result: Option<&'a Path>,
 }
 
 fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
     let Mode {
         out,
         result,
+        plan_out,
+        metrics_file,
         shard_plan,
         dry,
         is_run,
         oom_node,
+        resume_result,
     } = m;
+    let source_inputs = [
+        ("--site", Some(c.site.as_path())),
+        ("--list", c.list.as_deref()),
+    ];
+    let refuse_alias = |output_option, output, inputs: &[(&str, Option<&Path>)]| {
+        util::refuse_output_alias(output_option, output, inputs).map_err(Fail::usage)
+    };
+    refuse_alias("--out", out, &source_inputs)?;
+    refuse_alias("--result", result, &source_inputs)?;
+    if let Some(plan_out) = plan_out {
+        if plan_out == Path::new("-") {
+            return Err(Fail::usage("--plan-out must name a file"));
+        }
+        refuse_alias(
+            "--plan-out",
+            Some(plan_out),
+            &[
+                ("--site", Some(c.site.as_path())),
+                ("--list", c.list.as_deref()),
+                ("--result", result),
+                ("--metrics-file", metrics_file),
+                ("--resume-result", resume_result),
+            ],
+        )?;
+    }
+    if let Some(metrics_file) = metrics_file {
+        refuse_alias(
+            "--metrics-file",
+            Some(metrics_file),
+            &[
+                ("--site", Some(c.site.as_path())),
+                ("--list", c.list.as_deref()),
+                ("--result", result),
+                ("--resume-result", resume_result),
+            ],
+        )?;
+    }
     if let Some(stamp) = c.log_stamp.as_deref().filter(|s| !util::is_log_stamp(s)) {
         return Err(Fail::usage(format!(
             "--log-stamp `{stamp}` is not a UTC time as YYYYMMDD_HHMMSS"
@@ -511,19 +883,62 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         ));
     }
     let target = s.target(&c.target)?;
-    let list_text = std::fs::read_to_string(&c.list)
-        .map_err(|e| Fail::usage(format!("cannot read list {}: {e}", c.list.display())))?;
-    let lines = if easystack::is_easystack(&c.list) {
-        easystack::parse(&list_text)
-            .map_err(|e| Fail::usage(format!("easystack {}: {e}", c.list.display())))?
+    let sources = s.sources_on();
+    if c.offline_bundle.is_some() {
+        if is_run && c.offline_bundle.as_ref().is_some_and(|path| path.exists()) {
+            return Err(Fail::usage(
+                "--offline-bundle must name an absent path for run",
+            ));
+        }
+        let Some(conf) = sources else {
+            return Err(Fail::usage(
+                "--offline-bundle needs an enabled [sources] table with prefetch = true",
+            ));
+        };
+        let easyconfigs = if conf.easyconfigs.is_empty() {
+            s.shards
+                .as_ref()
+                .map(|shards| shards.easyconfigs.as_slice())
+                .unwrap_or_default()
+        } else {
+            conf.easyconfigs.as_slice()
+        };
+        if easyconfigs.is_empty() {
+            return Err(Fail::usage(
+                "--offline-bundle needs sources.easyconfigs or shards.easyconfigs",
+            ));
+        }
+        if s.filesystems.source_paths.is_empty() {
+            return Err(Fail::usage(
+                "--offline-bundle needs filesystems.source_paths",
+            ));
+        }
+        if c.require_offline && conf.offline_wrapper.is_empty() {
+            return Err(Fail::usage(
+                "--require-offline needs sources.offline_wrapper",
+            ));
+        }
+    }
+    let package_input = c
+        .package_plan
+        .as_deref()
+        .map(package_plan::load)
+        .transpose()?;
+    let (input_name, lines) = if let Some(input) = &package_input {
+        (input.bundle.display().to_string(), input.lines.clone())
     } else {
-        util::parse_list(&list_text)?
+        let list = c.list.as_deref().expect("clap requires one input");
+        let lines = if easystack::is_easystack(list) {
+            easystack::read(list).map_err(Fail::usage)?
+        } else {
+            let list_text = std::fs::read_to_string(list)
+                .map_err(|e| Fail::usage(format!("cannot read list {}: {e}", list.display())))?;
+            util::parse_list(&list_text)?
+        };
+        (list.display().to_string(), lines)
     };
     if lines.is_empty() {
-        return Err(Fail::usage(format!(
-            "list {} holds no lines",
-            c.list.display()
-        )));
+        return Err(Fail::usage(format!("input {input_name} holds no lines")));
     }
     let log_stamp = c.log_stamp.clone().unwrap_or_else(|| {
         if is_run {
@@ -547,18 +962,45 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         run_id,
         log_stamp,
     };
-    let planner = Planner::new(scope, c.list.display().to_string());
+    let mut planner = Planner::new(scope, input_name);
+    planner.offline_bundle = c.offline_bundle.clone();
+    if c.require_offline {
+        planner.offline_wrapper = sources
+            .expect("offline bundle checked sources")
+            .offline_wrapper
+            .clone();
+    }
+    planner.package_plan = package_input;
+    planner.verify_package_plan = c.verify_package_plan;
     if !is_run {
         let units = match shard_plan {
             Some(d) => Some(read_units(d)?),
             None => None,
         };
-        let plan = build_plan(&planner, &lines, units.as_deref())?;
+        let mut plan = build_plan(&planner, &lines, units.as_deref())?;
+        if let Some(conf) = s.attest_on() {
+            let Some(list_path) = c.list.as_deref() else {
+                return Err(Fail::usage("attest needs --list"));
+            };
+            plan.input_attestation = Some(eb_pipeline::attest::append(
+                &eb_pipeline::attest::Request {
+                    site: &s,
+                    attest: conf,
+                    site_path: &c.site,
+                    list_path,
+                    lines: &lines,
+                    target: &c.target,
+                },
+            )?);
+        }
         write_json(&to_sorted(&plan), out)?;
         return Ok(exit::OK);
     }
     if !dry {
         tools::check_versions(&s, false)?;
+        if c.offline_bundle.is_some() {
+            tools::check_one(&s, tools::Tool::EbStack, true).map_err(Fail::usage)?;
+        }
     }
     install_handlers();
     let before = (!dry && s.watch_on().is_some()).then(|| watch::listings(&planner, &lines));
@@ -566,6 +1008,21 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         Some(d) => Some(read_units(d)?),
         None => None,
     };
+    let (prior, resume_refused) = match resume_result {
+        Some(path) if !dry => {
+            if s.resume_on().is_none() {
+                return Err(Fail::usage("--resume-result needs [resume] enabled = true"));
+            }
+            match eb_pipeline::resume::load(path) {
+                Ok(p) => (Some(p), None),
+                Err(f) if f.code == exit::REFUSED => (None, Some(f.msg)),
+                Err(f) => return Err(f),
+            }
+        }
+        _ => (None, None),
+    };
+    let started_at = chrono::Utc::now();
+    let began = Instant::now();
     let mut res = run(
         &planner,
         &lines,
@@ -573,6 +1030,9 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
             dry_run: dry,
             shard_units: saved_units.as_deref(),
             oom_node,
+            resume: prior.as_ref(),
+            resume_refused: resume_refused.as_deref(),
+            plan_out,
         },
     );
     if let Some(m) = &res.message {
@@ -596,12 +1056,32 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         }
     }
     if !dry {
+        res.started_at = started_at.to_rfc3339();
+        res.ended_at = chrono::Utc::now().to_rfc3339();
+        res.duration_seconds = eb_pipeline::run::seconds(began.elapsed());
         if let Some(before) = &before {
             watch::record_run(&planner, &lines, &res, before);
         }
-        write_summary(&s, &res, "run", result, None);
+        write_summary(&s, &res, "run", result, None, &planner.offline_wrapper);
+        let value = to_sorted(&res);
+        let mut output_errors = Vec::new();
         if let Some(p) = result {
-            write_json(&to_sorted(&res), Some(p))?;
+            if let Err(f) = write_json(&value, Some(p)) {
+                output_errors.push(f.msg);
+            }
+        }
+        if let Some(p) = metrics_file {
+            match metrics::from_result(&value) {
+                Ok(status) => {
+                    if let Err(e) = metrics::write_atomic(p, &metrics::prometheus(&status)) {
+                        output_errors.push(format!("cannot write metrics {}: {e}", p.display()));
+                    }
+                }
+                Err(f) => output_errors.push(f.msg),
+            }
+        }
+        if !output_errors.is_empty() {
+            return Err(Fail::new(exit::FAILED, output_errors.join("; ")));
         }
     }
     Ok(res.exit_code)
@@ -615,6 +1095,7 @@ fn write_summary(
     command: &str,
     result: Option<&Path>,
     watch: Option<serde_json::Value>,
+    offline_wrapper: &[String],
 ) {
     let dir = summary::run_dir(res);
     let entry = summary::entry(res, command, result, watch);
@@ -631,7 +1112,13 @@ fn write_summary(
                     dir.display()
                 ),
             );
-            notify::send(s, &res.target, res.exit_code, &dir.join(summary::JSON));
+            notify::send(
+                s,
+                &res.target,
+                res.exit_code,
+                &dir.join(summary::JSON),
+                offline_wrapper,
+            );
         }
         Err(e) => log(
             "WARN",
@@ -660,6 +1147,14 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             "--log-stamp `{stamp}` is not a UTC time as YYYYMMDD_HHMMSS"
         )));
     }
+    util::refuse_output_alias(
+        "--plan-out",
+        w.plan_out,
+        &[("--site", Some(w.site)), ("--result", w.result)],
+    )
+    .map_err(Fail::usage)?;
+    util::refuse_output_alias("--result", w.result, &[("--site", Some(w.site))])
+        .map_err(Fail::usage)?;
     let s = load_valid(w.site, None)?;
     let target = s.target(w.target)?;
     let Some(conf) = s.watch_on() else {
@@ -753,9 +1248,12 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             ));
         }
         if w.dry_run {
+            let mut out = String::new();
             for i in &installs {
-                println!("{}", i.module);
+                out.push_str(&i.module);
+                out.push('\n');
             }
+            write_stdout_text(&out)?;
             drop_work();
             say(&format!(
                 "dry run: would adopt {} against {eessi_now}",
@@ -791,12 +1289,14 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     if let Some((_, first)) = other.first() {
         if w.dry_run {
             let width = other.iter().map(|(m, _)| m.len()).max().unwrap_or(0);
+            let mut out = String::new();
             for (m, i) in &other {
-                println!(
-                    "{m:<width$}  built against EESSI {} {}",
+                out.push_str(&format!(
+                    "{m:<width$}  built against EESSI {} {}\n",
                     i.eessi_version, i.software_subdir
-                );
+                ));
             }
+            let _ = write_stdout_text(&out);
         }
         drop_work();
         return Err(Fail::new(
@@ -812,27 +1312,71 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             ),
         ));
     }
-    let print = |doc: &watch::PlanDoc| {
+    let print = |doc: &watch::PlanDoc| -> Result<(), Fail> {
         if w.dry_run {
-            print!("{}", doc.text());
+            write_stdout_text(&doc.text())?;
         } else {
             doc.text().lines().for_each(say);
         }
+        Ok(())
     };
-    if watch::unchanged_at(&state, &probe, revision) {
+    let abi_conf = conf.abi_drift.as_ref().filter(|a| a.enabled);
+    let (abi_now, abi_fields) = if let Some(a) = abi_conf {
+        let now = watch::abi_baseline(&planner, &work, a)?;
+        let changed = watch::abi_changes(a, &state, &now);
+        (Some(now), changed)
+    } else {
+        (None, Vec::new())
+    };
+    let abi_needs_update = abi_now
+        .as_ref()
+        .is_some_and(|a| state.abi_baseline.as_ref() != Some(a));
+    let write_plan = |doc: &watch::PlanDoc| match w.plan_out {
+        Some(path) => write_json(&to_sorted(doc), Some(path)),
+        None => Ok(()),
+    };
+    if watch::unchanged_at(&state, &probe, revision) && abi_fields.is_empty() && !abi_needs_update {
         drop_work();
         let doc = watch::PlanDoc::unchanged(name, &probe, revision, &state);
-        if let Some(p) = w.plan_out {
-            write_json(&to_sorted(&doc), Some(p))?;
-        }
-        print(&doc);
+        write_plan(&doc)?;
+        print(&doc)?;
         return Ok(exit::OK);
     }
     let mut verdicts = watch::assess(&state, &probe.modules_dirs, &local_dir, conf.rebuild_review);
+    let mut staged: Option<watch::Universe> = None;
+    if !abi_fields.is_empty() {
+        watch::need_eb_stack(&s)?;
+        say(&format!(
+            "host ABI changed in {} field(s): {}",
+            abi_fields.len(),
+            abi_fields
+                .iter()
+                .map(|f| f.field.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        let u = watch::stage(
+            &work,
+            &eessi::scan(&probe.modules_dirs),
+            &eessi::scan(std::slice::from_ref(&local_dir)),
+        )?;
+        watch::apply_abi_changes(
+            &planner,
+            &work,
+            &u,
+            &mut verdicts,
+            &abi_fields,
+            conf.rebuild_review,
+            &probe.software_subdir,
+        )?;
+        staged = Some(u);
+    }
     let mut doc;
     if verdicts.iter().any(|v| v.action == "rebuild") {
         if let Err(f) = watch::need_eb_stack(&s) {
-            print(&watch::PlanDoc::new(name, &probe, revision, verdicts));
+            let doc = watch::PlanDoc::new(name, &probe, revision, verdicts);
+            write_plan(&doc)?;
+            print(&doc)?;
             return Err(Fail::new(
                 f.code,
                 format!(
@@ -841,11 +1385,11 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                 ),
             ));
         }
-        let u = watch::stage(
+        let u = staged.take().unwrap_or(watch::stage(
             &work,
             &eessi::scan(&probe.modules_dirs),
             &eessi::scan(std::slice::from_ref(&local_dir)),
-        )?;
+        )?);
         watch::cascade(
             &planner,
             &work,
@@ -863,7 +1407,9 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             Vec::new()
         };
         if vanished && robot.is_empty() {
-            print(&watch::PlanDoc::new(name, &probe, revision, verdicts));
+            let doc = watch::PlanDoc::new(name, &probe, revision, verdicts);
+            write_plan(&doc)?;
+            print(&doc)?;
             return Err(Fail::new(
                 exit::REFUSED,
                 "a dependency vanished from EESSI, and eb-stack has no easyconfig tree to plan its local build from: set [watch] easyconfigs, or load EasyBuild in [modules] init",
@@ -875,9 +1421,7 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     } else {
         doc = watch::PlanDoc::new(name, &probe, revision, verdicts);
     }
-    if let Some(p) = w.plan_out {
-        write_json(&to_sorted(&doc), Some(p))?;
-    }
+    write_plan(&doc)?;
     if !conf.rebuild_review {
         for v in doc.installs.iter().filter(|v| v.action == "keep") {
             if let Some(c) = v.changes.iter().find(|c| c.class == "review") {
@@ -893,7 +1437,7 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             }
         }
     }
-    print(&doc);
+    print(&doc)?;
     if w.dry_run {
         if doc.rebuild.is_empty() {
             drop_work();
@@ -906,7 +1450,14 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
         return Ok(exit::OK);
     }
     if doc.rebuild.is_empty() {
-        if let Err(f) = watch::settle(&planner, &probe, revision, &doc.installs, None) {
+        if let Err(f) = watch::settle(
+            &planner,
+            &probe,
+            revision,
+            &doc.installs,
+            None,
+            abi_now.as_ref(),
+        ) {
             log(
                 "WARN",
                 "watch",
@@ -937,6 +1488,9 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             dry_run: false,
             shard_units: None,
             oom_node: None,
+            resume: None,
+            resume_refused: None,
+            plan_out: None,
         },
     );
     if let Some(m) = &res.message {
@@ -944,7 +1498,14 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     }
     if res.interrupted_by.is_none() {
         let rebuild = Some((lines.as_slice(), &res, &before));
-        match watch::settle(&planner, &probe, revision, &doc.installs, rebuild) {
+        match watch::settle(
+            &planner,
+            &probe,
+            revision,
+            &doc.installs,
+            rebuild,
+            abi_now.as_ref(),
+        ) {
             Ok(names) if !names.is_empty() => say(&format!(
                 "recorded {} against {eessi_now}: {}",
                 names.len(),
@@ -963,11 +1524,97 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
         }
         drop_work();
     }
-    write_summary(&s, &res, "watch", w.result, Some(to_sorted(&doc)));
+    write_summary(&s, &res, "watch", w.result, Some(to_sorted(&doc)), &[]);
     if let Some(p) = w.result {
         write_json(&to_sorted(&res), Some(p))?;
     }
     Ok(res.exit_code)
+}
+
+fn cmd_verify(
+    site_path: &Path,
+    list_path: Option<&Path>,
+    recorded_list: bool,
+    target: &str,
+    from: &Path,
+) -> Result<i32, Fail> {
+    let (s, errs) = {
+        let s = site::load(site_path)?;
+        let e = site::validate(&s, None);
+        (s, e)
+    };
+    if !errs.is_empty() {
+        for e in &errs {
+            log("ERROR", "check", &s.site.name, e);
+        }
+        return Err(Fail::usage(format!(
+            "{} problem(s) in the site file",
+            errs.len()
+        )));
+    }
+    let Some(conf) = s.attest_on() else {
+        return Err(Fail::usage("verify needs [attest] enabled = true"));
+    };
+    let text = std::fs::read_to_string(from)
+        .map_err(|e| Fail::usage(format!("cannot read {}: {e}", from.display())))?;
+    let doc: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| Fail::usage(format!("{} is not JSON: {e}", from.display())))?;
+    let stored = match doc.get("input_attestation") {
+        Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
+            Fail::usage(format!(
+                "{} input_attestation is not a record and a proof: {e}",
+                from.display()
+            ))
+        })?,
+        None => {
+            return Err(Fail::new(
+                exit::REFUSED,
+                format!("{} has no input_attestation", from.display()),
+            ))
+        }
+    };
+    let list = if recorded_list {
+        doc.get("list")
+            .and_then(serde_json::Value::as_str)
+            .map(Path::new)
+            .ok_or_else(|| {
+                Fail::usage(format!(
+                    "{} has no string `list` for --recorded-list",
+                    from.display()
+                ))
+            })?
+    } else {
+        list_path.expect("clap requires --list or --recorded-list")
+    };
+    let lines = if easystack::is_easystack(list) {
+        easystack::read(list).map_err(Fail::usage)?
+    } else {
+        let list_text = std::fs::read_to_string(list)
+            .map_err(|e| Fail::usage(format!("cannot read list {}: {e}", list.display())))?;
+        util::parse_list(&list_text)?
+    };
+    if lines.is_empty() {
+        return Err(Fail::usage(format!(
+            "list {} holds no lines",
+            list.display()
+        )));
+    }
+    if s.target(target).is_err() {
+        return Err(Fail::usage(format!("no target {target}")));
+    }
+    eb_pipeline::attest::verify(
+        &eb_pipeline::attest::Request {
+            site: &s,
+            attest: conf,
+            site_path,
+            list_path: list,
+            lines: &lines,
+            target,
+        },
+        &stored,
+    )?;
+    write_stdout_text(&format!("verified input record {}\n", stored.record_sha256))?;
+    Ok(exit::OK)
 }
 
 fn main() {
@@ -977,16 +1624,45 @@ fn main() {
             site,
             lists_dir,
             probe_tools,
-        } => cmd_check(site, lists_dir.as_deref(), *probe_tools),
-        Cmd::Schema => {
-            print!("{}", schema::reference());
-            Ok(exit::OK)
+            list,
+            target,
+            stack_checks,
+            check_from_commit,
+            easyconfigs_repo,
+            easyblocks_repo,
+            easybuild_version,
+            gap,
+        } => {
+            let fc = check_from_commit.then(|| {
+                (
+                    list.as_deref().expect("--list with --check-from-commit"),
+                    from_commit::Options {
+                        easyconfigs_repo: easyconfigs_repo.as_deref(),
+                        easyblocks_repo: easyblocks_repo.as_deref(),
+                        easybuild_version: easybuild_version.as_deref(),
+                    },
+                )
+            });
+            cmd_check(
+                site.as_deref(),
+                lists_dir.as_deref(),
+                *probe_tools,
+                list.as_deref(),
+                target.as_deref(),
+                stack_checks,
+                OptInChecks {
+                    from_commit: fc,
+                    gap,
+                },
+            )
         }
+        Cmd::Schema => write_stdout_text(&schema::reference()).map(|()| exit::OK),
         Cmd::Init {
             template,
             list,
             out,
-        } => cmd_init(template.as_deref(), *list, out.as_deref()),
+            hints,
+        } => cmd_init(template.as_deref(), *list, out.as_deref(), *hints),
         Cmd::Explain {
             site,
             target,
@@ -998,8 +1674,9 @@ fn main() {
             site,
             target,
             last,
+            problems_only,
             format,
-        } => cmd_status(site, target.as_deref(), *last, *format),
+        } => cmd_status(site, target.as_deref(), *last, *problems_only, *format),
         Cmd::Metrics { result, format } => cmd_metrics(result, *format),
         Cmd::Plan {
             common,
@@ -1010,30 +1687,47 @@ fn main() {
             Mode {
                 out: out.as_deref(),
                 result: None,
+                plan_out: None,
+                metrics_file: None,
                 shard_plan: shard_plan.as_deref(),
                 dry: false,
                 is_run: false,
                 oom_node: None,
+                resume_result: None,
             },
         ),
         Cmd::Run {
             common,
             result,
+            plan_out,
+            metrics_file,
             shard_plan,
             dry_run,
             oom_preflight: _,
             node,
+            resume_result,
         } => cmd_plan_or_run(
             common,
             Mode {
                 out: None,
                 result: result.as_deref(),
+                plan_out: plan_out.as_deref(),
+                metrics_file: metrics_file.as_deref(),
                 shard_plan: shard_plan.as_deref(),
                 dry: *dry_run,
                 is_run: true,
                 oom_node: node.as_deref(),
+                resume_result: resume_result.as_deref(),
             },
         ),
+        Cmd::Verify {
+            site,
+            list,
+            recorded_list,
+            target,
+            build_type: _,
+            from,
+        } => cmd_verify(site, list.as_deref(), *recorded_list, target, from),
         Cmd::Watch {
             site,
             target,
@@ -1055,6 +1749,16 @@ fn main() {
             plan_out: plan_out.as_deref(),
             result: result.as_deref(),
         }),
+        Cmd::Audit {
+            site,
+            target,
+            findings,
+            cve,
+            strict,
+            out_dir,
+        } => cmd_audit(site, target, findings.as_deref(), cve, *strict, out_dir),
+        Cmd::Completions { shell, out_dir } => cmd_completions(*shell, out_dir),
+        Cmd::Man { out_dir } => cmd_man(out_dir),
     };
     let code = match r {
         Ok(c) => c,

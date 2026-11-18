@@ -1,1 +1,0 @@
-The schema says that `[targets.select] option` includes the leading dashes, and `check` suggests the dashed form when they are missing. The schema called it an option name, which reads as `for`, a value `check` rejects.

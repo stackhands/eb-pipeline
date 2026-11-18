@@ -1,0 +1,94 @@
+{
+  "build_type": "production",
+  "kind": "plan",
+  "lines": 1,
+  "list": "@ROOT@/list.txt",
+  "log_dir": "@ROOT@/logs/20260101_000000/cpu",
+  "phases": [
+    {
+      "commands": [],
+      "env": {},
+      "name": "preflight",
+      "status": "planned"
+    },
+    {
+      "commands": [],
+      "env": {},
+      "name": "licences",
+      "reason": "not configured",
+      "status": "not configured"
+    },
+    {
+      "commands": [],
+      "env": {},
+      "name": "shard",
+      "reason": "not configured",
+      "status": "not configured"
+    },
+    {
+      "commands": [],
+      "env": {},
+      "name": "sources",
+      "reason": "not configured",
+      "status": "not configured"
+    },
+    {
+      "commands": [],
+      "env": {},
+      "name": "admission",
+      "reason": "not configured",
+      "status": "not configured"
+    },
+    {
+      "commands": [
+        {
+          "argv": [
+            "eb",
+            "Foo-1.0.eb"
+          ],
+          "name": "build:Foo-1.0"
+        }
+      ],
+      "env": {
+        "EASYBUILD_BUILDPATH": "@ROOT@/build",
+        "EASYBUILD_INSTALLPATH": "@ROOT@/install",
+        "EASYBUILD_TMPDIR": "@ROOT@/tmp",
+        "EB_PIPELINE_BUILD_TYPE": "production",
+        "EB_PIPELINE_LOG_DIR": "@ROOT@/logs/20260101_000000/cpu",
+        "EB_PIPELINE_LOG_STAMP": "20260101_000000",
+        "EB_PIPELINE_RUN_ID": "R",
+        "EB_PIPELINE_SITE": "@ROOT@/site.toml",
+        "EB_PIPELINE_SITE_NAME": "t",
+        "EB_PIPELINE_TARGET": "cpu"
+      },
+      "name": "build",
+      "role": "build",
+      "status": "planned"
+    },
+    {
+      "commands": [],
+      "env": {},
+      "name": "checks",
+      "reason": "not configured",
+      "status": "not configured"
+    },
+    {
+      "commands": [],
+      "env": {},
+      "name": "caches",
+      "reason": "not configured",
+      "status": "not configured"
+    },
+    {
+      "commands": [],
+      "env": {},
+      "name": "logs",
+      "reason": "not configured",
+      "status": "not configured"
+    }
+  ],
+  "run_id": "R",
+  "schema_version": 1,
+  "site": "t",
+  "target": "cpu"
+}

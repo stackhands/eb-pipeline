@@ -1,7 +1,7 @@
 //! After a clean build, `eb-stack stack sbom --lock` writes CycloneDX beside the summary.
 
 mod common;
-use common::{code, run, setup, stderr, STAMP};
+use common::{code, run, run_extra, setup, stderr, STAMP};
 
 const LIST: &str = "Foo-1.0-foss-2025a.eb\n";
 
@@ -63,4 +63,84 @@ fn an_sbom_command_that_fails_fails_the_run_and_leaves_no_document() {
     assert!(stderr(&o).contains("stack sbom"), "{}", stderr(&o));
     assert!(!t.run_dir(STAMP).join("sbom.cdx.json").exists());
     assert_eq!(t.summary(STAMP)["exit_code"], 1);
+}
+
+#[test]
+fn a_signalled_sbom_command_preserves_the_signal_exit_code() {
+    let t = setup("[sbom]\nlock = \"@ROOT@/stack.lock.json\"\n");
+    std::fs::write(t.root().join("stack.lock.json"), "{}\n").unwrap();
+    let metrics = t.root().join("pipeline.prom");
+    let o = run_extra(
+        &t,
+        "cpu",
+        STAMP,
+        LIST,
+        &["--metrics-file", metrics.to_str().unwrap()],
+        &[("STUB_SBOM_SIGNAL", "TERM")],
+    );
+
+    assert_eq!(code(&o), 143, "{}", stderr(&o));
+    assert!(stderr(&o).contains("exited 143"), "{}", stderr(&o));
+    let result: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(t.root().join("result-cpu.json")).unwrap())
+            .unwrap();
+    assert_eq!(result["exit_code"], 143);
+    assert_eq!(t.summary(STAMP)["exit_code"], 143);
+    let text = std::fs::read_to_string(metrics).unwrap();
+    assert_eq!(sample(&text, "eb_pipeline_exit_code"), 143.0, "{text}");
+}
+
+#[test]
+fn final_times_and_metrics_include_an_sbom_failure() {
+    let t = setup("[sbom]\nlock = \"@ROOT@/stack.lock.json\"\n");
+    std::fs::write(t.root().join("stack.lock.json"), "{}\n").unwrap();
+    let metrics = t.root().join("pipeline.prom");
+    let metrics_arg = metrics.to_str().unwrap();
+    let o = run_extra(
+        &t,
+        "cpu",
+        STAMP,
+        LIST,
+        &["--metrics-file", metrics_arg],
+        &[("STUB_SBOM_DELAY", "0.2"), ("STUB_SBOM_FAIL", "1")],
+    );
+    assert_eq!(code(&o), 1, "{}", stderr(&o));
+
+    let result: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(t.root().join("result-cpu.json")).unwrap())
+            .unwrap();
+    assert_eq!(result["exit_code"], 1);
+    let duration = result["duration_seconds"].as_f64().unwrap();
+    assert!(duration >= 0.2, "{result}");
+    let started =
+        chrono::DateTime::parse_from_rfc3339(result["started_at"].as_str().unwrap()).unwrap();
+    let ended = chrono::DateTime::parse_from_rfc3339(result["ended_at"].as_str().unwrap()).unwrap();
+    let wall_seconds = (ended - started).num_milliseconds() as f64 / 1000.0;
+    assert!(wall_seconds >= 0.2, "{result}");
+    assert!((wall_seconds - duration).abs() < 0.1, "{result}");
+
+    let text = std::fs::read_to_string(metrics).unwrap();
+    assert_eq!(sample(&text, "eb_pipeline_exit_code"), 1.0, "{text}");
+    assert_eq!(sample(&text, "eb_pipeline_last_run_result"), 0.0, "{text}");
+    assert_eq!(
+        sample(&text, "eb_pipeline_last_run_duration_seconds"),
+        duration,
+        "{text}"
+    );
+    let ended_seconds =
+        ended.timestamp() as f64 + f64::from(ended.timestamp_subsec_nanos()) / 1_000_000_000.0;
+    assert_eq!(
+        sample(&text, "eb_pipeline_last_run_timestamp_seconds"),
+        ended_seconds,
+        "{text}"
+    );
+}
+
+fn sample(text: &str, family: &str) -> f64 {
+    text.lines()
+        .find(|line| line.starts_with(&format!("{family}{{")))
+        .and_then(|line| line.split_whitespace().last())
+        .unwrap()
+        .parse()
+        .unwrap()
 }

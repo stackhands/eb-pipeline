@@ -1,7 +1,10 @@
 //! `run` against stub tool binaries written into a temporary directory.
 
+mod common;
+
 use serde_json::Value;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -90,6 +93,14 @@ case " $* " in *" --fetch "*) kind=fetch;; *) kind=build;; esac
 env | grep '^EB_PIPELINE_\|^EASYBUILD_\|^ROUTE_' | sort > "$D/env.$kind.$stem"
 if [ -n "${STUB_EB_PIPELINE:-}" ]; then
   (cd / && "$STUB_EB_PIPELINE" targets) > "$D/targets.$stem" 2>&1 || exit 1
+fi
+if [ -n "${STUB_EB_DESCENDANT:-}" ]; then
+  "$D/descendant" &
+  pid=$!
+  echo "$pid" > "$D/descendant.pid"
+  echo started > "$D/started"
+  wait "$pid"
+  exit 0
 fi
 if [ -n "${STUB_EB_DELAY:-}" ]; then sleep "$STUB_EB_DELAY"; fi
 if [ -n "${STUB_EB_SLEEP:-}" ]; then
@@ -266,6 +277,7 @@ fn use_eb_stack_from_path(env: &Env) {
 
 struct Out {
     code: i32,
+    stdout: Vec<u8>,
     stderr: String,
     result: Option<Value>,
 }
@@ -315,8 +327,23 @@ fn driver_named(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if vars.iter().any(|(name, _)| *name == "DRIVER_CLOSED_STDOUT") {
+        c.stdout(common::closed_stdout());
+    }
+    if let Some((_, value)) = vars.iter().find(|(name, _)| *name == "DRIVER_UMASK") {
+        let mode = u32::from_str_radix(value, 8).unwrap();
+        // SAFETY: `umask` is async-signal-safe and the closure allocates nothing.
+        unsafe {
+            c.pre_exec(move || {
+                libc::umask(mode);
+                Ok(())
+            });
+        }
+    }
     for (k, v) in vars {
-        c.env(k, v);
+        if *k != "DRIVER_UMASK" && *k != "DRIVER_CLOSED_STDOUT" {
+            c.env(k, v);
+        }
     }
     let _g = SPAWN.lock().unwrap();
     c.spawn().unwrap()
@@ -329,6 +356,7 @@ fn finish(env: &Env, child: std::process::Child) -> Out {
         .map(|t| serde_json::from_str(&t).unwrap());
     Out {
         code: o.status.code().unwrap_or(-1),
+        stdout: o.stdout,
         stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
         result,
     }
@@ -378,6 +406,221 @@ fn success_exits_zero_and_records_lines() {
 }
 
 #[test]
+fn successful_run_default_output_bytes_remain_unchanged() {
+    let env = setup("");
+    let o = go(&env, "Foo-1.0-foss-2025a.eb\n", &[]);
+    assert_eq!(o.code, 0);
+    assert_eq!(o.stdout, b"");
+    let root = env.dir.path().display();
+    let stderr = format!(
+        concat!(
+            "INFO [licences] cpu: not configured\n",
+            "INFO [shard] cpu: not configured\n",
+            "INFO [sources] cpu: not configured\n",
+            "INFO [admission] cpu: not configured\n",
+            "INFO [checks] cpu: not configured\n",
+            "INFO [caches] cpu: not configured\n",
+            "INFO [logs] cpu: not configured\n",
+            "INFO [build] cpu: Foo-1.0-foss-2025a: start\n",
+            "INFO [build] cpu: Foo-1.0-foss-2025a: ok\n",
+            "INFO [summary] cpu: summary.json and summary.html written in ",
+            "{root}/logs/20260101_000000\n",
+        ),
+        root = root,
+    );
+    assert_eq!(o.stderr.as_bytes(), stderr.as_bytes());
+}
+
+#[test]
+fn metrics_file_is_opt_in_and_atomically_replaced_after_a_run() {
+    let env = setup("");
+    let metrics = env.dir.path().join("pipeline.prom");
+    assert!(!metrics.exists());
+
+    let o = go(&env, LIST, &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(!metrics.exists());
+
+    std::fs::write(&metrics, "stale\n").unwrap();
+    std::fs::set_permissions(&metrics, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let metrics_arg = metrics.to_str().unwrap();
+    let child = driver(
+        &env,
+        LIST,
+        &[("DRIVER_UMASK", "077")],
+        &["--metrics-file", metrics_arg],
+    );
+    let o = finish(&env, child);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let text = std::fs::read_to_string(&metrics).unwrap();
+    assert!(text.contains("eb_pipeline_last_run_result{"), "{text}");
+    assert!(text.contains("eb_pipeline_items_built{"), "{text}");
+    assert!(text.contains("} 2\n"), "{text}");
+    assert!(!text.contains("stale"), "{text}");
+    assert_eq!(
+        std::fs::metadata(&metrics).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+    assert!(
+        !std::fs::read_dir(env.dir.path()).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".tmp"))
+    );
+}
+
+#[test]
+fn a_result_write_failure_does_not_leave_requested_metrics_stale() {
+    let env = setup("");
+    std::fs::create_dir(env.dir.path().join("result.json")).unwrap();
+    let metrics = env.dir.path().join("pipeline.prom");
+    std::fs::write(&metrics, "stale\n").unwrap();
+    let metrics_arg = metrics.to_str().unwrap();
+
+    let child = driver(&env, LIST, &[], &["--metrics-file", metrics_arg]);
+    let o = finish(&env, child);
+
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    assert!(o.stderr.contains("cannot write"), "{}", o.stderr);
+    assert!(o.stderr.contains("result.json"), "{}", o.stderr);
+    let text = std::fs::read_to_string(metrics).unwrap();
+    assert!(text.contains("eb_pipeline_last_run_result{"), "{text}");
+    assert!(!text.contains("stale"), "{text}");
+}
+
+#[test]
+fn failures_of_both_requested_outputs_are_reported_in_option_order() {
+    let env = setup("");
+    std::fs::create_dir(env.dir.path().join("result.json")).unwrap();
+    let metrics = env.dir.path().join("pipeline.prom");
+    std::fs::create_dir(&metrics).unwrap();
+    let metrics_arg = metrics.to_str().unwrap();
+
+    let child = driver(&env, LIST, &[], &["--metrics-file", metrics_arg]);
+    let o = finish(&env, child);
+
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    let result_at = o.stderr.find("result.json").unwrap();
+    let metrics_at = o.stderr.find("cannot write metrics").unwrap();
+    assert!(result_at < metrics_at, "{}", o.stderr);
+}
+
+fn output_alias(original: &Path, kind: &str) -> PathBuf {
+    match kind {
+        "lexical" => original.to_path_buf(),
+        "canonical" => {
+            let alias = original.with_extension("symlink");
+            std::os::unix::fs::symlink(original, &alias).unwrap();
+            alias
+        }
+        "hard-link" => {
+            let alias = original.with_extension("hardlink");
+            std::fs::hard_link(original, &alias).unwrap();
+            alias
+        }
+        _ => unreachable!(),
+    }
+}
+
+fn assert_metrics_alias_refused(
+    env: &Env,
+    metrics: &Path,
+    resume: Option<&Path>,
+    json_option: &str,
+) {
+    let mut extra = vec!["--metrics-file", metrics.to_str().unwrap()];
+    if let Some(resume) = resume {
+        extra.extend(["--resume-result", resume.to_str().unwrap()]);
+    }
+    let child = driver(env, LIST, &[], &extra);
+    let o = child.wait_with_output().unwrap();
+
+    assert_eq!(o.status.code(), Some(2), "{:?}", o.status);
+    let stderr = String::from_utf8(o.stderr).unwrap();
+    assert!(
+        stderr.contains(&format!(
+            "{json_option} and --metrics-file must name different files"
+        )),
+        "{stderr}"
+    );
+    assert!(calls(env, "eb.calls").is_empty());
+}
+
+#[test]
+fn metrics_cannot_alias_result_lexically_canonically_or_by_hard_link() {
+    for kind in ["lexical", "canonical", "hard-link"] {
+        let env = setup("");
+        let result = env.dir.path().join("result.json");
+        std::fs::write(&result, "keep result\n").unwrap();
+        let metrics = output_alias(&result, kind);
+
+        assert_metrics_alias_refused(&env, &metrics, None, "--result");
+
+        assert_eq!(
+            std::fs::read_to_string(&result).unwrap(),
+            "keep result\n",
+            "{kind}"
+        );
+    }
+}
+
+#[test]
+fn metrics_cannot_alias_resume_result_lexically_canonically_or_by_hard_link() {
+    for kind in ["lexical", "canonical", "hard-link"] {
+        let env = setup("");
+        let resume = env.dir.path().join("prior.json");
+        std::fs::write(&resume, "keep prior\n").unwrap();
+        let metrics = output_alias(&resume, kind);
+
+        assert_metrics_alias_refused(&env, &metrics, Some(&resume), "--resume-result");
+
+        assert_eq!(
+            std::fs::read_to_string(&resume).unwrap(),
+            "keep prior\n",
+            "{kind}"
+        );
+        assert!(!env.dir.path().join("result.json").exists(), "{kind}");
+    }
+}
+
+#[test]
+fn metrics_cannot_share_one_file_with_both_json_roles() {
+    let env = setup("");
+    let shared = env.dir.path().join("result.json");
+    std::fs::write(&shared, "keep shared\n").unwrap();
+
+    assert_metrics_alias_refused(&env, &shared, Some(&shared), "--result");
+
+    assert_eq!(std::fs::read_to_string(&shared).unwrap(), "keep shared\n");
+}
+
+#[test]
+fn plan_out_cannot_alias_the_result_lexically_canonically_or_by_hard_link() {
+    for kind in ["lexical", "canonical", "hard-link"] {
+        let env = setup("");
+        let result = env.dir.path().join("result.json");
+        std::fs::write(&result, "keep result\n").unwrap();
+        let plan = output_alias(&result, kind);
+        let o = driver(&env, LIST, &[], &["--plan-out", plan.to_str().unwrap()])
+            .wait_with_output()
+            .unwrap();
+        assert_eq!(o.status.code(), Some(2), "{kind}");
+        let stderr = String::from_utf8(o.stderr).unwrap();
+        assert!(
+            stderr.contains("--result and --plan-out must name different files"),
+            "{stderr}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&result).unwrap(),
+            "keep result\n",
+            "{kind}"
+        );
+        assert!(calls(&env, "eb.calls").is_empty());
+    }
+}
+
+#[test]
 fn result_phases_follow_the_pipeline_order() {
     let env = setup("");
     let o = go(&env, LIST, &[]);
@@ -418,6 +661,144 @@ fn the_result_records_how_long_each_line_phase_and_run_took() {
         "a phase that ran no command has no duration: {r}"
     );
     assert!(r["duration_seconds"].as_f64().unwrap() >= build, "{r}");
+}
+
+#[test]
+fn a_leading_dash_easystack_entry_uses_its_robot_path() {
+    let env = setup("[sources]\n");
+    let root = env.dir.path().join("robot");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("-Robot-1.0.eb"), "# robot-only easyconfig\n").unwrap();
+    write_exec(
+        &env.stubs.join("eb"),
+        r#"#!/bin/sh
+D="${STUB_DIR:?}"
+operand=
+robot=
+separator=
+for arg
+do
+  if [ -n "$separator" ]; then
+    [ -z "$operand" ] || exit 91
+    operand=$arg
+  else
+    case "$arg" in
+      --) separator=1;;
+      --robot=*) robot=${arg#--robot=};;
+    esac
+  fi
+done
+[ "$operand" = "-Robot-1.0.eb" ] || exit 92
+[ -n "$robot" ] && [ -f "$robot/$operand" ] || exit 93
+[ ! -e "$operand" ] || exit 94
+printf '%s\n' "$*" >> "$D/eb.calls"
+"#,
+    );
+    let easystack = format!(
+        "easyconfigs:\n  - '-Robot-1.0.eb':\n      options:\n        robot: '{}'\n",
+        root.display()
+    );
+    let plan_path = env.dir.path().join("plan.json");
+    let child = driver_named(
+        &env,
+        "edge.yml",
+        &easystack,
+        &[],
+        &["--plan-out", plan_path.to_str().unwrap()],
+    );
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let called = calls(&env, "eb.calls");
+    assert_eq!(called.len(), 2, "{called:?}");
+    assert_eq!(
+        called[0],
+        format!(
+            "--fetch --robot --robot={} -- -Robot-1.0.eb",
+            root.display()
+        )
+    );
+    assert!(
+        called[1].starts_with(&format!("--robot={} --tmp-logdir=", root.display())),
+        "{called:?}"
+    );
+    assert!(called[1].ends_with(" -- -Robot-1.0.eb"), "{called:?}");
+
+    let result: Value =
+        serde_json::from_slice(&std::fs::read(env.dir.path().join("result.json")).unwrap())
+            .unwrap();
+    assert_eq!(result["lines"][0]["easyconfig"], "-Robot-1.0.eb");
+    let plan: Value = serde_json::from_slice(&std::fs::read(plan_path).unwrap()).unwrap();
+    assert_eq!(
+        plan["phases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|phase| phase["name"] == "build")
+            .unwrap()["commands"][0]["argv"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap(),
+        "-Robot-1.0.eb"
+    );
+}
+
+#[test]
+fn easystack_special_names_stay_single_plan_arguments() {
+    let env = setup("");
+    let root = env.dir.path();
+    let plan_path = root.join("plan with λ.json");
+    let child = driver_named(
+        &env,
+        "stack with λ.yml",
+        "easyconfigs:\n  - space name.eb\n  - λ-name.eb\n",
+        &[],
+        &["--dry-run", "--plan-out", plan_path.to_str().unwrap()],
+    );
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        output.stderr,
+        b"INFO [run] cpu: dry run: nothing executed\n"
+    );
+    let bytes = std::fs::read(&plan_path).unwrap();
+    assert!(bytes.windows("λ".len()).any(|part| part == "λ".as_bytes()));
+    let plan: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        plan["list"],
+        root.join("stack with λ.yml").display().to_string()
+    );
+    let commands = plan["phases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|phase| phase["name"] == "build")
+        .unwrap()["commands"]
+        .as_array()
+        .unwrap();
+    let operands: Vec<&str> = commands
+        .iter()
+        .filter(|command| {
+            command["name"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("build:"))
+        })
+        .map(|command| command["argv"][1].as_str().unwrap())
+        .collect();
+    assert_eq!(operands, ["space name.eb", "λ-name.eb"]);
+    let stdout = output.stdout;
+    assert!(stdout
+        .windows(b"eb 'space name.eb'".len())
+        .any(|part| part == b"eb 'space name.eb'"));
+    assert!(stdout
+        .windows("eb 'λ-name.eb'".len())
+        .any(|part| part == "eb 'λ-name.eb'".as_bytes()));
+    assert!(calls(&env, "eb.calls").is_empty());
 }
 
 #[test]
@@ -1150,14 +1531,180 @@ fn sigterm_is_forwarded_and_exit_is_143() {
 }
 
 #[test]
-fn dry_run_starts_nothing() {
+fn sigterm_reaches_descendants_of_the_running_command() {
+    let env = setup("");
+    write_exec(
+        &env.dir.path().join("descendant"),
+        r#"#!/bin/sh
+trap 'echo term > "$STUB_DIR/descendant.termed"; exit 0' TERM
+echo ready > "$STUB_DIR/descendant.ready"
+while :; do sleep 1; done
+"#,
+    );
+    let mut child = driver(&env, LIST, &[("STUB_EB_DESCENDANT", "1")], &[]);
+    let ready = env.dir.path().join("descendant.ready");
+    let t0 = Instant::now();
+    while !ready.exists() {
+        assert!(
+            t0.elapsed() < Duration::from_secs(20),
+            "descendant never started"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // SAFETY: the pid is the driver child this test started.
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+    }
+    let t0 = Instant::now();
+    let status = loop {
+        if let Some(s) = child.try_wait().unwrap() {
+            break s;
+        }
+        assert!(
+            t0.elapsed() < Duration::from_secs(20),
+            "driver did not exit"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(status.code(), Some(143));
+
+    let terminated = env.dir.path().join("descendant.termed");
+    let t0 = Instant::now();
+    let descendant_stopped = loop {
+        if terminated.exists() {
+            break true;
+        }
+        if t0.elapsed() >= Duration::from_secs(2) {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    if !descendant_stopped {
+        let pid: libc::pid_t = file_text(&env, "descendant.pid").trim().parse().unwrap();
+        // SAFETY: this cleans up the descendant pid recorded by the test stub.
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+    }
+    assert!(
+        descendant_stopped,
+        "SIGTERM did not reach the running command's descendant"
+    );
+}
+
+#[test]
+fn dry_run_default_output_remains_byte_for_byte_unchanged() {
     let env = setup("");
     let c = driver(&env, LIST, &[], &["--dry-run"]);
     let o = c.wait_with_output().unwrap();
     assert_eq!(o.status.code(), Some(0));
-    let out = String::from_utf8_lossy(&o.stdout);
-    assert!(out.contains("[build] eb Foo-1.0-foss-2025a.eb"), "{out}");
+    assert_eq!(o.stdout, historical_dry_run(&env).as_bytes());
+    assert_eq!(o.stderr, b"INFO [run] cpu: dry run: nothing executed\n");
     assert!(calls(&env, "eb.calls").is_empty());
+}
+
+#[test]
+fn dry_run_succeeds_when_its_output_consumer_closes() {
+    let env = setup("");
+    let c = driver(&env, LIST, &[("DRIVER_CLOSED_STDOUT", "1")], &["--dry-run"]);
+    let o = c.wait_with_output().unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(o.stderr, b"INFO [run] cpu: dry run: nothing executed\n");
+}
+
+fn historical_dry_run(env: &Env) -> String {
+    let root = env.dir.path().display();
+    let keep_logs = env.stubs.join("eb-keep-logs");
+    let keep_logs = keep_logs.display();
+    format!(
+        concat!(
+            "[preflight] {keep_logs} --version\n",
+            "# [licences] not configured\n",
+            "# [shard] not configured\n",
+            "# [sources] not configured\n",
+            "# [admission] not configured\n",
+            "[build] eb Foo-1.0-foss-2025a.eb --tmp-logdir={root}/logs/20260101_000000/cpu/easybuild-logs/Foo-1.0-foss-2025a\n",
+            "[build] EASYBUILD_OUTPUT_STYLE=basic {keep_logs} failed '<exit-status>' Foo-1.0-foss-2025a {root}/logs/20260101_000000/cpu {root}/logs/20260101_000000/cpu/easybuild-logs/Foo-1.0-foss-2025a\n",
+            "[build] eb Bar-2.0-foss-2025a.eb --tmp-logdir={root}/logs/20260101_000000/cpu/easybuild-logs/Bar-2.0-foss-2025a\n",
+            "[build] EASYBUILD_OUTPUT_STYLE=basic {keep_logs} failed '<exit-status>' Bar-2.0-foss-2025a {root}/logs/20260101_000000/cpu {root}/logs/20260101_000000/cpu/easybuild-logs/Bar-2.0-foss-2025a\n",
+            "# [checks] not configured\n",
+            "# [caches] not configured\n",
+            "# [logs] not configured\n",
+        ),
+        keep_logs = keep_logs,
+        root = root,
+    )
+}
+
+#[test]
+fn plan_out_records_the_run_plan_without_changing_dry_run_output() {
+    let env = setup("");
+    let plan = env.dir.path().join("run-plan.json");
+    std::fs::write(&plan, b"complete old plan\n").unwrap();
+    let old_inode = std::fs::metadata(&plan).unwrap().ino();
+    let o = driver(
+        &env,
+        LIST,
+        &[],
+        &["--dry-run", "--plan-out", plan.to_str().unwrap()],
+    )
+    .wait_with_output()
+    .unwrap();
+    assert_eq!(o.status.code(), Some(0));
+    assert_eq!(o.stdout, historical_dry_run(&env).as_bytes());
+    assert_eq!(o.stderr, b"INFO [run] cpu: dry run: nothing executed\n");
+    assert!(calls(&env, "eb.calls").is_empty());
+    assert_ne!(std::fs::metadata(&plan).unwrap().ino(), old_inode);
+    let bytes = std::fs::read(&plan).unwrap();
+    assert!(bytes.ends_with(b"\n"));
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["kind"], "plan");
+    assert_eq!(value["target"], "cpu");
+    assert_eq!(value["run_id"], "r1");
+    assert_eq!(value["lines"], 2);
+    assert_eq!(
+        value["log_dir"],
+        env.dir
+            .path()
+            .join("logs/20260101_000000/cpu")
+            .display()
+            .to_string()
+    );
+}
+
+#[test]
+fn plan_out_failure_starts_no_phase_command() {
+    let env = setup("");
+    let plan = env.dir.path().join("absent/run-plan.json");
+    let o = finish(
+        &env,
+        driver(&env, LIST, &[], &["--plan-out", plan.to_str().unwrap()]),
+    );
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    assert!(o.stderr.contains("cannot write plan"), "{}", o.stderr);
+    assert!(calls(&env, "eb.calls").is_empty());
+}
+
+#[test]
+fn a_real_run_writes_its_plan() {
+    let env = setup("");
+    let plan = env.dir.path().join("run-plan.json");
+    let o = finish(
+        &env,
+        driver(&env, LIST, &[], &["--plan-out", plan.to_str().unwrap()]),
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(calls(&env, "eb.calls").len(), 2);
+    let value: Value = serde_json::from_slice(&std::fs::read(plan).unwrap()).unwrap();
+    assert_eq!(value["kind"], "plan");
+    assert_eq!(value["target"], "cpu");
+    assert_eq!(value["run_id"], "r1");
 }
 
 #[test]

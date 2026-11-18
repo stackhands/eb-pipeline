@@ -4,43 +4,171 @@
 
 * The eb-cvmfs command
 
-=eb-cvmfs= brackets one synchronization command in a CVMFS transaction.
+=eb-cvmfs= brackets one synchronization command in a CernVM File System (CVMFS) transaction.
 It is a companion command, not a phase that =eb-pipeline run= enables by default.
 
 #+begin_example
-eb-cvmfs [--dry-run] REPOSITORY -- COMMAND [ARG...]
+eb-cvmfs [--dry-run] [--metrics-file PATH] [--archive-manifest FILE]
+         [--sync-timeout SEC] [--verify-cmd CMD] [--verify-timeout SEC]
+         [--publish-timeout SEC]
+         [--tag NAME] [--tag-description TEXT]
+         [--check] [--check-timeout SEC]
+         REPOSITORY -- COMMAND [ARG...]
 #+end_example
 
 | Argument or option | Meaning |
 |--------------------+---------|
-| =REPOSITORY= | The CVMFS repository name passed to =cvmfs_server transaction=, =publish= and =abort=. |
+| =REPOSITORY= | The CVMFS repository name passed to =cvmfs_server transaction=, =publish=, =check= and =abort=. |
+| =--sync-timeout SEC= | Give synchronization a positive, whole-second deadline. |
+| =--verify-cmd CMD= | After synchronization, run CMD inside the open transaction and publish only when it succeeds. |
+| =--verify-timeout SEC= | Give verification a positive, whole-second deadline; requires =--verify-cmd=. |
+| =--publish-timeout SEC= | Give =cvmfs_server publish= a positive, whole-second deadline. |
+| =--tag NAME= | Pass =-a NAME= to =cvmfs_server publish= for a named rollback tag. |
+| =--tag-description TEXT= | Pass =-m TEXT= to =cvmfs_server publish=; requires =--tag=. |
+| =--check= | After a successful publish, run =cvmfs_server check REPOSITORY=. |
+| =--check-timeout SEC= | Give the optional integrity check a positive, whole-second deadline; requires =--check=. |
 | =--= | Ends =eb-cvmfs= options and starts the synchronization command. |
 | =COMMAND [ARG...]= | The site's synchronization command and its arguments. It is started directly, without a shell. |
-| =--dry-run= | Print every command in the bracket without checking, opening, changing, publishing or aborting the repository. |
+| =--dry-run= | Print every command in the bracket without checking, opening, changing, publishing or aborting the repository. When =--archive-manifest= is also set, the archive is still read. |
+| =--metrics-file PATH= | Atomically replace =PATH= with Prometheus text after each valid invocation. Without it, no metrics or lock file is written. |
+| =--archive-manifest FILE= | Optional. Read =FILE= and refuse to start =cvmfs_server= unless the archive it names satisfies the manifest. Omit it, and no archive is read. |
+
+A separate option value does not consume the next long option.
+Use the equals form when a value itself starts with two dashes.
+
+CMD is one argument to =--verify-cmd=.
+Quote the complete value in the shell that starts =eb-cvmfs=:
+
+#+begin_src bash
+eb-cvmfs --verify-cmd '/opt/site/bin/check-cache --root "/cvmfs/repo.example"' \
+  repo.example -- /opt/site/bin/sync-module-cache
+#+end_src
+
+When CMD contains only an external command, arguments and quoting, =eb-cvmfs= splits it into an argument vector and starts the command directly.
+Shell built-ins or syntax such as environment expansion, pipelines, =&&=, redirection or globbing make =eb-cvmfs= run =sh -c CMD= instead.
+Single-quote the complete CMD at the outer command line when expansion should happen in that inner shell rather than in the shell that starts =eb-cvmfs=.
 
 ** Execution order
 
 Without =--dry-run=, =eb-cvmfs=:
 
-1. runs =cvmfs_server list= and refuses the repository when its entry says =in transaction=;
-2. runs =cvmfs_server transaction REPOSITORY=;
-3. starts =COMMAND [ARG...]=;
-4. runs =cvmfs_server publish REPOSITORY= when the command exits 0, or =cvmfs_server abort -f REPOSITORY= when it does not.
+1. when =--archive-manifest FILE= is set, checks that archive and refuses with status 2 before running =cvmfs_server= if the check fails; when the option is omitted, reads no archive;
+2. runs =cvmfs_server list= and refuses the repository when its entry says =in transaction=;
+3. runs =cvmfs_server transaction REPOSITORY=;
+4. starts =COMMAND [ARG...]=;
+5. when =--verify-cmd= was given, starts CMD after the synchronization exits 0;
+6. runs =cvmfs_server publish= with optional =-a= and =-m= when every requested command exits 0, or =cvmfs_server abort -f REPOSITORY= when synchronization or verification does not;
+7. when =--check= was given and publish succeeded, runs =cvmfs_server check REPOSITORY= and returns its status.
 
-An abort failure is reported, but does not replace the synchronization command's exit status.
+An abort failure is reported, but does not replace the command failure or timeout status that caused it.
 A synchronization command that cannot be found is treated as exit 127; another failure to start it is exit 126.
+A verification command that cannot start uses the same statuses.
+When a command ends from signal N, =eb-cvmfs= reports status 128 + N.
+Command output is inherited, including output from a failed verification.
 =eb-cvmfs= performs no tarball build or packaging step.
+It does not ingest an archive itself: the synchronization command remains responsible for any ingest, and only after the optional check has passed.
+
+When its timeout option is present, =COMMAND=, CMD, =cvmfs_server publish= or =cvmfs_server check= starts in a new process group.
+Without that option, the command remains in the caller's process group.
+When a deadline expires, =eb-cvmfs= sends =TERM= to that command's process group, waits a fixed grace period of one second, and sends =KILL= to the group.
+It exits 124.
+A synchronization, verification or publish timeout first runs =cvmfs_server abort -f REPOSITORY= once.
+A check timeout does not abort because publish has completed.
+It does not retry the timed-out command or start the next command.
+A synchronization or verification timeout does not publish the transaction.
+A publish timeout does not start the optional integrity check.
+
+=--dry-run= still performs step 1 when the option is set.
+A passed check adds no line to the preview.
+A failed check prints the reason on standard error, prints no commands, and runs none.
+
+** Archive manifest
+
+=FILE= is JSON. Paths inside it are not shell-expanded.
+=directory= is resolved relative to the manifest file unless it is absolute.
+The manifest itself must sit outside that directory, because the directory is required to contain exactly one entry.
+
+#+begin_example
+{
+  "directory": "ingest",
+  "name": "cache.tar",
+  "sha256": "64 lowercase hexadecimal digits",
+  "uid_type": "i32",
+  "gid_type": "i32"
+}
+#+end_example
+
+| Field | Meaning |
+|-------+---------|
+| =directory= | The directory that must contain the archive and nothing else. |
+| =name= | The archive's file name: one path component ending in =.tar=, =.tar.gz=, or =.tgz=. |
+| =sha256= | The SHA-256 digest of the archive file's bytes, as 64 lowercase hexadecimal digits. |
+| =uid_type= | The integer type every member user id must fit: =u16=, =i32=, or =u32=. |
+| =gid_type= | The same choice for every member group id. |
+
+A =.tar= name is an uncompressed ustar or pax archive.
+A =.tar.gz= or =.tgz= name is one gzip member around that archive, with no bytes after the gzip member.
+The check refuses a directory that is empty, that contains more than one entry, or whose single entry has a different name, is empty, is not a regular file, or is a symbolic link.
+It then refuses a digest mismatch, an unrecognized archive, and an archive with no members.
+
+Every member path must already be normalized: UTF-8, at most 4096 bytes, relative, with no empty, =.=, or =..= component, no backslash, and no trailing slash.
+A directory member (tar type flag =5=) may end with one trailing slash; the slash is not part of the path.
+A symbolic link or hard link target must be a normalized relative path as well.
+A member =software/pkg/file= is accepted only when directory members =software= and =software/pkg= occur earlier in the archive.
+A parent invented later by an ingest tool is not an explicit directory.
+The same normalized path must not occur twice.
+
+| Type | Accepted user or group id |
+|------+---------------------------|
+| =u16= | 0 through 65535 |
+| =i32= | 0 through 2147483647 |
+| =u32= | 0 through 4294967295 |
+
+4294967295 is the unsigned value of a 32-bit -1.
+It fits =u32= and does not fit =i32=.
+A publisher that stores the id in a signed 32-bit field returns =EOVERFLOW= for that value, so set =uid_type= and =gid_type= to the type the repository actually stores.
+Identifiers come from the ustar header, or from a per-member or global pax =uid= or =gid= record when one is present.
+A per-member record wins over the global record, and the global record wins over the ustar field.
+
+** Metrics
+
+The metrics file contains these gauges, all labelled with =repository=:
+
+| Family | Meaning |
+|--------+---------|
+| =eb_cvmfs_last_result= | 1 when the latest invocation succeeded, otherwise 0. |
+| =eb_cvmfs_exit_code= | The exit code of the latest invocation. |
+| =eb_cvmfs_last_publish_timestamp_seconds= | Unix time of the latest successful publish known in this file. It is absent until a publish succeeds. A later failure preserves it. |
+| =eb_cvmfs_last_transaction_duration_seconds= | Seconds from starting the successful =transaction= command through a =publish= or =abort= command that reached an exit status. It is absent when no transaction opened or the final command could not start. |
+| =eb_cvmfs_aborts= | Abort commands that started during the latest invocation: 0 or 1. This is an invocation gauge, not a cumulative counter. |
+| =eb_cvmfs_timeout= | Present with value 1 when synchronization, verification, publish or check timed out. Its =phase= label is =sync=, =verify=, =publish= or =check=. |
+
+The file describes one repository.
+Invocations using the same path take an exclusive sibling lock before checking the repository and hold it through the atomic metrics replacement.
+This makes preservation of the last successful publish robust when invocations overlap.
+The lock is named =.FILE.lock= and remains for reuse.
+
+The replacement uses a temporary file in =PATH='s directory and preserves the permission bits of an existing regular file.
+The temporary file belongs to the account running =eb-cvmfs=, so replacing a file owned by another account cannot preserve that ownership without extra privileges.
+A metrics write failure is reported after the repository operation.
+It changes a successful invocation to exit 1, but does not mask an existing transaction, synchronization or publish failure.
+=--dry-run --metrics-file PATH= updates the result, exit-code and abort gauges, preserves a previous publish timestamp, and records no transaction duration.
 
 ** Exit status
 
 | Status | Meaning |
 |--------+---------|
-| =0= | The synchronization and publish succeeded, or =--dry-run= printed the commands. |
-| =2= | The arguments are invalid, =cvmfs_server list= cannot start or fails, or the repository is already in a transaction. |
+| =0= | Synchronization, optional verification, publish and optional check succeeded, or =--dry-run= printed the commands. |
+| =1= | The repository operation succeeded, but the requested metrics file could not be written. |
+| =2= | The arguments are invalid, the archive manifest is refused, =cvmfs_server list= cannot start or fails, or the repository is already in a transaction. |
 | transaction status | =cvmfs_server transaction= failed. |
 | synchronization status | The synchronization failed; =eb-cvmfs= attempted =abort -f=. |
-| publish status | Synchronization succeeded and =cvmfs_server publish= failed. |
-| =126= or =127= | The synchronization command could not start; =eb-cvmfs= attempted =abort -f=. |
+| verification status | Verification failed; =eb-cvmfs= attempted =abort -f=. |
+| =124= | Synchronization, verification, publish or check exceeded its configured deadline; =eb-cvmfs= terminated the process group. It attempted =abort -f= unless the published integrity check timed out. |
+| publish status | Synchronization and optional verification succeeded and =cvmfs_server publish= failed. |
+| check status | Publish succeeded and =cvmfs_server check= failed. |
+| =126= or =127= | The synchronization or verification command could not start; =eb-cvmfs= attempted =abort -f=. |
+| =128 + N= | A transaction, synchronization, verification, publish or check command ended from signal N. |
 
 ** See also
 

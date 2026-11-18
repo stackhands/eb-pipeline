@@ -4,14 +4,16 @@
 //! run is still a successful rendering: the exit code in the file is data.
 
 use crate::exit::Fail;
+use crate::util;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
+use std::path::Path;
 
 /// Line statuses a result records, in label order.
 pub const LINE_STATUSES: [&str; 5] = ["failed", "pending", "refused", "skipped", "success"];
 
 /// The fields a status export keeps. Log paths stay in the result file.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Status {
     /// Site name recorded by the pipeline.
     pub site: String,
@@ -25,6 +27,10 @@ pub struct Status {
     pub sharded: bool,
     /// Pipeline process exit code.
     pub exit_code: i32,
+    /// Unix timestamp at which the run ended.
+    pub ended_at_seconds: f64,
+    /// Wall-clock duration of the run.
+    pub duration_seconds: f64,
     /// Number of lines in each terminal status.
     pub counts: BTreeMap<String, u64>,
     /// Phase names and their recorded statuses.
@@ -59,6 +65,18 @@ pub fn from_result(v: &Value) -> Result<Status, Fail> {
         .get("sharded")
         .and_then(Value::as_bool)
         .ok_or_else(|| Fail::usage("result.sharded must be a boolean"))?;
+    let ended_at = need_str(obj, "ended_at")?;
+    let ended_at = chrono::DateTime::parse_from_rfc3339(ended_at)
+        .map_err(|e| Fail::usage(format!("result.ended_at must be RFC 3339: {e}")))?;
+    let ended_at_seconds = ended_at.timestamp() as f64
+        + f64::from(ended_at.timestamp_subsec_nanos()) / 1_000_000_000.0;
+    let duration_seconds = obj
+        .get("duration_seconds")
+        .and_then(Value::as_f64)
+        .filter(|n| n.is_finite() && *n >= 0.0)
+        .ok_or_else(|| {
+            Fail::usage("result.duration_seconds must be a finite non-negative number")
+        })?;
 
     let mut counts = BTreeMap::new();
     for name in LINE_STATUSES {
@@ -102,6 +120,8 @@ pub fn from_result(v: &Value) -> Result<Status, Fail> {
         run_id: need_str(obj, "run_id")?.to_string(),
         sharded,
         exit_code,
+        ended_at_seconds,
+        duration_seconds,
         counts,
         phases,
     })
@@ -132,6 +152,66 @@ pub fn prometheus(status: &Status) -> String {
             "eb_pipeline_exit_code",
             &id,
             &status.exit_code.to_string(),
+        )],
+    );
+    family(
+        &mut out,
+        "eb_pipeline_last_run_timestamp_seconds",
+        "Unix timestamp at which the run ended.",
+        &[sample(
+            "eb_pipeline_last_run_timestamp_seconds",
+            &id,
+            &status.ended_at_seconds.to_string(),
+        )],
+    );
+    family(
+        &mut out,
+        "eb_pipeline_last_run_result",
+        "Whether the run succeeded: 1 for success and 0 otherwise.",
+        &[sample(
+            "eb_pipeline_last_run_result",
+            &id,
+            if status.ok() { "1" } else { "0" },
+        )],
+    );
+    family(
+        &mut out,
+        "eb_pipeline_last_run_duration_seconds",
+        "Wall-clock duration of the run in seconds.",
+        &[sample(
+            "eb_pipeline_last_run_duration_seconds",
+            &id,
+            &status.duration_seconds.to_string(),
+        )],
+    );
+    family(
+        &mut out,
+        "eb_pipeline_items_built",
+        "Build lines that succeeded.",
+        &[sample(
+            "eb_pipeline_items_built",
+            &id,
+            &status
+                .counts
+                .get("success")
+                .copied()
+                .unwrap_or(0)
+                .to_string(),
+        )],
+    );
+    family(
+        &mut out,
+        "eb_pipeline_items_failed",
+        "Build lines that failed.",
+        &[sample(
+            "eb_pipeline_items_failed",
+            &id,
+            &status
+                .counts
+                .get("failed")
+                .copied()
+                .unwrap_or(0)
+                .to_string(),
         )],
     );
     let mut lines = Vec::new();
@@ -201,6 +281,11 @@ pub fn status_json(status: &Status) -> String {
     serde_json::to_string_pretty(&status_value(status)).expect("status is json") + "\n"
 }
 
+/// Atomically replace a metrics file through a fully written temporary sibling.
+pub fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
+    util::write_atomic(path, text.as_bytes())
+}
+
 fn need_str<'a>(obj: &'a Map<String, Value>, key: &str) -> Result<&'a str, Fail> {
     obj.get(key)
         .and_then(Value::as_str)
@@ -265,6 +350,8 @@ mod tests {
             "run_id": "demo",
             "sharded": false,
             "exit_code": 1,
+            "ended_at": "2026-11-17T20:00:00Z",
+            "duration_seconds": 12.5,
             "counts": {"failed": 1, "success": 2},
             "phases": [
                 {"name": "build", "status": "failed"},
@@ -289,6 +376,26 @@ eb_pipeline_info{{{id}}} 1
 # HELP eb_pipeline_exit_code Process exit code of the run.
 # TYPE eb_pipeline_exit_code gauge
 eb_pipeline_exit_code{{{id}}} 1
+
+# HELP eb_pipeline_last_run_timestamp_seconds Unix timestamp at which the run ended.
+# TYPE eb_pipeline_last_run_timestamp_seconds gauge
+eb_pipeline_last_run_timestamp_seconds{{{id}}} 1794945600
+
+# HELP eb_pipeline_last_run_result Whether the run succeeded: 1 for success and 0 otherwise.
+# TYPE eb_pipeline_last_run_result gauge
+eb_pipeline_last_run_result{{{id}}} 0
+
+# HELP eb_pipeline_last_run_duration_seconds Wall-clock duration of the run in seconds.
+# TYPE eb_pipeline_last_run_duration_seconds gauge
+eb_pipeline_last_run_duration_seconds{{{id}}} 12.5
+
+# HELP eb_pipeline_items_built Build lines that succeeded.
+# TYPE eb_pipeline_items_built gauge
+eb_pipeline_items_built{{{id}}} 2
+
+# HELP eb_pipeline_items_failed Build lines that failed.
+# TYPE eb_pipeline_items_failed gauge
+eb_pipeline_items_failed{{{id}}} 1
 
 # HELP eb_pipeline_lines Build lines by status. A status the run did not use is 0.
 # TYPE eb_pipeline_lines gauge
@@ -357,5 +464,19 @@ eb_pipeline_phase{{{id},phase=\"checks\",status=\"skipped\"}} 1
         v.as_object_mut().unwrap().remove("exit_code");
         let err = from_result(&v).unwrap_err();
         assert!(err.msg.contains("exit_code"), "{}", err.msg);
+    }
+
+    #[test]
+    fn atomic_write_replaces_the_destination_and_leaves_no_temporary_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metrics.prom");
+        std::fs::write(&path, "stale\n").unwrap();
+        write_atomic(&path, "fresh\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "fresh\n");
+        let entries: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(entries, [std::ffi::OsString::from("metrics.prom")]);
     }
 }

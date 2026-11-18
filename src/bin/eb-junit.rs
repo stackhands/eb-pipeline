@@ -3,16 +3,20 @@
 //! Each recorded line keeps the status the result file already has. This
 //! tool does not classify failures and does not call eb-stack.
 
+use eb_pipeline::util;
 use serde_json::{Map, Number, Value};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::io::{self, Write};
+use std::path::Path;
 use std::process::ExitCode;
 
 struct Args {
     results: Vec<String>,
+    reframe_reports: Vec<String>,
+    properties: BTreeMap<String, String>,
     out: Option<String>,
+    fail_on_failure: bool,
 }
 
 struct Suite {
@@ -52,29 +56,53 @@ fn main() -> ExitCode {
 
 fn run() -> Result<ExitCode, String> {
     let args = parse(env::args().skip(1))?;
+    let inputs: Vec<_> = args
+        .results
+        .iter()
+        .map(|path| ("--result", Some(Path::new(path))))
+        .chain(
+            args.reframe_reports
+                .iter()
+                .map(|path| ("--reframe-report", Some(Path::new(path)))),
+        )
+        .collect();
+    util::refuse_output_alias("--out", args.out.as_deref().map(Path::new), &inputs)?;
     let mut labeled = Vec::with_capacity(args.results.len());
     for path in &args.results {
         let text = fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
         let value = serde_json::from_str(&text).map_err(|e| format!("cannot parse {path}: {e}"))?;
         labeled.push((path.clone(), value));
     }
-    let report = render_labeled(&labeled)?;
+    let mut reframe = Vec::with_capacity(args.reframe_reports.len());
+    for path in &args.reframe_reports {
+        let text = fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+        let value = serde_json::from_str(&text).map_err(|e| format!("cannot parse {path}: {e}"))?;
+        reframe.push((path.clone(), value));
+    }
+    let (report, failures) = render_labeled_counted(&labeled, &reframe, &args.properties)?;
     match args.out.as_deref() {
         Some(path) if path != "-" => {
-            fs::write(path, &report).map_err(|e| format!("cannot write {path}: {e}"))?;
+            util::write_atomic(Path::new(path), report.as_bytes())
+                .map_err(|e| format!("cannot write {path}: {e}"))?;
         }
         _ => {
-            let mut out = io::stdout().lock();
-            out.write_all(report.as_bytes())
+            util::write_stdout(report.as_bytes())
                 .map_err(|e| format!("cannot write the report: {e}"))?;
         }
     }
-    Ok(ExitCode::SUCCESS)
+    if args.fail_on_failure && failures > 0 {
+        Ok(ExitCode::from(1))
+    } else {
+        Ok(ExitCode::SUCCESS)
+    }
 }
 
 fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut results = Vec::new();
+    let mut reframe_reports = Vec::new();
+    let mut properties = BTreeMap::new();
     let mut out = None;
+    let mut fail_on_failure = false;
     let mut words = words.peekable();
     while let Some(word) = words.next() {
         match word.as_str() {
@@ -86,20 +114,38 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 println!("eb-junit {}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
             }
-            "--result" | "--out" => {
+            "--fail-on-failure" => fail_on_failure = true,
+            "--result" | "--reframe-report" | "--property" | "--out" => {
                 let value = words
                     .next()
                     .filter(|v| !v.is_empty())
                     .ok_or_else(|| format!("{word} needs a value"))?;
-                assign(&word, value, &mut results, &mut out)?;
+                assign(
+                    &word,
+                    value,
+                    &mut results,
+                    &mut reframe_reports,
+                    &mut properties,
+                    &mut out,
+                )?;
             }
             _ => {
                 if let Some((flag, value)) = word.split_once('=') {
-                    if matches!(flag, "--result" | "--out") {
+                    if matches!(
+                        flag,
+                        "--result" | "--reframe-report" | "--property" | "--out"
+                    ) {
                         if value.is_empty() {
                             return Err(format!("{flag} needs a value"));
                         }
-                        assign(flag, value.to_string(), &mut results, &mut out)?;
+                        assign(
+                            flag,
+                            value.to_string(),
+                            &mut results,
+                            &mut reframe_reports,
+                            &mut properties,
+                            &mut out,
+                        )?;
                         continue;
                     }
                 }
@@ -107,20 +153,43 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
             }
         }
     }
-    if results.is_empty() {
-        return Err("--result is required".into());
+    if results.is_empty() && reframe_reports.is_empty() {
+        if let Some(result) = util::env_value("EB_PIPELINE_RESULT") {
+            results.push(result);
+        }
     }
-    Ok(Args { results, out })
+    if results.is_empty() && reframe_reports.is_empty() {
+        return Err("--result or --reframe-report is required".into());
+    }
+    Ok(Args {
+        results,
+        reframe_reports,
+        properties,
+        out,
+        fail_on_failure,
+    })
 }
 
 fn assign(
     flag: &str,
     value: String,
     results: &mut Vec<String>,
+    reframe_reports: &mut Vec<String>,
+    properties: &mut BTreeMap<String, String>,
     out: &mut Option<String>,
 ) -> Result<(), String> {
     match flag {
         "--result" => results.push(value),
+        "--reframe-report" => reframe_reports.push(value),
+        "--property" => {
+            let (name, value) = value
+                .split_once('=')
+                .ok_or("--property expects NAME=VALUE")?;
+            if name.is_empty() {
+                return Err("--property name must not be empty".into());
+            }
+            properties.insert(name.to_string(), value.to_string());
+        }
         "--out" => {
             if out.is_some() {
                 return Err("--out given twice".into());
@@ -134,12 +203,160 @@ fn assign(
 
 /// Render result objects, in order, as one JUnit document.
 /// `label` is the path named in an error.
-fn render_labeled(items: &[(String, Value)]) -> Result<String, String> {
-    let mut suites = Vec::with_capacity(items.len());
+#[cfg(test)]
+fn render_labeled(
+    items: &[(String, Value)],
+    reframe_reports: &[(String, Value)],
+) -> Result<String, String> {
+    render_labeled_counted(items, reframe_reports, &BTreeMap::new()).map(|(report, _)| report)
+}
+
+fn render_labeled_counted(
+    items: &[(String, Value)],
+    reframe_reports: &[(String, Value)],
+    properties: &BTreeMap<String, String>,
+) -> Result<(String, usize), String> {
+    let mut suites = Vec::with_capacity(items.len() + reframe_reports.len());
     for (label, value) in items {
         suites.push(parse_suite(value).map_err(|e| format!("{label}: {e}"))?);
     }
-    Ok(document(&suites))
+    for (label, value) in reframe_reports {
+        let parsed = parse_reframe_report(value, label).map_err(|e| format!("{label}: {e}"))?;
+        suites.extend(parsed);
+    }
+    for suite in &mut suites {
+        for (name, value) in properties {
+            if let Some((_, current)) = suite.props.iter_mut().find(|(key, _)| key == name) {
+                *current = value.clone();
+            } else {
+                suite.props.push((name.clone(), value.clone()));
+            }
+        }
+    }
+    let failures = failure_count(&suites);
+    Ok((document(&suites), failures))
+}
+
+fn parse_reframe_report(value: &Value, label: &str) -> Result<Vec<Suite>, String> {
+    let obj = object(value, "reframe report")?;
+    let runs = if let Some(v) = obj.get("runs") {
+        match v {
+            Value::Array(items) => items.as_slice(),
+            _ => return Err("`runs` must be an array".into()),
+        }
+    } else if obj.get("testcases").is_some() {
+        std::slice::from_ref(value)
+    } else {
+        return Err("missing `runs`".into());
+    };
+    let mut out = Vec::with_capacity(runs.len());
+    for (i, run) in runs.iter().enumerate() {
+        let run_obj = object(run, &format!("runs[{i}]"))?;
+        let testcases = match run_obj.get("testcases") {
+            Some(Value::Array(items)) => items,
+            Some(_) => return Err(format!("runs[{i}].testcases must be an array")),
+            None => return Err(format!("runs[{i}] is missing `testcases`")),
+        };
+        let mut names = Vec::with_capacity(testcases.len());
+        let mut cases = Vec::with_capacity(testcases.len());
+        let mut time_ms = 0u64;
+        let mut system = opt_str(run_obj, "system", &format!("runs[{i}]"))?.unwrap_or("reframe");
+        if system.is_empty() {
+            system = "reframe";
+        }
+        let partition = opt_str(run_obj, "partition", &format!("runs[{i}]"))?.unwrap_or("default");
+        let environ = opt_str(run_obj, "environ", &format!("runs[{i}]"))?.unwrap_or("default");
+        for (j, item) in testcases.iter().enumerate() {
+            let case_obj = object(item, &format!("runs[{i}].testcases[{j}]"))?;
+            let name = req_str(case_obj, "name", &format!("runs[{i}].testcases[{j}]"))?.to_string();
+            let result =
+                req_str(case_obj, "result", &format!("runs[{i}].testcases[{j}]"))?.to_string();
+            let status = result.to_ascii_lowercase();
+            let case_ms = first_seconds(
+                case_obj,
+                &["time_total", "duration_seconds", "duration", "time_elapsed"],
+                &format!("runs[{i}].testcases[{j}]"),
+            )?;
+            if let Some(ms) = case_ms {
+                time_ms = time_ms
+                    .checked_add(ms)
+                    .ok_or_else(|| format!("runs[{i}].testcases[{j}] duration is too large"))?;
+            }
+            let mut fields = vec![
+                ("result".to_string(), result.clone()),
+                ("name".to_string(), name.clone()),
+            ];
+            if let Some(reason) = opt_str(
+                case_obj,
+                "fail_reason",
+                &format!("runs[{i}].testcases[{j}]"),
+            )? {
+                fields.push(("fail_reason".to_string(), reason.to_string()));
+            }
+            if let Some(stdout) = opt_str(case_obj, "stdout", &format!("runs[{i}].testcases[{j}]"))?
+            {
+                fields.push(("stdout".to_string(), stdout.to_string()));
+            }
+            if let Some(stderr) = opt_str(case_obj, "stderr", &format!("runs[{i}].testcases[{j}]"))?
+            {
+                fields.push(("stderr".to_string(), stderr.to_string()));
+            }
+            let body = if matches!(status.as_str(), "success" | "passed" | "pass" | "ok") {
+                None
+            } else if status == "skipped" {
+                Some(Body {
+                    skipped: true,
+                    type_attr: String::new(),
+                    message: result.clone(),
+                    lines: fields,
+                })
+            } else {
+                Some(Body {
+                    skipped: false,
+                    type_attr: result.clone(),
+                    message: result.clone(),
+                    lines: fields,
+                })
+            };
+            names.push(name);
+            cases.push(Case {
+                name: String::new(),
+                file: None,
+                time_ms: case_ms,
+                body,
+            });
+        }
+        let display = disambiguate(&names);
+        for (case, shown) in cases.iter_mut().zip(display) {
+            case.name = shown;
+        }
+        let mut props = vec![
+            ("source".to_string(), "reframe-report".to_string()),
+            ("report".to_string(), label.to_string()),
+            ("run_index".to_string(), (i + 1).to_string()),
+            ("system".to_string(), system.to_string()),
+            ("partition".to_string(), partition.to_string()),
+            ("environ".to_string(), environ.to_string()),
+        ];
+        if let Some(version) = opt_str(obj, "report_version", "reframe report")? {
+            props.push(("report_version".to_string(), version.to_string()));
+        }
+        let suite_name = format!("reframe/{system}/{partition}/{environ}");
+        let timestamp = match opt_str(run_obj, "time_start", &format!("runs[{i}]"))? {
+            Some(ts) => Some(ts.to_string()),
+            None => opt_str(run_obj, "started_at", &format!("runs[{i}]"))?.map(str::to_string),
+        };
+        out.push(Suite {
+            name: suite_name.clone(),
+            class: suite_name,
+            hostname: partition.to_string(),
+            timestamp,
+            time_ms,
+            props,
+            cases,
+        });
+    }
+    Ok(out)
 }
 
 fn parse_suite(value: &Value) -> Result<Suite, String> {
@@ -301,16 +518,13 @@ fn parse_suite(value: &Value) -> Result<Suite, String> {
 
 fn document(suites: &[Suite]) -> String {
     let tests: usize = suites.iter().map(|s| s.cases.len()).sum();
-    let failures = suites
-        .iter()
-        .flat_map(|s| &s.cases)
-        .filter(|c| c.body.as_ref().is_some_and(|b| !b.skipped))
-        .count();
+    let failures = failure_count(suites);
     let skipped = suites
         .iter()
         .flat_map(|s| &s.cases)
         .filter(|c| c.body.as_ref().is_some_and(|b| b.skipped))
         .count();
+
     let time_ms = suites
         .iter()
         .fold(0u64, |sum, s| sum.saturating_add(s.time_ms));
@@ -325,6 +539,14 @@ fn document(suites: &[Suite]) -> String {
     }
     out.push_str("</testsuites>\n");
     out
+}
+
+fn failure_count(suites: &[Suite]) -> usize {
+    suites
+        .iter()
+        .flat_map(|suite| &suite.cases)
+        .filter(|case| case.body.as_ref().is_some_and(|body| !body.skipped))
+        .count()
 }
 
 fn write_suite(out: &mut String, suite: &Suite) {
@@ -424,7 +646,7 @@ fn disambiguate(names: &[String]) -> Vec<String> {
     let mut seen = BTreeMap::<String, usize>::new();
     let mut out = Vec::with_capacity(names.len());
     for name in names {
-        let n = seen.entry(name.clone()).or_insert(0);
+        let n = seen.entry(escape_attr(name)).or_insert(0);
         *n += 1;
         if *n == 1 {
             out.push(name.clone());
@@ -503,6 +725,19 @@ fn opt_seconds(obj: &Map<String, Value>, key: &str, what: &str) -> Result<Option
     }
 }
 
+fn first_seconds(
+    obj: &Map<String, Value>,
+    keys: &[&str],
+    what: &str,
+) -> Result<Option<u64>, String> {
+    for key in keys {
+        if let Some(ms) = opt_seconds(obj, key, what)? {
+            return Ok(Some(ms));
+        }
+    }
+    Ok(None)
+}
+
 fn to_millis(v: f64, what: &str) -> Result<u64, String> {
     if !v.is_finite() || v < 0.0 {
         return Err(format!("{what} must be a finite number of seconds >= 0"));
@@ -564,7 +799,7 @@ mod tests {
 
     fn render(text: &str) -> Result<String, String> {
         let value: Value = serde_json::from_str(text).unwrap();
-        render_labeled(&[("result".to_string(), value)])
+        render_labeled(&[("result".to_string(), value)], &[])
     }
 
     #[test]
@@ -678,13 +913,13 @@ mod tests {
         let b = r#"{"schema_version":1,"kind":"result","site":"example","target":"zen4","build_type":"production","run_id":"b","exit_code":0,"started_at":"2026-11-17T00:00:00+00:00","lines":[]}"#;
         let va: Value = serde_json::from_str(a).unwrap();
         let vb: Value = serde_json::from_str(b).unwrap();
-        let xml = render_labeled(&[("a.json".into(), va), ("b.json".into(), vb)]).unwrap();
+        let xml = render_labeled(&[("a.json".into(), va), ("b.json".into(), vb)], &[]).unwrap();
         let zen2 = xml.find("name=\"example/zen2\"").unwrap();
         let zen4 = xml.find("name=\"example/zen4\"").unwrap();
         assert!(zen2 < zen4, "{xml}");
         assert!(xml.contains("timestamp=\"2026-11-17T00:00:00+00:00\""));
         let plan: Value = serde_json::from_str(r#"{"kind":"plan","schema_version":1}"#).unwrap();
-        let err = render_labeled(&[("plan.json".into(), plan)]).unwrap_err();
+        let err = render_labeled(&[("plan.json".into(), plan)], &[]).unwrap_err();
         assert!(
             err.contains("plan.json: expected kind `result`, found `plan`"),
             "{err}"
@@ -697,5 +932,43 @@ mod tests {
         let xml = render(text).unwrap();
         assert!(xml.contains("note: ab"));
         assert!(!xml.contains('\u{1}'));
+    }
+
+    #[test]
+    fn reframe_testcases_fold_into_extra_suites() {
+        let result: Value = serde_json::from_str(
+            r#"{"schema_version":1,"kind":"result","site":"example","target":"cpu","build_type":"production","run_id":"n","exit_code":0,"lines":[]}"#,
+        )
+        .unwrap();
+        let reframe: Value = serde_json::from_str(
+            r#"{
+  "report_version": "4.8",
+  "runs": [
+    {
+      "system": "cluster",
+      "partition": "cpu",
+      "environ": "foss",
+      "time_start": "2026-11-17T00:00:00+00:00",
+      "testcases": [
+        {"name": "checks/ok", "result": "success", "time_total": 1.2},
+        {"name": "checks/skip", "result": "skipped", "fail_reason": "maint"},
+        {"name": "checks/bad", "result": "failure", "fail_reason": "wrong answer"}
+      ]
+    }
+  ]
+}"#,
+        )
+        .unwrap();
+        let xml = render_labeled(
+            &[("result.json".into(), result)],
+            &[("reframe.json".into(), reframe)],
+        )
+        .unwrap();
+        assert!(xml.contains("name=\"reframe/cluster/cpu/foss\""), "{xml}");
+        assert!(xml.contains("name=\"checks/ok\" classname=\"reframe/cluster/cpu/foss\""));
+        assert!(xml.contains("<skipped message=\"skipped\">"));
+        assert!(xml.contains("fail_reason: wrong answer"));
+        assert!(xml.contains("<failure type=\"failure\" message=\"failure\">"));
+        assert!(xml.contains("report_version"));
     }
 }

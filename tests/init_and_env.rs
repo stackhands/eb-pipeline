@@ -63,6 +63,43 @@ fn init_writes_a_valid_site_file_and_refuses_to_overwrite() {
 }
 
 #[test]
+fn init_reports_an_output_filesystem_error_as_a_runtime_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("absent").join("site.toml");
+    let output = bin()
+        .args(["init", "--template", "small-cluster", "--out"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert_eq!(output.stdout, b"");
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(error.contains("cannot create"), "{error}");
+    assert!(error.contains(path.to_str().unwrap()), "{error}");
+}
+
+#[test]
+fn init_hints_print_next_steps_on_stderr() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("site.toml");
+    let o = bin()
+        .arg("init")
+        .args(["--template", "eessi-site", "--hints"])
+        .arg("--out")
+        .arg(&p)
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("hint: check the site file"), "{err}");
+    assert!(err.contains("hint: list target names"), "{err}");
+    assert!(
+        err.contains("release 0.3.0 has no targets command"),
+        "{err}"
+    );
+}
+
+#[test]
 fn init_prints_on_stdout_and_refuses_an_unknown_name() {
     let o = bin()
         .args(["init", "--template", "small-cluster"])

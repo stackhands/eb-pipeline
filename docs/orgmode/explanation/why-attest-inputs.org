@@ -1,0 +1,40 @@
+#+TITLE: Why a plan attests its inputs
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Why a plan attests its inputs
+
+Why does a finalized plan record a hash of the files it resolved, instead of the commit that the build list was taken from?
+
+** The problem
+
+Two builds can name the same commit and still not be the same build.
+The commit records the revision of one repository.
+The build also depends on the easyconfig tree that =stack order= resolved, including a recipe that was corrected on the machine and never committed, on the easyblock and the patches those files name, on the site file, on the container image, and on the route receipt that selected the target.
+A result that stores only the commit cannot show which of those the run actually used, and a later reader cannot tell a matching tree from a tree that has since changed.
+
+** How eb-pipeline handles it
+
+=[attest]= is off unless the site file turns it on.
+With it on, =plan= and a =run= that is not a dry run ask =eb-stack stack order= for the easyconfig paths and hash those files themselves.
+They do not copy eb-stack's own hash report.
+An easyconfig that names an easyblock class is bound to the class file found under =attest.easyblocks=; one that does not is bound to the class =eb-stack recipe easyblock= prints.
+A quoted name that ends in =.patch= is bound to the file found beside the easyconfig, under the easyconfig trees, or under =attest.patches=.
+Two files of that name with different bytes are a refusal, because the plan would not know which patch it hashed.
+The site file, the image digest and the route receipt are part of the same record.
+
+The record is one JSON document with sorted keys.
+Its SHA-256 is =record_sha256=.
+The document is appended to a directory that =rfc9162-sidecar= logs, and the signed checkpoint and the inclusion path come back as =proof=.
+A later snapshot of that log does not retire the proof: the proof carries the checkpoint it was made against.
+=verify= builds the record again from the inputs on disk and checks the proof.
+A different byte is exit 78.
+A proof that does not meet its checkpoint is exit 1.
+
+The table stays out of the default plan and the default result.
+A site file that has no =[attest]= table, or that sets =enabled= false, produces the same plan and the same result it did before the table existed.
+
+** See also
+
+- [[file:../howto/attest-build-inputs.org][Attest the inputs of a plan]]
+- [[file:../reference/site-file.org][The site file]]

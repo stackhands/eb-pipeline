@@ -51,6 +51,16 @@ jobs:
         run: curl --proto '=https' --tlsv1.2 -LsSf "https://github.com/axodotdev/cargo-dist/releases/download/v${DIST_VERSION}/cargo-dist-installer.sh" | sh
       - name: dist plan accepts the tag
         run: dist plan --tag="${GITHUB_REF_NAME}" --output-format=json > /dev/null
+      - name: generate completion and manpage assets
+        run: |
+          cargo run --quiet --locked --bin eb-pipeline -- completions --shell bash --out-dir cli-assets/completions
+          cargo run --quiet --locked --bin eb-pipeline -- completions --shell zsh --out-dir cli-assets/completions
+          cargo run --quiet --locked --bin eb-pipeline -- completions --shell fish --out-dir cli-assets/completions
+          cargo run --quiet --locked --bin eb-pipeline -- man --out-dir cli-assets/man
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: cli-assets
+          path: cli-assets/
 
   build-local:
     name: build ${{ matrix.target }}
@@ -79,6 +89,12 @@ jobs:
           echo "paths<<EOF" >> "$GITHUB_ENV"
           dist print-upload-files-from-manifest --manifest dist-manifest.json >> "$GITHUB_ENV"
           echo "EOF" >> "$GITHUB_ENV"
+      - name: archive has every declared workspace binary
+        shell: bash
+        run: |
+          python3 .github/scripts/check-release-archive.py \
+            --declared .github/release-binaries.txt \
+            --archive "target/distrib/eb-pipeline-${{ matrix.target }}.tar.xz"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: artifacts-build-local-${{ matrix.target }}
@@ -132,6 +148,10 @@ jobs:
         with:
           name: release-notes
           path: notes
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: cli-assets
+          path: artifacts/cli-assets
       # dist's global step hashes only the files it builds itself (source.tar.gz),
       # so sha256.sum is written here over every asset, after each per-file
       # .sha256 has been checked.

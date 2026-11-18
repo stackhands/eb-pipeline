@@ -108,6 +108,79 @@ kept:
 ";
 
 #[test]
+fn watch_outputs_refuse_input_and_each_other_before_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let site = dir.path().join("site.toml");
+    let site_bytes = b"keep site bytes\n";
+    std::fs::write(&site, site_bytes).unwrap();
+    let site_alias = dir.path().join("watch-plan.json");
+    std::os::unix::fs::symlink(&site, &site_alias).unwrap();
+
+    let command = std::process::Command::new(env!("CARGO_BIN_EXE_eb-pipeline"))
+        .arg("watch")
+        .arg("--site")
+        .arg(&site)
+        .args(["--target", "cpu", "--build-type", "production"])
+        .arg("--plan-out")
+        .arg(&site_alias)
+        .output()
+        .unwrap();
+    assert_eq!(command.status.code(), Some(2));
+    assert_eq!(command.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&command.stderr)
+            .contains("--site and --plan-out must name different files"),
+        "{}",
+        String::from_utf8_lossy(&command.stderr)
+    );
+    assert_eq!(std::fs::read(&site).unwrap(), site_bytes);
+
+    let shared = dir.path().join("watch-output.json");
+    let command = std::process::Command::new(env!("CARGO_BIN_EXE_eb-pipeline"))
+        .arg("watch")
+        .arg("--site")
+        .arg(&site)
+        .args(["--target", "cpu", "--build-type", "production"])
+        .arg("--plan-out")
+        .arg(&shared)
+        .arg("--result")
+        .arg(&shared)
+        .output()
+        .unwrap();
+    assert_eq!(command.status.code(), Some(2));
+    assert_eq!(command.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&command.stderr)
+            .contains("--result and --plan-out must name different files"),
+        "{}",
+        String::from_utf8_lossy(&command.stderr)
+    );
+    assert!(!shared.exists());
+    assert_eq!(std::fs::read(&site).unwrap(), site_bytes);
+
+    let result_alias = dir.path().join("watch-result.json");
+    std::fs::hard_link(&site, &result_alias).unwrap();
+    let command = std::process::Command::new(env!("CARGO_BIN_EXE_eb-pipeline"))
+        .arg("watch")
+        .arg("--site")
+        .arg(&site)
+        .args(["--target", "cpu", "--build-type", "production"])
+        .arg("--result")
+        .arg(&result_alias)
+        .output()
+        .unwrap();
+    assert_eq!(command.status.code(), Some(2));
+    assert_eq!(command.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&command.stderr)
+            .contains("--site and --result must name different files"),
+        "{}",
+        String::from_utf8_lossy(&command.stderr)
+    );
+    assert_eq!(std::fs::read(&site).unwrap(), site_bytes);
+}
+
+#[test]
 fn a_newer_generation_directory_exits_75_and_asks_nothing() {
     let t = built("");
     let repo = t.root().join("eessi");
@@ -150,6 +223,95 @@ fn without_an_eessi_change_watch_rebuilds_nothing() {
     assert!(
         !t.run_dir(LATER).exists(),
         "a watch that rebuilds nothing writes no run"
+    );
+}
+
+#[test]
+fn abi_drift_absent_or_disabled_keeps_watch_output_and_state_bytes_identical() {
+    let t = built("");
+    let vars = eessi_vars(&t, "2023.06");
+    let state_path = t.root().join("install/.eb-pipeline-watch/cpu.json");
+    let before_state = std::fs::read(&state_path).unwrap();
+    let before = watch(&t, LATER, &["--dry-run"], &with(&vars));
+    assert_eq!(code(&before), 0, "{}", stderr(&before));
+
+    let mut site = std::fs::read_to_string(&t.site).unwrap();
+    site.push_str("\n[watch.abi_drift]\nenabled = false\n");
+    std::fs::write(&t.site, site).unwrap();
+
+    let after = watch(&t, LATER, &["--dry-run"], &with(&vars));
+    assert_eq!(code(&after), 0, "{}", stderr(&after));
+    assert_eq!(stdout(&after), stdout(&before));
+    assert_eq!(stderr(&after), stderr(&before));
+    assert_eq!(std::fs::read(&state_path).unwrap(), before_state);
+}
+
+#[test]
+fn abi_drift_can_trigger_selective_rebuilds_from_mapped_providers() {
+    let t = built(
+        r#"
+[watch.abi_drift]
+enabled = true
+[watch.abi_drift.probe]
+glibc = "printf '%s' \"${GLIBC_ABI:-}\""
+[watch.abi_drift.providers]
+glibc = ["CMake-3.27.6-GCCcore-13.2.0.eb"]
+"#,
+    );
+    let mut vars = eessi_vars(&t, "2023.06");
+    vars.push(("GLIBC_ABI", "2.39".to_string()));
+    let o = watch(&t, LATER, &[], &with(&vars));
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    assert_eq!(
+        t.watch_state("cpu")["abi_baseline"]["fields"]["glibc"],
+        "2.39"
+    );
+
+    vars.retain(|(k, _)| *k != "GLIBC_ABI");
+    vars.push(("GLIBC_ABI", "2.40".to_string()));
+    let o = watch(&t, "20260103_000000", &["--dry-run"], &with(&vars));
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("host ABI changed in 1 field(s): glibc"),
+        "{}",
+        stderr(&o)
+    );
+    let out = stdout(&o);
+    assert!(out.contains("2 to rebuild"), "{out}");
+    assert!(
+        out.contains("CMake/3.27.6-GCCcore-13.2.0 changed (review, glibc:builddependency)"),
+        "{out}"
+    );
+    let calls = t.calls("ebstack");
+    assert!(
+        calls.lines().any(|l| l.contains("abi-drift.changed")),
+        "{calls}"
+    );
+}
+
+#[test]
+fn abi_drift_refuses_changed_fields_without_providers() {
+    let t = built(
+        r#"
+[watch.abi_drift]
+enabled = true
+[watch.abi_drift.probe]
+glibc = "printf '%s' \"${GLIBC_ABI:-}\""
+"#,
+    );
+    let mut vars = eessi_vars(&t, "2023.06");
+    vars.push(("GLIBC_ABI", "2.39".to_string()));
+    let o = watch(&t, LATER, &[], &with(&vars));
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+
+    vars.retain(|(k, _)| *k != "GLIBC_ABI");
+    vars.push(("GLIBC_ABI", "2.40".to_string()));
+    let o = watch(&t, "20260103_000001", &["--dry-run"], &with(&vars));
+    assert_eq!(code(&o), 78, "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("watch.abi_drift.probe.glibc changed"),
+        "{}",
+        stderr(&o)
     );
 }
 
@@ -535,22 +697,88 @@ fn without_eb_stack_watch_says_what_to_rebuild_and_refuses_to_guess_the_rest() {
     std::fs::remove_file(t.stubs.join("eb-stack")).unwrap();
     let builds = t.calls("eb");
     let o = watch(&t, LATER, &["--dry-run"], &with(&vars));
-    let err = stderr(&o);
-    assert_eq!(code(&o), 78, "{err}");
+    let default_code = code(&o);
+    let default_out = stdout(&o);
+    let default_err = stderr(&o);
+    assert_eq!(default_code, 78, "{default_err}");
     assert_eq!(
-        stdout(&o),
+        default_out,
         "EESSI 2023.06 x86_64/generic: 4 recorded installs, 1 to rebuild, 0 kept, 3 unaffected, 0 gone\nrebuild, in an order not known without eb-stack:\n      Foo/1.0-GCCcore-13.2.0  CMake/3.27.6-GCCcore-13.2.0 changed (review, builddependency)\nunaffected:\n      Bar/2.0-GCCcore-13.2.0\n      Baz/3.0-GCCcore-13.2.0\n      Qux/4.0-GCCcore-13.2.0\n"
     );
     assert!(
-        err.contains(
+        default_err.contains(
             "eb-stack tells what an install depends on, and cannot run `eb-stack --version`"
         ),
-        "{err}"
+        "{default_err}"
     );
     assert!(
-        err.contains("without it neither the order of the rebuild nor the installs that depend on it are known, and nothing is rebuilt"),
-        "{err}"
+        default_err.contains("without it neither the order of the rebuild nor the installs that depend on it are known, and nothing is rebuilt"),
+        "{default_err}"
     );
+
+    let plan = t.root().join("refused-plan.json");
+    let plan_arg = plan.display().to_string();
+    let with_plan = watch(
+        &t,
+        LATER,
+        &["--dry-run", "--plan-out", &plan_arg],
+        &with(&vars),
+    );
+    assert_eq!(code(&with_plan), default_code);
+    assert_eq!(stdout(&with_plan), default_out);
+    assert_eq!(stderr(&with_plan), default_err);
+    let p: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&plan).unwrap()).unwrap();
+    assert_eq!(p["kind"], "watch-plan");
+    assert_eq!(p["outcome"], "rebuild");
+    assert_eq!(p["rebuild"], serde_json::json!([]));
+    let foo = p["installs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["module"] == "Foo/1.0-GCCcore-13.2.0")
+        .unwrap();
+    assert_eq!(foo["action"], "rebuild");
+    assert_eq!(t.calls("eb"), builds);
+}
+
+#[test]
+fn a_vanished_dependency_without_a_robot_tree_writes_the_assessment_plan() {
+    let t = setup("[watch]\n");
+    stack(&t);
+    let vars = eessi_vars(&t, "2023.06");
+    let o = run(&t, "cpu", STAMP, LIST, &with(&vars));
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    change(&t);
+
+    let plan = t.root().join("vanished-plan.json");
+    let plan_arg = plan.display().to_string();
+    let builds = t.calls("eb");
+    let o = watch(
+        &t,
+        LATER,
+        &["--dry-run", "--plan-out", &plan_arg],
+        &with(&vars),
+    );
+    assert_eq!(code(&o), 78, "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("eb-stack has no easyconfig tree to plan its local build from"),
+        "{}",
+        stderr(&o)
+    );
+    let p: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&plan).unwrap()).unwrap();
+    assert_eq!(p["kind"], "watch-plan");
+    assert_eq!(p["outcome"], "rebuild");
+    assert_eq!(p["rebuild"], serde_json::json!([]));
+    let baz = p["installs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["module"] == "Baz/3.0-GCCcore-13.2.0")
+        .unwrap();
+    assert_eq!(baz["action"], "rebuild");
+    assert_eq!(baz["changes"][0]["change"], "vanished");
     assert_eq!(t.calls("eb"), builds);
 }
 

@@ -1,0 +1,1 @@
+`[attest]` records the exact inputs of a finalized plan in an rfc9162 sidecar log. `plan` and `run` append that record when the table is enabled, and `verify` recomputes it and checks the inclusion path. Without the table, a plan and a result stay unchanged.

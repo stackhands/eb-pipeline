@@ -1,9 +1,12 @@
 //! `eb-junit` turns `eb-pipeline run --result` files into a JUnit report.
 
+use std::os::unix::fs::MetadataExt;
 use std::process::Command;
 
 fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_eb-junit"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_eb-junit"));
+    command.env_remove("EB_PIPELINE_RESULT");
+    command
 }
 
 fn result(exit_code: i32, lines: &str) -> String {
@@ -27,7 +30,10 @@ fn help_and_version_exit_zero() {
     let help = bin().arg("--help").output().unwrap();
     assert_eq!(help.status.code(), Some(0));
     let text = String::from_utf8(help.stdout).unwrap();
-    assert!(text.contains("eb-junit --result FILE"));
+    assert!(text.contains("eb-junit [--result FILE]... [--reframe-report FILE]... [--out FILE]"));
+    assert!(text.contains("--reframe-report FILE"));
+    assert!(text.contains("--property NAME=VALUE"));
+    assert!(text.contains("--fail-on-failure"));
     assert!(text.contains("Exit 0 means the report was"));
     assert!(help.stderr.is_empty());
 
@@ -35,6 +41,229 @@ fn help_and_version_exit_zero() {
     assert_eq!(version.status.code(), Some(0));
     let text = String::from_utf8(version.stdout).unwrap();
     assert!(text.starts_with("eb-junit "), "{text}");
+}
+
+#[test]
+fn default_stdout_and_status_remain_byte_for_byte_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("result.json");
+    std::fs::write(&path, result(0, "")).unwrap();
+    let output = bin().arg("--result").arg(&path).output().unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stderr, b"");
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+            "<testsuites name=\"eb-pipeline\" tests=\"0\" failures=\"0\" errors=\"0\" skipped=\"0\" time=\"0.000\">\n",
+            "  <testsuite name=\"example/cpu\" tests=\"0\" failures=\"0\" errors=\"0\" skipped=\"0\" time=\"0.000\" hostname=\"cpu\">\n",
+            "    <properties>\n",
+            "      <property name=\"schema_version\" value=\"1\"/>\n",
+            "      <property name=\"site\" value=\"example\"/>\n",
+            "      <property name=\"target\" value=\"cpu\"/>\n",
+            "      <property name=\"build_type\" value=\"production\"/>\n",
+            "      <property name=\"run_id\" value=\"nightly\"/>\n",
+            "      <property name=\"exit_code\" value=\"0\"/>\n",
+            "    </properties>\n",
+            "  </testsuite>\n",
+            "</testsuites>\n",
+        )
+        .as_bytes()
+    );
+    let gated = bin()
+        .arg("--result")
+        .arg(&path)
+        .arg("--fail-on-failure")
+        .output()
+        .unwrap();
+    assert_eq!(gated.status.code(), Some(0));
+    assert_eq!(gated.stdout, output.stdout);
+    assert!(gated.stderr.is_empty());
+}
+
+#[test]
+fn result_environment_falls_back_and_the_flag_wins() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("result.json");
+    std::fs::write(&path, result(0, "")).unwrap();
+    let from_env = bin().env("EB_PIPELINE_RESULT", &path).output().unwrap();
+    let from_flag = bin()
+        .args(["--result"])
+        .arg(&path)
+        .env("EB_PIPELINE_RESULT", dir.path().join("wrong.json"))
+        .output()
+        .unwrap();
+    assert_eq!(from_env.status.code(), Some(0));
+    assert_eq!(from_flag.status.code(), Some(0));
+    assert_eq!(from_env.stdout, from_flag.stdout);
+    assert!(from_env.stderr.is_empty());
+    assert!(from_flag.stderr.is_empty());
+}
+
+#[test]
+fn default_reframe_output_and_status_remain_byte_for_byte_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("reframe.json"),
+        r#"{
+  "report_version": "4.8",
+  "runs": [
+    {
+      "system": "cluster",
+      "partition": "cpu",
+      "environ": "foss",
+      "testcases": []
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+    let output = bin()
+        .current_dir(dir.path())
+        .args(["--reframe-report", "reframe.json"])
+        .env("EB_PIPELINE_RESULT", "wrong.json")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stderr, b"");
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+            "<testsuites name=\"eb-pipeline\" tests=\"0\" failures=\"0\" errors=\"0\" skipped=\"0\" time=\"0.000\">\n",
+            "  <testsuite name=\"reframe/cluster/cpu/foss\" tests=\"0\" failures=\"0\" errors=\"0\" skipped=\"0\" time=\"0.000\" hostname=\"cpu\">\n",
+            "    <properties>\n",
+            "      <property name=\"source\" value=\"reframe-report\"/>\n",
+            "      <property name=\"report\" value=\"reframe.json\"/>\n",
+            "      <property name=\"run_index\" value=\"1\"/>\n",
+            "      <property name=\"system\" value=\"cluster\"/>\n",
+            "      <property name=\"partition\" value=\"cpu\"/>\n",
+            "      <property name=\"environ\" value=\"foss\"/>\n",
+            "      <property name=\"report_version\" value=\"4.8\"/>\n",
+            "    </properties>\n",
+            "  </testsuite>\n",
+            "</testsuites>\n",
+        )
+        .as_bytes()
+    );
+}
+
+#[test]
+fn output_aliases_are_refused_before_report_inputs_are_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    let result_path = dir.path().join("result.json");
+    let result_bytes = result(0, "");
+    std::fs::write(&result_path, &result_bytes).unwrap();
+    let result_alias = dir.path().join("result.xml");
+    std::os::unix::fs::symlink(&result_path, &result_alias).unwrap();
+
+    let output = bin()
+        .arg("--result")
+        .arg(&result_path)
+        .arg("--out")
+        .arg(&result_alias)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("--result and --out must name different files"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(&result_path).unwrap(), result_bytes);
+
+    let reframe_path = dir.path().join("reframe.json");
+    let reframe_bytes = r#"{"runs":[]}"#;
+    std::fs::write(&reframe_path, reframe_bytes).unwrap();
+    let reframe_alias = dir.path().join("reframe.xml");
+    std::fs::hard_link(&reframe_path, &reframe_alias).unwrap();
+    let output = bin()
+        .arg("--reframe-report")
+        .arg(&reframe_path)
+        .arg("--out")
+        .arg(&reframe_alias)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("--reframe-report and --out must name different files"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&reframe_path).unwrap(),
+        reframe_bytes
+    );
+}
+
+#[test]
+fn custom_properties_apply_to_every_suite() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("result.json"), result(0, "")).unwrap();
+    std::fs::write(
+        dir.path().join("reframe.json"),
+        r#"{"runs":[{"system":"cluster","partition":"cpu","environ":"foss","testcases":[]}]}"#,
+    )
+    .unwrap();
+    let output = bin()
+        .current_dir(dir.path())
+        .args([
+            "--result",
+            "result.json",
+            "--reframe-report",
+            "reframe.json",
+            "--property",
+            "pipeline=first",
+            "--property",
+            "site=nightly & smoke",
+            "--property=pipeline=42",
+            "--property",
+            "empty=",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    let xml = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        xml.matches("<property name=\"pipeline\" value=\"42\"/>")
+            .count(),
+        2,
+        "{xml}"
+    );
+    assert_eq!(
+        xml.matches("<property name=\"site\" value=\"nightly &amp; smoke\"/>")
+            .count(),
+        2,
+        "{xml}"
+    );
+    assert_eq!(
+        xml.matches("<property name=\"empty\" value=\"\"/>").count(),
+        2,
+        "{xml}"
+    );
+    assert!(!xml.contains("value=\"first\""), "{xml}");
+    assert!(!xml.contains("value=\"example\""), "{xml}");
+}
+
+#[test]
+fn a_property_requires_a_name_and_value_separator() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("result.json");
+    std::fs::write(&path, result(0, "")).unwrap();
+    let output = bin()
+        .arg("--result")
+        .arg(&path)
+        .args(["--property", "pipeline"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(output.stderr, b"eb-junit: --property expects NAME=VALUE\n");
 }
 
 #[test]
@@ -48,6 +277,8 @@ fn a_result_file_is_reported_and_left_unchanged() {
     );
     std::fs::write(&path, &raw).unwrap();
     let out = dir.path().join("junit.xml");
+    std::fs::write(&out, b"complete old report\n").unwrap();
+    let old_inode = std::fs::metadata(&out).unwrap().ino();
     let o = bin()
         .arg("--result")
         .arg(&path)
@@ -63,6 +294,7 @@ fn a_result_file_is_reported_and_left_unchanged() {
     );
     assert!(o.stdout.is_empty());
     assert!(o.stderr.is_empty());
+    assert_ne!(std::fs::metadata(&out).unwrap().ino(), old_inode);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), raw);
     let xml = std::fs::read_to_string(&out).unwrap();
     assert!(xml.contains("tests=\"2\" failures=\"1\" errors=\"0\" skipped=\"0\""));
@@ -72,6 +304,48 @@ fn a_result_file_is_reported_and_left_unchanged() {
     assert!(!xml.contains("logs/ok.log"), "{xml}");
     assert!(xml.contains("<failure type=\"failed\" message=\"failed\">"));
     assert!(xml.contains("log: logs/bad.log"));
+}
+
+#[test]
+fn fail_on_failure_writes_the_same_report_before_returning_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("result.json");
+    std::fs::write(
+        &path,
+        result(
+            1,
+            r#"{"easyconfig":"Bad.eb","unit":"all","phase":"build","status":"failed","exit_code":1}"#,
+        ),
+    )
+    .unwrap();
+
+    let default = bin().arg("--result").arg(&path).output().unwrap();
+    assert_eq!(default.status.code(), Some(0));
+    assert!(default.stderr.is_empty());
+
+    let gated = bin()
+        .arg("--result")
+        .arg(&path)
+        .arg("--fail-on-failure")
+        .output()
+        .unwrap();
+    assert_eq!(gated.status.code(), Some(1));
+    assert_eq!(gated.stdout, default.stdout);
+    assert!(gated.stderr.is_empty());
+
+    let report = dir.path().join("junit.xml");
+    let gated_file = bin()
+        .arg("--result")
+        .arg(&path)
+        .arg("--out")
+        .arg(&report)
+        .arg("--fail-on-failure")
+        .output()
+        .unwrap();
+    assert_eq!(gated_file.status.code(), Some(1));
+    assert!(gated_file.stdout.is_empty());
+    assert!(gated_file.stderr.is_empty());
+    assert_eq!(std::fs::read(report).unwrap(), default.stdout);
 }
 
 #[test]
@@ -97,6 +371,55 @@ fn a_plan_and_a_missing_file_are_usage_errors() {
 }
 
 #[test]
+fn a_reframe_report_adds_suites() {
+    let dir = tempfile::tempdir().unwrap();
+    let report = dir.path().join("reframe.json");
+    std::fs::write(
+        &report,
+        r#"{
+  "report_version": "4.8",
+  "runs": [
+    {
+      "system": "cluster",
+      "partition": "cpu",
+      "environ": "foss",
+      "testcases": [
+        {"name": "checks/ok", "result": "success", "time_total": 0.5},
+        {"name": "checks/wait", "result": "skipped", "fail_reason": "maint"},
+        {"name": "checks/fail", "result": "failure", "fail_reason": "wrong answer"}
+      ]
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+    let o = bin().arg("--reframe-report").arg(&report).output().unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let xml = String::from_utf8(o.stdout).unwrap();
+    assert!(xml.contains("name=\"reframe/cluster/cpu/foss\""), "{xml}");
+    assert!(xml.contains("name=\"checks/ok\""), "{xml}");
+    assert!(xml.contains("<skipped message=\"skipped\">"), "{xml}");
+    assert!(
+        xml.contains("<failure type=\"failure\" message=\"failure\">"),
+        "{xml}"
+    );
+    let gated = bin()
+        .args(["--reframe-report"])
+        .arg(&report)
+        .arg("--fail-on-failure")
+        .output()
+        .unwrap();
+    assert_eq!(gated.status.code(), Some(1));
+    assert_eq!(gated.stdout, xml.as_bytes());
+    assert!(gated.stderr.is_empty());
+}
+
+#[test]
 fn the_pages_name_eb_junit() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/orgmode");
     for rel in [
@@ -106,9 +429,40 @@ fn the_pages_name_eb_junit() {
     ] {
         let page = std::fs::read_to_string(root.join(rel)).unwrap();
         assert!(page.contains("eb-junit"), "{rel}");
+        assert!(page.contains("--reframe-report"), "{rel}");
+        assert!(page.contains("--property"), "{rel}");
     }
     let howto = std::fs::read_to_string(root.join("howto/index.org")).unwrap();
     assert!(howto.contains("publish-a-junit-report"), "{howto}");
     let reference = std::fs::read_to_string(root.join("reference/index.org")).unwrap();
     assert!(reference.contains("\n   junit\n"), "{reference}");
+}
+
+#[test]
+fn junit_succeeds_when_stdout_consumer_closes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("result.json");
+    std::fs::write(
+        &path,
+        r#"{"kind":"result","schema_version":1,"site":"s","target":"t","build_type":"b","run_id":"r","exit_code":0,"lines":[]}"#,
+    )
+    .unwrap();
+    let mut fds = [0; 2];
+    unsafe {
+        assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+        assert_eq!(libc::close(fds[0]), 0);
+    }
+    let closed = unsafe { <std::process::Stdio as std::os::fd::FromRawFd>::from_raw_fd(fds[1]) };
+    let o = bin()
+        .args(["--result"])
+        .arg(&path)
+        .stdout(closed)
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
 }

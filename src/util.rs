@@ -1,6 +1,148 @@
 //! Small helpers.
 
 use crate::exit::Fail;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+
+/// Write all bytes to standard output, treating a closed pipeline consumer as
+/// successful completion.
+pub fn write_stdout(bytes: &[u8]) -> std::io::Result<()> {
+    match std::io::stdout().lock().write_all(bytes) {
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        result => result,
+    }
+}
+
+/// A non-empty Unicode value from the process environment.
+pub fn env_value(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.is_empty())
+}
+
+/// Whether two paths name the same file, including through a symbolic or
+/// hard link. A path that does not exist is resolved through its parent.
+pub fn paths_alias(path_a: &Path, path_b: &Path) -> bool {
+    if resolved_path(path_a) == resolved_path(path_b) {
+        return true;
+    }
+    match (std::fs::metadata(path_a), std::fs::metadata(path_b)) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+        _ => false,
+    }
+}
+
+/// Resolve a path as far as the filesystem permits.
+pub fn resolved_path(path: &Path) -> PathBuf {
+    if let Ok(path) = std::fs::canonicalize(path) {
+        return path;
+    }
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
+    match (
+        std::fs::canonicalize(parent),
+        path.file_name().map(ToOwned::to_owned),
+    ) {
+        (Ok(parent), Some(name)) => parent.join(name),
+        _ => std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()),
+    }
+}
+
+/// Refuse an output path that aliases any input path.
+///
+/// `-` means standard output and is not a file destination.
+pub fn refuse_output_alias(
+    output_option: &str,
+    output: Option<&Path>,
+    inputs: &[(&str, Option<&Path>)],
+) -> Result<(), String> {
+    let Some(output) = output.filter(|path| *path != Path::new("-")) else {
+        return Ok(());
+    };
+    for (input_option, input) in inputs {
+        let Some(input) = input else {
+            continue;
+        };
+        if paths_alias(input, output) {
+            return Err(format!(
+                "{input_option} and {output_option} must name different files, both resolve to {}",
+                resolved_path(input).display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Atomically replace `path` through a fully written temporary sibling.
+///
+/// An existing regular file's permission bits are applied to the temporary
+/// file before the rename. Ownership follows the account creating the
+/// temporary file.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let destination = if path.is_symlink() {
+        let target = std::fs::read_link(path)?;
+        let target = if target.is_absolute() {
+            target
+        } else {
+            path.parent().unwrap_or_else(|| Path::new(".")).join(target)
+        };
+        resolved_path(&target)
+    } else {
+        path.to_path_buf()
+    };
+    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    let existing_mode = match std::fs::metadata(&destination) {
+        Ok(metadata) if metadata.is_file() => Some(metadata.permissions().mode() & 0o7777),
+        Ok(_) => None,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    let name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("output");
+    for attempt in 0..1000u32 {
+        let temporary = parent.join(format!(".{name}.{}.{}.tmp", std::process::id(), attempt));
+        let mut file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        };
+        if let Some(mode) = existing_mode {
+            if let Err(error) =
+                std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(mode))
+            {
+                drop(file);
+                let _ = std::fs::remove_file(&temporary);
+                return Err(error);
+            }
+        }
+        let written = file.write_all(bytes).and_then(|()| file.sync_all());
+        drop(file);
+        if let Err(error) = written {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(error);
+        }
+        if let Err(error) = std::fs::rename(&temporary, &destination) {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(error);
+        }
+        return Ok(());
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "cannot allocate a temporary output file",
+    ))
+}
 
 /// Split a string on whitespace, honouring single and double quotes.
 pub fn split_args(s: &str) -> Result<Vec<String>, Fail> {
@@ -208,6 +350,62 @@ pub fn package_of(easyconfig: &str) -> (String, Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn atomic_write_replaces_only_after_the_new_file_is_complete() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("result.json");
+        std::fs::write(&path, b"old bytes\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let old_inode = std::fs::metadata(&path).unwrap().ino();
+
+        write_atomic(&path, b"complete new bytes\n").unwrap();
+
+        let metadata = std::fs::metadata(&path).unwrap();
+        assert_ne!(metadata.ino(), old_inode);
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o640);
+        assert_eq!(std::fs::read(&path).unwrap(), b"complete new bytes\n");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn atomic_write_failure_preserves_the_previous_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("result.json");
+        std::fs::write(&path, b"complete old bytes\n").unwrap();
+        for attempt in 0..1000u32 {
+            std::fs::write(
+                dir.path().join(format!(
+                    ".result.json.{}.{}.tmp",
+                    std::process::id(),
+                    attempt
+                )),
+                b"occupied\n",
+            )
+            .unwrap();
+        }
+
+        let error = write_atomic(&path, b"new bytes\n").unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&path).unwrap(), b"complete old bytes\n");
+    }
+
+    #[test]
+    fn atomic_write_preserves_an_output_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("result.json");
+        let link = dir.path().join("latest.json");
+        std::fs::write(&target, b"old bytes\n").unwrap();
+        std::os::unix::fs::symlink("result.json", &link).unwrap();
+        let old_inode = std::fs::metadata(&target).unwrap().ino();
+
+        write_atomic(&link, b"new bytes\n").unwrap();
+
+        assert!(link.is_symlink());
+        assert_eq!(std::fs::read(&link).unwrap(), b"new bytes\n");
+        assert_ne!(std::fs::metadata(&target).unwrap().ino(), old_inode);
+    }
 
     #[test]
     fn split_quotes() {

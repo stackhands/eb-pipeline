@@ -1,1 +1,0 @@
-When the job directory wrapper of `filesystems.job_dir` stops the job of `eb-stack rebuild-set`, as when the job's node has no directory for it, the warning of a record and the error of `watch` quote the first line in which the wrapper says why, after the path of the job's log, as they do for the probe. Before, they gave the path only.

@@ -9,7 +9,8 @@ use std::process::{Command, Stdio};
 /// A sibling tool that eb-pipeline starts as a subprocess.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
-    /// eb-stack, for `stack shard`, `stack admit` and `stack sbom`.
+    /// eb-stack, for stack planning, admission, SBOMs, resume, offline bundles
+    /// and, when `[attest]` is enabled, `recipe easyblock`.
     EbStack,
     /// eb-keep-logs, for `failed` and `rotate`.
     EbKeepLogs,
@@ -67,7 +68,12 @@ impl Tool {
 /// Tools that an enabled phase calls.
 pub fn needed(site: &Site) -> Vec<Tool> {
     let mut v = Vec::new();
-    if site.shards_on().is_some() || site.admission_on().is_some() || site.sbom_on().is_some() {
+    if site.shards_on().is_some()
+        || site.resume_on().is_some()
+        || site.admission_on().is_some()
+        || site.sbom_on().is_some()
+        || site.attest_on().is_some()
+    {
         v.push(Tool::EbStack);
     }
     if site.logs_on().is_some() {
@@ -120,25 +126,8 @@ pub fn help_lists(bin: &str, env: &BTreeMap<String, String>, option: &str) -> Re
 pub fn check_versions(site: &Site, probe_all: bool) -> Result<(), Fail> {
     let mut problems = Vec::new();
     for t in needed(site) {
-        let min = t.min_version(site);
-        if min.is_none() && !probe_all {
-            continue;
-        }
-        let bin = t.bin(site);
-        match probe(&bin) {
-            Err(e) => problems.push(format!("{}: {e}", t.key())),
-            Ok(found) => {
-                if let Some(m) = min.as_deref().and_then(parse_version) {
-                    if cmp_version(&found, &m) == std::cmp::Ordering::Less {
-                        problems.push(format!(
-                            "{}: version {} is below min_version {}",
-                            t.key(),
-                            join(&found),
-                            join(&m)
-                        ));
-                    }
-                }
-            }
+        if let Err(problem) = check_one(site, t, probe_all) {
+            problems.push(problem);
         }
     }
     if problems.is_empty() {
@@ -146,6 +135,28 @@ pub fn check_versions(site: &Site, probe_all: bool) -> Result<(), Fail> {
     } else {
         Err(Fail::new(exit::USAGE, problems.join("; ")))
     }
+}
+
+/// Check one tool's configured minimum. With `probe_without_minimum`, also
+/// require a tool that has no minimum to answer `--version`.
+pub fn check_one(site: &Site, tool: Tool, probe_without_minimum: bool) -> Result<(), String> {
+    let min = tool.min_version(site);
+    if min.is_none() && !probe_without_minimum {
+        return Ok(());
+    }
+    let bin = tool.bin(site);
+    let found = probe(&bin).map_err(|e| format!("{}: {e}", tool.key()))?;
+    if let Some(m) = min.as_deref().and_then(parse_version) {
+        if cmp_version(&found, &m) == std::cmp::Ordering::Less {
+            return Err(format!(
+                "{}: version {} is below min_version {}",
+                tool.key(),
+                join(&found),
+                join(&m)
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn join(v: &[u64]) -> String {

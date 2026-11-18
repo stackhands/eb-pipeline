@@ -4,24 +4,34 @@
 
 * Environment variables
 
-The variables =eb-pipeline= reads in place of an option or a site file value, the ones a run reads because the site file names them or from the module environment, and the ones it sets for the commands it starts.
+The variables the eb-pipeline commands read in place of an option or a site file value, the ones a run reads because the site file names them or from the module environment, and the ones it sets for the commands it starts.
 
 ** Options
 
 An option that is not on the command line takes its value from its variable.
 An option on the command line wins.
 
-| Variable                 | Option         | Commands                                                        |
-|--------------------------+----------------+-----------------------------------------------------------------|
-| =EB_PIPELINE_SITE=       | =--site=       | =check=, =explain=, =targets=, =status=, =plan=, =run=, =watch= |
-| =EB_PIPELINE_LIST=       | =--list=       | =plan=, =run=                                                   |
-| =EB_PIPELINE_TARGET=     | =--target=     | =explain=, =status=, =plan=, =run=, =watch=                     |
-| =EB_PIPELINE_BUILD_TYPE= | =--build-type= | =explain=, =plan=, =run=, =watch=                               |
-| =EB_PIPELINE_RUN_ID=     | =--run-id=     | =plan=, =run=, =watch=                                          |
-| =EB_PIPELINE_LOG_STAMP=  | =--log-stamp=  | =plan=, =run=, =watch=                                          |
-| =EB_PIPELINE_LISTS_DIR=  | =--lists-dir=  | =check=                                                         |
+| Variable                   | Option             | Commands                                                                                                  |
+|----------------------------+--------------------+-----------------------------------------------------------------------------------------------------------|
+| =EB_PIPELINE_SITE=         | =--site=           | =check=, =explain=, =targets=, =status=, =plan=, =run=, =verify=, =watch=, =audit=                         |
+| =EB_PIPELINE_LIST=         | =--list=           | =check=, =plan=, =run=, =verify=, =eb-retry-list=, =eb-test-map=                                          |
+| =EB_PIPELINE_PACKAGE_PLAN= | =--package-plan=   | =plan=, =run=                                                                                             |
+| =EB_PIPELINE_TARGET=       | =--target=         | =check=, =explain=, =status=, =plan=, =run=, =verify=, =watch=, =audit=, =eb-retry-list=, =eb-shard-weights= |
+| =EB_PIPELINE_BUILD_TYPE=   | =--build-type=     | =explain=, =plan=, =run=, =verify=, =watch=                                                               |
+| =EB_PIPELINE_RUN_ID=       | =--run-id=         | =plan=, =run=, =watch=                                                                                    |
+| =EB_PIPELINE_LOG_STAMP=    | =--log-stamp=      | =plan=, =run=, =watch=                                                                                    |
+| =EB_PIPELINE_LISTS_DIR=    | =--lists-dir=      | =check=                                                                                                   |
+| =EB_PIPELINE_RESULT=       | =--result=         | =metrics=, =eb-junit=, =eb-retry-list=, =eb-shard-weights=, =eb-test-map=                                 |
+| =EB_PIPELINE_INIT_HINTS=   | =--hints=          | =init=                                                                                                    |
 
-=--out=, =--result=, =--shard-plan=, =--format=, =--last=, =--dry-run=, =--probe-tools=, =--adopt= and =--plan-out= have no variable.
+=--out=, =run --result=, =--shard-plan=, =--verify-package-plan=, =--format=,
+=--last=, =--dry-run=, =--probe-tools=, =--adopt= and =--plan-out= have no
+variable.
+
+For companion tools, an explicit alternative input wins over an environment
+fallback: =eb-retry-list --summary= ignores =EB_PIPELINE_RESULT=,
+=eb-retry-list --recorded-list= ignores =EB_PIPELINE_LIST=, and
+=eb-junit --reframe-report= ignores =EB_PIPELINE_RESULT=.
 
 ** Site file values
 
@@ -97,6 +107,7 @@ The keys of =[scheduler.env]= come first, and a variable of the table below with
 | =EB_PIPELINE_LOG_STAMP=                                                                             | the log stamp                                                                                           | always                                               |
 | =EB_PIPELINE_LOG_DIR=                                                                               | =LOG_ROOT/LOG_STAMP/TARGET=, the run's log directory                                                    | always                                               |
 | =EB_PIPELINE_JOB_DIR=                                                                               | =filesystems.job_dir=; inside the job, the job's directory, with ={job}= and ={user}= replaced          | it is set                                            |
+| =EB_PIPELINE_WORKSPACE_REPO=                                                                        | =filesystems.workspace_repo=; inside the job, names the restart directory suffix when =SLURM_RESTART_COUNT= is nonzero | it is set                                            |
 | =EB_PIPELINE_BUILD_ACCOUNT=                                                                         | =site.build_account=                                                                                    | it is set                                            |
 | =EB_PIPELINE_DEFAULT_GROUP=                                                                         | =site.default_group=                                                                                    | it is set                                            |
 | =EB_PIPELINE_MODULES=                                                                               | the entries of =modules.init=, joined with spaces                                                       | =modules.init= is not empty                          |
@@ -135,6 +146,11 @@ Some commands get more variables, set over those above.
 | =EB_PIPELINE_CACHE_CONFIG=                                                                  | the =config= of the target's entry in =[[caches.targets]]=                                                                | =[caches].command=                                                              |
 | =EB_PIPELINE_CACHE_BINDINGS=                                                                | =caches.bindings=                                                                                                         | the same, when it is set                                                        |
 | =EB_PIPELINE_CACHE_INIT_MODULE=                                                             | the =init_module= of the target's entry, else =caches.init_module=                                                        | the same, when one of them is set                                               |
+| =EB_PIPELINE_CHECK_SOFTWARE=                                                                | the target's resolved =software_root=                                                                                     | =[checks].command=                                                              |
+| =EB_PIPELINE_CHECK_MODULES=                                                                 | the target's resolved =modules_root=                                                                                      | =[checks].command=                                                              |
+| =EB_PIPELINE_CHECK_RUN_ID=                                                                  | the run id                                                                                                                | =[checks].command=                                                              |
+| =EB_PIPELINE_CHECK_LOG_DIR=                                                                 | the run's log directory                                                                                                   | =[checks].command=                                                              |
+| =EB_PIPELINE_CHECK_STAGED=                                                                  | =1= when at least one line was a staged rebuild, =0= otherwise                                                            | =[checks].command=                                                              |
 
 *** The module wrapper
 
@@ -159,6 +175,12 @@ When =filesystems.job_dir= is set, every command that =run= or =watch= starts wi
 
 It then starts the module wrapper, when there is one, or the command.
 It replaces the placeholders as text, without expanding what it puts in, so a space or a =$= in a path reaches the command as written.
+
+** Tests
+
+| Variable                  | Use                                                                                                                    |
+|---------------------------+------------------------------------------------------------------------------------------------------------------------|
+| =EB_PIPELINE_LINT_DENY=   | Comma-separated extra substrings refused in templates during =cargo test --locked --test examples=; empty by default. |
 
 ** See also
 

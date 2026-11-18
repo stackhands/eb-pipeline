@@ -9,15 +9,22 @@ It copies each line's recorded status into a test case.
 It does not decide why a line failed, it does not read a build list, and it does not start =eb=, =eb-stack=, =eb-keep-logs=, or =eb-staged-rebuild=.
 
 #+begin_example
-eb-junit --result FILE... [--out FILE]
+eb-junit [--result FILE]... [--reframe-report FILE]... [--out FILE]
+         [--property NAME=VALUE]... [--fail-on-failure]
 #+end_example
 
 | Option | Meaning |
 |--------+---------|
-| =--result FILE= | One result file. Repeat the option for another file. Required. |
-| =--out FILE= | Write the document to =FILE=. =-= or absent prints it on stdout. An existing file is overwritten. |
+| =--result FILE= | One result file. Repeat the option for another file. |
+| =--reframe-report FILE= | One ReFrame report JSON from =reframe --report-file=. Repeat the option for another file. |
+| =--out FILE= | Write the document to =FILE=. =-= or absent prints it on stdout. A complete report atomically replaces an existing file unless it aliases a result or ReFrame report input, which is refused. |
+| =--property NAME=VALUE= | Add the property to every suite. Repeat for more properties. |
+| =--fail-on-failure= | After writing the complete document, exit 1 when it contains at least one =failure= case. |
+
+At least one of =--result= or =--reframe-report= is required.
 
 Exit 0 means the document was written, including when =exit_code= in a result is not 0.
+With =--fail-on-failure=, exit 1 means the document was written and contains at least one failure.
 Exit 2 means an argument is missing, a file cannot be read or parsed, a result is not schema version 1, a required field has the wrong type, or the document cannot be written.
 
 [[file:../howto/publish-a-junit-report.org][Publish a JUnit report of a pipeline run]] puts the document in a CI job.
@@ -36,7 +43,17 @@ A newline in an attribute is written as a space.
 | =property= | One recorded field, for a reader that keeps properties. GitLab does not display these. |
 | =testcase= | One recorded line, then a =TARGET/run= case when the rules below add one. |
 
+With =--reframe-report=, each run in that file is another =testsuite=.
+Its =testcases= array becomes cases in order.
+A =result= of =success= has no child element, =skipped= is a =skipped= case, and every other result is a =failure= whose =type= and =message= are that result string.
+
 A property is present when the result has that field.
+Each =--property NAME=VALUE= adds a property to every result and ReFrame suite.
+Names and values use the same XML escaping as recorded properties.
+An empty value is valid.
+When a name repeats, the last command-line value wins.
+A command-line value also replaces a recorded property with the same name.
+New command-line property names appear in lexical order after the recorded properties.
 
 | Property | Source |
 |----------+--------|
@@ -61,7 +78,7 @@ Phases are not cases.
 
 | Attribute | Value |
 |-----------+-------|
-| =name= | =TARGET/EASYCONFIG=. A later line with the same easyconfig in that result is =TARGET/EASYCONFIG #2=, then =#3=, and so on. GitLab keeps the first case of a repeated name and drops the rest, including across the reports of one pipeline, so the target is part of the name and a repeated line is numbered. The name does not include the run id, so the same line has the same name on the next run. |
+| =name= | =TARGET/EASYCONFIG=. A later line with the same XML-safe name in that result is =TARGET/EASYCONFIG #2=, then =#3=, and so on. Names are compared after XML 1.0 character removal, so distinct recorded names cannot collapse into one displayed case. GitLab keeps the first case of a repeated name and drops the rest, including across the reports of one pipeline, so the target is part of the name and a repeated line is numbered. The name does not include the run id, so the same line has the same name on the next run. |
 | =classname= | =SITE/TARGET=. GitLab shows this as the suite. |
 | =file= | The easyconfig, as recorded. |
 | =time= | =duration_seconds=, to the millisecond. Absent when the line did not start. |

@@ -109,6 +109,9 @@ fn d_cpu_var() -> String {
 fn d_accel_var() -> String {
     "EESSI_ACCELERATOR_TARGET_OVERRIDE".into()
 }
+fn d_sidecar() -> String {
+    "rfc9162-sidecar".into()
+}
 
 doc_struct! {
     /// A sibling tool: binary and minimum version.
@@ -124,7 +127,7 @@ doc_struct! {
     /// Sibling tool table.
     Tools {
         eb_stack: Option<ToolSpec> => ("table", "bin eb-stack", false,
-            "eb-stack, called for `stack shard` and `stack admit`."),
+            "eb-stack, called for `stack shard`, `stack admit`, `stack sbom` and offline-bundle planning. With `[resume]` enabled, `run` also calls `stack order --hashes-out` and may call `stack shard` for restart boundaries. With `[attest]` enabled, `plan` and `run` call `stack order` and may call `recipe easyblock`."),
         eb_keep_logs: Option<ToolSpec> => ("table", "bin eb-keep-logs", false,
             "eb-keep-logs, called for `failed` and `rotate`."),
         eb_staged_rebuild: Option<ToolSpec> => ("table", "bin eb-staged-rebuild", false,
@@ -394,6 +397,34 @@ doc_struct! {
 }
 
 doc_struct! {
+    /// One local test or runtime asset added to an offline bundle.
+    OfflineAsset {
+        path: String => ("string", "", true,
+            "Local file to copy after its SHA-256 is checked."),
+        url: String => ("string", "", true,
+            "Upstream URL recorded in the bundle manifest."),
+        sha256: String => ("string", "", true,
+            "Expected lowercase SHA-256 of `path`."),
+        consumer: String => ("string", "", true,
+            "Test, package or command that consumes the asset."),
+        local_name: Option<String> => ("string", "file name of path", false,
+            "Portable name recorded in the manifest."),
+    }
+}
+
+doc_struct! {
+    /// One foreign package input inspected while an offline bundle is made.
+    ForeignInput {
+        source: String => ("string", "", true,
+            "Foreign recipe or package metadata passed to `eb-stack package inspect --source`."),
+        format: String => ("string", "", true,
+            "Format passed to `eb-stack package inspect --format`."),
+        toolchain: String => ("string", "", true,
+            "Toolchain passed to `eb-stack package inspect --toolchain`."),
+    }
+}
+
+doc_struct! {
     /// Source prefetch.
     Sources {
         #[serde(default = "yes")]
@@ -404,6 +435,18 @@ doc_struct! {
         #[serde(default)]
         extra_args: Vec<String> => ("array of string", "[]", false,
             "Extra arguments for the prefetch command, after the line's own. `--disable-robot` drops `--robot`, so a line fetches its own sources only; a line's `--robot=PATH` moves to the front of `--robot-paths`."),
+        #[serde(default)]
+        easyconfigs: Vec<String> => ("array of string", "[]", false,
+            "Robot trees passed to `eb-stack stack order` and `stack files` when `--offline-bundle` is set."),
+        #[serde(default)]
+        assets: Vec<OfflineAsset> => ("array of table", "[]", false,
+            "Local test and runtime assets copied into an offline bundle after their configured SHA-256 values are checked."),
+        #[serde(default)]
+        foreign: Vec<ForeignInput> => ("array of table", "[]", false,
+            "Foreign package inputs inspected by `eb-stack package inspect` when an offline bundle is made."),
+        #[serde(default)]
+        offline_wrapper: Vec<String> => ("array of string", "[]", false,
+            "Command and arguments placed before admission, build, check, cache, log and notification commands when `run --require-offline` is set. The wrapper must refuse network access and end with any separator it needs before the command."),
     }
 }
 
@@ -597,6 +640,21 @@ fn d_when() -> String {
 }
 
 doc_struct! {
+    /// Host ABI fingerprint checks that trigger selective watch rebuilds.
+    AbiDrift {
+        #[serde(default)]
+        enabled: bool => ("boolean", "false", false,
+            "Set true to compare a host ABI fingerprint during `watch`; false leaves `watch` byte-identical to earlier behavior."),
+        #[serde(default)]
+        probe: BTreeMap<String, String> => ("table of string", "{}", false,
+            "One shell command per fingerprint field; `watch` runs each in the target environment and stores the field's trimmed standard output."),
+        #[serde(default)]
+        providers: BTreeMap<String, Vec<String>> => ("table of array of string", "{}", false,
+            "One list of provider easyconfig file names per field; when a field changes, `watch` gives these names to `eb-stack rebuild-set --changed`."),
+    }
+}
+
+doc_struct! {
     /// What each install was built against in EESSI, and the rebuild of the
     /// installs an EESSI change reaches.
     Watch {
@@ -615,6 +673,8 @@ doc_struct! {
         #[serde(default = "yes")]
         rebuild_review: bool => ("boolean", "true", false,
             "Rebuild an install when a dependency `eb-stack rebuild-set` classes `review`, such as one only its build used, changed or vanished; false keeps it and warns."),
+        abi_drift: Option<AbiDrift> => ("table", "none", false,
+            "Opt-in host ABI drift checks for `watch`, with one probe command per field and one provider easyconfig list per field."),
     }
 }
 
@@ -625,6 +685,53 @@ doc_struct! {
         enabled: bool => ("boolean", "true", false, "Set false to store nothing."),
         lock: Option<String> => ("string", "none", false,
             "Lock file given to `eb-stack stack sbom --lock`. After a clean build the CycloneDX document is `sbom.cdx.json` beside `summary.json`. Required when enabled."),
+    }
+}
+
+doc_struct! {
+    /// Resume a run only when the inputs still match the prior result.
+    Resume {
+        #[serde(default)]
+        enabled: bool => ("boolean", "false", false,
+            "Set true to record the input identity and each successful line's module files, and to allow `run --resume-result`. False or absent, a run records neither and `--resume-result` is refused."),
+        #[serde(default)]
+        easyconfigs: Vec<String> => ("array of string", "[]", false,
+            "Easyconfig trees for `eb-stack stack order --easyconfigs` and, when `shards` is at least 2 and `[shards]` is not already planning, for `eb-stack stack shard --easyconfigs`. At least one is required when enabled, unless `[shards] easyconfigs` names one. `resume.easyconfigs` wins when it is not empty."),
+        #[serde(default = "d_one")]
+        shards: u32 => ("integer", "1", false,
+            "When `[shards]` is not planning, the `--shards` of `eb-stack stack shard` that makes the prelude and shard restart boundaries. Below 2, the list stays one unit."),
+    }
+}
+
+doc_struct! {
+    /// Hash the exact inputs of a finalized plan into an RFC 9162 sidecar log.
+    Attest {
+        #[serde(default)]
+        enabled: bool => ("boolean", "false", false,
+            "Set true to append an input record on `plan` and on `run`. False or absent, neither command records one, and `verify` is refused."),
+        log_dir: Option<String> => ("string", "none", false,
+            "Directory of the sidecar log. Required when enabled, and kept for this log alone: `rfc9162-sidecar sync` records every file in it."),
+        key: Option<String> => ("string", "none", false,
+            "PKCS#8 PEM file passed to `rfc9162-sidecar snapshot --key`. Required when enabled."),
+        origin: Option<String> => ("string", "none", false,
+            "Checkpoint origin passed to `rfc9162-sidecar snapshot --origin`. Required when enabled. A trusted line names this origin."),
+        #[serde(default)]
+        trusted: Vec<String> => ("array of string", "[]", false,
+            "Verifier lines `name+keyid+base64` passed to `rfc9162-sidecar verify-proof --trusted`. At least one is required when enabled."),
+        #[serde(default = "d_sidecar")]
+        bin: String => ("string", "rfc9162-sidecar", false,
+            "The `rfc9162-sidecar` program. It is not probed with `--version`."),
+        image_digest_env: Option<String> => ("string", "none", false,
+            "Environment variable that holds the container image digest. When set, an empty value refuses the attestation."),
+        #[serde(default)]
+        easyconfigs: Vec<String> => ("array of string", "[]", false,
+            "Easyconfig trees for `eb-stack stack order --easyconfigs`. When empty, `resume.easyconfigs` is used, then `shards.easyconfigs`."),
+        #[serde(default)]
+        easyblocks: Vec<String> => ("array of string", "[]", false,
+            "Directories searched for the Python file that defines each resolved easyblock class. A class with no file is recorded with an empty path."),
+        #[serde(default)]
+        patches: Vec<String> => ("array of string", "[]", false,
+            "Extra directories searched, with the easyconfig's directory and the easyconfig trees, for a patch a resolved easyconfig names."),
     }
 }
 
@@ -640,6 +747,10 @@ doc_struct! {
         filesystems: Filesystems => ("table", "", true, "Paths."),
         admission: Option<Admission> => ("table", "none", false, "Inode admission."),
         shards: Option<Shards> => ("table", "none", false, "Shard planning."),
+        resume: Option<Resume> => ("table", "none", false,
+            "When enabled, `run` records the `eb-stack stack order --hashes-out` identity and can resume from it with `--resume-result`. Absent, a run does not record an identity."),
+        attest: Option<Attest> => ("table", "none", false,
+            "When enabled, `plan` and `run` append a hash of the exact inputs to an RFC 9162 sidecar log. Absent, they record nothing."),
         sources: Option<Sources> => ("table", "none", false, "Source prefetch."),
         modules: Modules => ("table", "", true, "Environment modules."),
         caches: Option<Caches> => ("table", "none", false, "Module caches."),
@@ -673,7 +784,11 @@ pub const SECTIONS: &[(&str, &[FieldDoc])] = &[
     ("filesystems", Filesystems::FIELDS),
     ("admission", Admission::FIELDS),
     ("shards", Shards::FIELDS),
+    ("resume", Resume::FIELDS),
+    ("attest", Attest::FIELDS),
     ("sources", Sources::FIELDS),
+    ("sources.assets[]", OfflineAsset::FIELDS),
+    ("sources.foreign[]", ForeignInput::FIELDS),
     ("modules", Modules::FIELDS),
     ("modules.eessi", Eessi::FIELDS),
     ("caches", Caches::FIELDS),
@@ -687,6 +802,7 @@ pub const SECTIONS: &[(&str, &[FieldDoc])] = &[
     ("notify", Notify::FIELDS),
     ("sbom", Sbom::FIELDS),
     ("watch", Watch::FIELDS),
+    ("watch.abi_drift", AbiDrift::FIELDS),
 ];
 
 /// Render the key reference as plain text.
@@ -782,7 +898,11 @@ mod tests {
             Filesystems,
             Admission,
             Shards,
+            Resume,
+            Attest,
             Sources,
+            OfflineAsset,
+            ForeignInput,
             Modules,
             Eessi,
             Caches,
@@ -795,6 +915,7 @@ mod tests {
             LicenceRequired,
             Notify,
             Sbom,
+            AbiDrift,
             Watch,
         );
         // Every documented table appears in the printed reference.

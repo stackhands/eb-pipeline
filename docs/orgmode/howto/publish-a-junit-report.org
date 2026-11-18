@@ -42,7 +42,35 @@ GitLab shows a test report from JUnit XML, and a Jacamar runner starts ordinary 
    eb-junit --result result-zen2.json --result result-zen4.json --out junit.xml
    #+end_src
 
-3. On GitHub Actions, add the report next to the result upload.
+3. To fold ReFrame's own report into the same XML, pass =--reframe-report=:
+
+   #+begin_src bash
+   eb-junit --result result-cpu.json --reframe-report reframe-report.json --out junit-cpu.xml
+   #+end_src
+
+4. To attach CI metadata to every suite, repeat =--property NAME=VALUE=:
+
+   #+begin_src bash
+   eb-junit --result result-cpu.json --out junit-cpu.xml \
+     --property "revision=$GITHUB_SHA" \
+     --property "job=$GITHUB_JOB"
+   #+end_src
+
+   The property values are XML-escaped.
+   A later option with the same name replaces the earlier value and any recorded property with that name.
+
+5. To make the report itself gate a job, add =--fail-on-failure=:
+
+   #+begin_src bash
+   eb-junit --reframe-report reframe-report.json --out reframe-junit.xml \
+     --fail-on-failure
+   #+end_src
+
+   The complete XML file is written first.
+   The command then exits 1 when any result became a =failure= case.
+   Without this option, report generation exits 0 after writing valid XML, as in the pipeline-result examples above.
+
+6. On GitHub Actions, add the report next to the result upload.
    =if: always()= runs it when the build step failed.
    This is the same upload action as =examples/ci/github-actions.yml=:
 
@@ -56,7 +84,7 @@ GitLab shows a test report from JUnit XML, and a Jacamar runner starts ordinary 
        path: junit-${{ matrix.target }}.xml
    #+end_src
 
-4. On GitLab, including a job a Jacamar runner starts, publish the XML as a JUnit report and keep the job's exit status as the run's.
+7. On GitLab, including a job a Jacamar runner starts, publish the XML as a JUnit report and keep the job's exit status as the run's.
    =artifacts:when: always= uploads it when the run failed.
 
    #+begin_src yaml
@@ -83,6 +111,7 @@ GitLab shows a test report from JUnit XML, and a Jacamar runner starts ordinary 
 * Check that it worked
 
 =eb-junit --result result-cpu.json= prints the report on stdout and exits 0.
+With =--fail-on-failure=, the same bytes are written before a failing report exits 1.
 The case of a success names the target and the easyconfig, and does not repeat that line's log path.
 A line recorded as =failed=, =refused=, =pending=, or any other status except =success= and =skipped=, is a failure whose =type= is that status.
 A line recorded as =skipped= is a skipped case.
@@ -92,7 +121,7 @@ A line recorded as =skipped= is a skipped case.
 
 | Message | Cause | What to do |
 |---------+-------+------------|
-| =eb-junit: --result is required= | No result file was given. | Pass each =run --result= file. |
+| =eb-junit: --result or --reframe-report is required= | Neither =--result= nor =--reframe-report= was given. | Pass at least one =run --result= or =reframe --report-file= JSON file. |
 | =eb-junit: PATH: expected kind `result`, found `plan`= | The file is a plan, a summary, or another JSON document. | Pass the file =run --result= wrote. =summary.json= is not a result file; =metrics= and =status= read the other views. |
 | =eb-junit: cannot read PATH: No such file or directory= | The run stopped before it wrote a result, or the path is wrong. | An input error exits 2 and leaves no result file. Read the run's =ERROR= lines. |
 | =eb-junit: PATH: schema_version must be 1= | The file is a newer or older result than this =eb-junit=. | Use the =eb-junit= from the same release as the =eb-pipeline= that wrote the file. |

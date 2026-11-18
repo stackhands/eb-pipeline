@@ -1,11 +1,37 @@
 eb-test-map: name the tests that cover the easyconfigs in a build list.
 
-  eb-test-map --map FILE --list FILE [--toolchain NAME]... [--allow-unmapped]
+  eb-test-map --map FILE (--list FILE | --result FILE) [--toolchain NAME]...
+              [--allow-unmapped] [--include-resumed] [--format text|reframe]
+  eb-test-map (--list FILE | --result FILE) --format eessi-modules
+              [--toolchain NAME]... [--include-resumed]
 
 FILE of --map has one software name and one test name per line.
-A line of --list is an easyconfig, or a path to one. The software name is
-the part of the file name before the version. GCC, GCCcore, foss, gfbf,
-gomkl, gompi, iimpi, intel and intel-compilers have no test of their own.
---toolchain names another. Any other software with no row exits 2, unless
---allow-unmapped is set, and then nothing is printed. The test names go
-to stdout, one per line, sorted, each once.
+A --list file is a build list, or an easystack when its file name ends in
+.yml or .yaml. A line of that list is an easyconfig, or a path to one.
+--result FILE reads a result written by `eb-pipeline run --result` and keeps
+only lines whose status is `success`.
+--include-resumed also keeps skipped lines whose note starts with `resumed:`,
+which a run writes when prior successful outputs remain. It requires --result.
+
+When neither input option is present, `EB_PIPELINE_LIST` and
+`EB_PIPELINE_RESULT` supply their corresponding options. A command-line input
+wins.
+
+The software name is the part of an easyconfig file name before the version.
+GCC, GCCcore, foss, gfbf, gomkl, gompi, iimpi, intel and intel-compilers
+have no test of their own. --toolchain names another.
+
+--format text is the default and prints one test name per line.
+--format reframe prints one ReFrame selector per line as `-n ^<name>$`,
+with regular-expression characters escaped.
+For text and reframe, an application with no row exits 2 unless
+--allow-unmapped is set. --map is required.
+
+--format eessi-modules does not read a map. It prints one line,
+`--setvar modules=Name/Version,...`, for the applications in the list.
+That is the argument ReFrame passes to the EESSI test suite: the value
+is a comma-separated list of module names (Name/VersionFull), with no
+spaces, and set_modules keeps a test whose module names are all in it.
+Toolchains are left out. A repeated name is printed once, and the names
+are sorted. When the list has no application, nothing is printed and the
+command exits 0.

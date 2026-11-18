@@ -1,0 +1,36 @@
+#+TITLE: Check from-commit pins before building
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Check from-commit pins before building
+
+Use =check --check-from-commit= when an easystack still carries =from-commit=
+or =include-easyblocks-from-commit= pins that the configured EasyBuild release
+tag already contains. The check is opt-in; ordinary =check --site site.toml=
+still validates only the site file.
+
+** Run the check
+
+Pass an easystack =.yml= or =.yaml= file and the git checkouts =eb-stack=
+needs to read the pins:
+
+#+begin_src bash
+eb-pipeline check \
+  --list stack.yml \
+  --check-from-commit \
+  --easyconfigs-repo ~/src/easybuild-easyconfigs \
+  --easyblocks-repo ~/src/easybuild-easyblocks
+#+end_src
+
+=eb-pipeline= runs =eb-stack stack from-commit --easystack FILE --json= as a
+direct subprocess. It forwards the report on stdout and stderr and exits with
+the same status as =eb-stack=: exit 1 when any pin is already in the release,
+so continuous integration (CI) can refuse redundant fetches before a build
+starts.
+
+The configured =[site.tools.eb_stack].bin= is used when =--site= is also
+passed; otherwise =eb-stack= is found on the executable search path (=PATH=).
+
+An optional =--easybuild-version X.Y.Z= overrides the =eb-X.Y.Z= token in the
+list file name. The other repository flags are passed through when the easystack
+names pins that need them.

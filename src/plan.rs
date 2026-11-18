@@ -4,6 +4,7 @@
 
 use crate::easystack::is_easystack;
 use crate::exit::{self, Fail};
+use crate::package_plan::{Input as PackagePlanInput, Verification, R_DESCRIPTION_CHECK};
 use crate::resolve::{Role, Scope};
 use crate::tools::Tool;
 use crate::util::{list_word, parse_list, quote, ListLine};
@@ -64,6 +65,9 @@ pub struct Plan {
     pub run_id: String,
     /// The build list, as given.
     pub list: String,
+    /// SHA-256 of the eb-stack `package.plan.json`, for a package-plan input.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package_plan_digest: Option<String>,
     /// Where the run writes its logs.
     pub log_dir: String,
     /// The build list's lines, without blank lines and comments.
@@ -79,6 +83,10 @@ pub struct Plan {
     /// Lines left out by the target's selector.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub deselected: Vec<Deselected>,
+    /// Checkpoint and inclusion proof of the input record, when `[attest]` is
+    /// enabled. Absent, the plan JSON is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_attestation: Option<crate::attest::InputAttestation>,
 }
 
 /// A line that the target's selector left out.
@@ -91,7 +99,7 @@ pub struct Deselected {
 }
 
 /// Every phase, in the order a run goes through them.
-pub const PHASES: [&str; 9] = [
+pub const PHASES: [&str; 10] = [
     "preflight",
     "licences",
     "shard",
@@ -99,6 +107,7 @@ pub const PHASES: [&str; 9] = [
     "admission",
     "build",
     "checks",
+    "verification",
     "caches",
     "logs",
 ];
@@ -131,6 +140,14 @@ pub struct Planner<'a> {
     /// time; `None` plans the `${NAME}` placeholders and keeps every
     /// installed-modules directory.
     pub runtime_env: Option<BTreeMap<String, String>>,
+    /// Bundle directory requested by `--offline-bundle`.
+    pub offline_bundle: Option<PathBuf>,
+    /// Network-isolating command requested by `--require-offline`.
+    pub offline_wrapper: Vec<String>,
+    /// Validated eb-stack package-plan input, when one was selected.
+    pub package_plan: Option<PackagePlanInput>,
+    /// Whether to run the package plan's ecosystem-native checks.
+    pub verify_package_plan: bool,
 }
 
 /// Module path of an easyconfig relative to `<modules_root>/all`, without extension.
@@ -147,6 +164,19 @@ pub fn wants_rebuild(line: &ListLine) -> bool {
     line.args
         .iter()
         .any(|a| a == "--rebuild" || a == "-f" || a == "--force")
+}
+
+/// Append EasyBuild's options and one easyconfig operand. A leading-dash
+/// operand follows `--`; ordinary lines retain their historical order.
+fn push_eb_line(argv: &mut Vec<String>, easyconfig: &str, options: Vec<String>) {
+    if easyconfig.starts_with('-') {
+        argv.extend(options);
+        argv.push("--".into());
+        argv.push(easyconfig.into());
+    } else {
+        argv.push(easyconfig.into());
+        argv.extend(options);
+    }
 }
 
 /// Line options for a fetch with the robot disabled: a bare `--robot` goes,
@@ -220,6 +250,10 @@ impl<'a> Planner<'a> {
             job_id: None,
             route_digest: None,
             runtime_env: None,
+            offline_bundle: None,
+            offline_wrapper: Vec::new(),
+            package_plan: None,
+            verify_package_plan: false,
         }
     }
 
@@ -237,7 +271,7 @@ impl<'a> Planner<'a> {
         let mut kept = Vec::new();
         let mut out = Vec::new();
         for l in lines {
-            let r = crate::select::select_line(sel, l);
+            let r = crate::select::select_line(sel, l)?;
             if r.planned {
                 let raw = if sel.strip {
                     let mut words = Vec::new();
@@ -272,16 +306,23 @@ impl<'a> Planner<'a> {
         )
     }
 
-    /// Where a run writes the lines it read from an easystack, which
-    /// `stack shard` reads as a build list; with a selector, the selected
-    /// list holds them.
+    /// Where a run writes generated build-list lines, which `stack shard`
+    /// reads: package-plan recipes or lines read from an easystack. With a
+    /// selector, the selected list holds them instead.
     pub fn easystack_list_path(&self) -> Option<PathBuf> {
-        if self.scope.target.select.is_some() || !is_easystack(Path::new(&self.list_path)) {
+        if self.scope.target.select.is_some() {
             return None;
         }
+        let stem = if self.package_plan.is_some() {
+            "package-plan"
+        } else if is_easystack(Path::new(&self.list_path)) {
+            "easystack"
+        } else {
+            return None;
+        };
         Some(
             PathBuf::from(self.scope.log_dir())
-                .join(format!("easystack-{}.list", self.scope.target.name)),
+                .join(format!("{stem}-{}.list", self.scope.target.name)),
         )
     }
 
@@ -329,8 +370,19 @@ impl<'a> Planner<'a> {
         if modules {
             v.extend(self.scope.module_wrap());
         }
-        v.extend(inner);
+        v.extend(self.offline_inner(phase, inner));
         Ok(v)
+    }
+
+    fn offline_inner(&self, phase: &str, inner: Vec<String>) -> Vec<String> {
+        if self.offline_wrapper.is_empty()
+            || !matches!(phase, "admission" | "build" | "checks" | "caches" | "logs")
+        {
+            return inner;
+        }
+        let mut out = self.offline_wrapper.clone();
+        out.extend(inner);
+        out
     }
 
     /// `<shard_dir>/<run-id>`, where `stack shard` writes its plan;
@@ -443,6 +495,95 @@ impl<'a> Planner<'a> {
         })
     }
 
+    /// `stack order --hashes-out` for the lines a resume compares.
+    ///
+    /// The digest is the hash file `eb-stack` writes. This command does not
+    /// hash easyconfigs itself.
+    pub fn order_cmd(&self, lines: &[ListLine]) -> Result<Cmd, Fail> {
+        let trees = crate::resume::easyconfig_trees(self.site());
+        if trees.is_empty() {
+            return Err(Fail::usage(
+                "[resume] needs easyconfigs, on resume.easyconfigs or shards.easyconfigs",
+            ));
+        }
+        let roots = crate::resume::roots(lines);
+        if roots.is_empty() {
+            return Err(Fail::usage(
+                "[resume] found no package name to pass to stack order --root",
+            ));
+        }
+        let dir = self.scope.log_dir();
+        let mut a = vec![
+            Tool::EbStack.bin(self.site()),
+            "stack".into(),
+            "order".into(),
+            "--out".into(),
+            crate::resume::order_path(&dir).display().to_string(),
+            "--hashes-out".into(),
+            crate::resume::hashes_path(&dir).display().to_string(),
+        ];
+        for tree in trees {
+            a.push("--easyconfigs".into());
+            a.push(tree);
+        }
+        for root in roots {
+            a.push("--root".into());
+            a.push(root);
+        }
+        Ok(Cmd {
+            name: "order".into(),
+            argv: self.wrapped(Role::Plan, "shard", a, true)?,
+            env: BTreeMap::new(),
+            note: Some(
+                "input identity from stack order --hashes-out; a mismatch refuses --resume-result"
+                    .into(),
+            ),
+        })
+    }
+
+    /// `stack shard` for restart boundaries when `[shards]` is not planning.
+    pub fn boundary_shard_cmd(&self) -> Result<Cmd, Fail> {
+        let r = self.site().resume_on().expect("resume active");
+        let trees = crate::resume::easyconfig_trees(self.site());
+        let mut a = vec![
+            Tool::EbStack.bin(self.site()),
+            "stack".into(),
+            "shard".into(),
+            "--build-list".into(),
+            self.shard_list(),
+            "--shards".into(),
+            r.shards.to_string(),
+            "--out-dir".into(),
+            self.shard_dir(),
+        ];
+        for tree in trees {
+            a.push("--easyconfigs".into());
+            a.push(tree);
+        }
+        Ok(Cmd {
+            name: "shard".into(),
+            argv: self.wrapped(Role::Plan, "shard", a, true)?,
+            env: BTreeMap::new(),
+            note: Some(
+                "restart boundaries; a successful unit whose outputs remain is skipped on --resume-result"
+                    .into(),
+            ),
+        })
+    }
+
+    /// Module files of `line` that exist now, under the target's modules root.
+    pub fn declared_outputs(&self, line: &ListLine) -> Vec<String> {
+        let Some(rel) = module_rel(&line.easyconfig) else {
+            return Vec::new();
+        };
+        let root = self.scope.modules_root();
+        let base = format!("{}/all/{rel}", root.trim_end_matches('/'));
+        [format!("{base}.lua"), base]
+            .into_iter()
+            .filter(|p| Path::new(p).is_file())
+            .collect()
+    }
+
     /// A command eb-pipeline runs for `phase` as it runs `stack shard`: with
     /// the plan role's launch, inside the module wrapper.
     pub fn plan_role_cmd(&self, phase: &str, inner: Vec<String>) -> Result<Cmd, Fail> {
@@ -476,14 +617,16 @@ impl<'a> Planner<'a> {
             .map(|s| s.extra_args.clone())
             .unwrap_or_default();
         let args = line.args.iter().filter(|x| !x.starts_with("--rebuild"));
-        let mut a = vec!["eb".to_string(), line.easyconfig.clone(), "--fetch".into()];
+        let mut options = vec!["--fetch".into()];
         if extra.iter().any(|x| x == "--disable-robot") {
-            a.extend(without_robot(args));
+            options.extend(without_robot(args));
         } else {
-            a.push("--robot".into());
-            a.extend(args.cloned());
+            options.push("--robot".into());
+            options.extend(args.cloned());
         }
-        a.extend(extra);
+        options.extend(extra);
+        let mut a = vec!["eb".to_string()];
+        push_eb_line(&mut a, &line.easyconfig, options);
         let mut env = self.scope.line_env(&line.easyconfig);
         env.extend(self.scope.fetch_env());
         env.extend(self.scope.hardware_env(unit_role));
@@ -500,6 +643,94 @@ impl<'a> Planner<'a> {
             env,
             note: None,
         })
+    }
+
+    fn source_easyconfigs(&self) -> Vec<String> {
+        let sources = self.site().sources_on().expect("sources active");
+        if !sources.easyconfigs.is_empty() {
+            sources.easyconfigs.clone()
+        } else {
+            self.site()
+                .shards
+                .as_ref()
+                .map(|s| s.easyconfigs.clone())
+                .unwrap_or_default()
+        }
+    }
+
+    /// The required eb-stack planner calls for an offline bundle.
+    pub fn offline_planner_cmds(&self, lines: &[ListLine]) -> Result<Vec<Cmd>, Fail> {
+        let Some(bundle) = &self.offline_bundle else {
+            return Ok(Vec::new());
+        };
+        let planner = bundle.join("planner");
+        let easystack = planner.join("easystack.yml");
+        let trees = self.source_easyconfigs();
+        let mut commands = Vec::new();
+        if !lines.is_empty() {
+            let mut order = vec![
+                Tool::EbStack.bin(self.site()),
+                "stack".into(),
+                "order".into(),
+            ];
+            for tree in &trees {
+                order.extend(["--easyconfigs".into(), tree.clone()]);
+            }
+            let roots: std::collections::BTreeSet<String> = lines
+                .iter()
+                .map(|line| {
+                    let (name, version) = crate::util::package_of(&line.easyconfig);
+                    version.map_or_else(|| name.clone(), |version| format!("{name}=={version}"))
+                })
+                .collect();
+            for root in roots {
+                order.extend(["--root".into(), root]);
+            }
+            order.extend([
+                "--out".into(),
+                planner.join("build-order.txt").display().to_string(),
+                "--easystack-out".into(),
+                easystack.display().to_string(),
+            ]);
+            commands.push(self.plan_role_cmd("offline-order", order)?);
+
+            let mut files = vec![
+                Tool::EbStack.bin(self.site()),
+                "stack".into(),
+                "files".into(),
+                "--easystack".into(),
+                easystack.display().to_string(),
+            ];
+            for tree in &trees {
+                files.extend(["--easyconfigs".into(), tree.clone()]);
+            }
+            for path in self.scope.source_paths() {
+                files.extend(["--sourcepath".into(), path]);
+            }
+            commands.push(self.plan_role_cmd("offline-files", files)?);
+        }
+
+        let sources = self.site().sources_on().expect("sources active");
+        for (i, foreign) in sources.foreign.iter().enumerate() {
+            let inspect = vec![
+                Tool::EbStack.bin(self.site()),
+                "package".into(),
+                "inspect".into(),
+                "--source".into(),
+                foreign.source.clone(),
+                "--format".into(),
+                foreign.format.clone(),
+                "--toolchain".into(),
+                foreign.toolchain.clone(),
+                "--out-dir".into(),
+                planner
+                    .join(format!("foreign-{:02}", i + 1))
+                    .display()
+                    .to_string(),
+            ];
+            commands.push(self.plan_role_cmd("offline-package-inspect", inspect)?);
+        }
+        Ok(commands)
     }
 
     /// The `stack admit` command of `unit`, with its inode `footprint`, for a
@@ -669,11 +900,11 @@ impl<'a> Planner<'a> {
             inner = vec!["eb".into()];
             note = self.in_place_reason(line);
         }
-        inner.push(line.easyconfig.clone());
-        inner.extend(line.args.iter().cloned());
+        let mut options = line.args.clone();
         if self.site().logs_on().is_some_and(|l| l.keep_failed) {
-            inner.push(format!("--tmp-logdir={}", self.tmp_logdir(stem)));
+            options.push(format!("--tmp-logdir={}", self.tmp_logdir(stem)));
         }
+        push_eb_line(&mut inner, &line.easyconfig, options);
         let mut env = self.scope.line_env(&line.easyconfig);
         env.extend(self.scope.hardware_env(role));
         env.extend(self.route_env(role, "build"));
@@ -818,13 +1049,69 @@ impl<'a> Planner<'a> {
         );
         let mut argv = self.scope.launch_with(Role::Short, "checks", None)?;
         argv.extend(self.scope.module_wrap());
-        argv.extend(crate::util::split_args(command)?);
+        argv.extend(self.offline_inner("checks", crate::util::split_args(command)?));
         Ok(Some(Cmd {
             name: "check".into(),
             argv,
             env,
             note: Some(format!("when={}", c.when)),
         }))
+    }
+
+    /// Ecosystem-native verification commands for an eb-stack package plan.
+    pub fn verification_cmds(&self) -> Result<Vec<Cmd>, Fail> {
+        let Some(input) = self
+            .package_plan
+            .as_ref()
+            .filter(|_| self.verify_package_plan)
+        else {
+            return Ok(Vec::new());
+        };
+        input
+            .verification
+            .iter()
+            .map(|check| {
+                let module = check.module()?;
+                let inner = match check {
+                    Verification::Pip { .. } => vec!["pip".into(), "check".into()],
+                    Verification::R { package, .. } => vec![
+                        "Rscript".into(),
+                        "--vanilla".into(),
+                        "-e".into(),
+                        R_DESCRIPTION_CHECK.into(),
+                        package.clone(),
+                    ],
+                };
+                let mut env = BTreeMap::new();
+                let modules = self
+                    .site()
+                    .modules
+                    .init
+                    .iter()
+                    .map(String::as_str)
+                    .chain(std::iter::once(module.as_str()))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                env.insert("EB_PIPELINE_MODULES".into(), modules);
+                let mut argv = self.scope.launch_with(Role::Short, "verification", None)?;
+                argv.extend([
+                    self.site().modules.shell.clone(),
+                    "-c".into(),
+                    crate::resolve::MODULE_SCRIPT.into(),
+                    "eb-pipeline".into(),
+                ]);
+                argv.extend(inner);
+                Ok(Cmd {
+                    name: match check {
+                        Verification::Pip { .. } => format!("pip-check:{module}"),
+                        Verification::R { .. } => format!("r-description-check:{module}"),
+                    },
+                    argv,
+                    env,
+                    note: Some(format!("loads {module}")),
+                })
+            })
+            .collect()
     }
 
     /// The cache command of the target's `[[caches.targets]]` entry; `None`
@@ -855,7 +1142,7 @@ impl<'a> Planner<'a> {
             .scope
             .launch_with(Role::Cache, "caches", entry.alloc.as_deref())?;
         v.extend(self.scope.module_wrap());
-        v.extend(crate::util::split_args(command)?);
+        v.extend(self.offline_inner("caches", crate::util::split_args(command)?));
         Ok(Some(Cmd {
             name: "cache".into(),
             argv: v,
@@ -944,15 +1231,22 @@ pub fn build_plan(
     };
 
     // preflight: tool probes
-    let probes: Vec<Cmd> = crate::tools::needed(site)
+    let mut needed = crate::tools::needed(site);
+    if p.offline_bundle.is_some() && !needed.contains(&Tool::EbStack) {
+        needed.push(Tool::EbStack);
+    }
+    let probes: Vec<Cmd> = needed
         .into_iter()
         .filter_map(|t| {
-            let min = t.min_version(site)?;
+            let min = t.min_version(site);
+            if min.is_none() && !(p.offline_bundle.is_some() && t == Tool::EbStack) {
+                return None;
+            }
             Some(Cmd {
                 name: format!("probe:{}", t.key()),
                 argv: vec![t.bin(site), "--version".into()],
                 env: BTreeMap::new(),
-                note: Some(format!("min_version {min}")),
+                note: min.map(|min| format!("min_version {min}")),
             })
         })
         .collect();
@@ -978,15 +1272,10 @@ pub fn build_plan(
         skip("licences", "not configured")
     });
 
-    phases.push(if site.shards_on().is_some() {
-        planned("shard", Some(Role::Plan), vec![p.shard_cmd()?])
-    } else {
-        skip("shard", "not configured")
-    });
-
     // shard units come from the selected list, so only the whole list is filtered
     let (kept, deselected) = p.select_lines(lines)?;
-    if site.shards_on().is_some() {
+    let boundary = site.resume_on().is_some_and(|r| r.shards >= 2) && site.shards_on().is_none();
+    if site.shards_on().is_some() || boundary {
         for l in &kept {
             // stack shard splits the line on white space and does not drop
             // quotes. A word with a space or a quote is a different word to
@@ -995,13 +1284,32 @@ pub fn build_plan(
             let words =
                 std::iter::once(l.easyconfig.as_str()).chain(l.args.iter().map(String::as_str));
             if !split.eq(words) {
+                let ending = if site.shards_on().is_some() {
+                    "or run without [shards]"
+                } else {
+                    "or set [resume] shards below 2"
+                };
                 return Err(Fail::usage(format!(
-                    "build list line `{}`: stack shard reads words split on white space, and those words are not this line's arguments; write each argument without a space or a quote, or run without [shards]",
+                    "build list line `{}`: stack shard reads words split on white space, and those words are not this line's arguments; write each argument without a space or a quote, {ending}",
                     l.raw
                 )));
             }
         }
     }
+    let mut shard_cmds = Vec::new();
+    if !kept.is_empty() && site.resume_on().is_some() {
+        shard_cmds.push(p.order_cmd(&kept)?);
+    }
+    if site.shards_on().is_some() {
+        shard_cmds.push(p.shard_cmd()?);
+    } else if boundary && !kept.is_empty() {
+        shard_cmds.push(p.boundary_shard_cmd()?);
+    }
+    phases.push(if shard_cmds.is_empty() {
+        skip("shard", "not configured")
+    } else {
+        planned("shard", Some(Role::Plan), shard_cmds)
+    });
     let units: Vec<Unit> = match shard_units {
         Some(u) if !u.is_empty() => u.to_vec(),
         _ if p.scope.target.select.is_some() && kept.is_empty() => vec![],
@@ -1018,7 +1326,11 @@ pub fn build_plan(
         .map(|u| u.lines.iter().map(|l| seq.next(&l.easyconfig)).collect())
         .collect();
     phases.push(if site.sources_on().is_some() {
-        let mut cmds = Vec::new();
+        let offline_lines: Vec<ListLine> = units
+            .iter()
+            .flat_map(|unit| unit.lines.iter().cloned())
+            .collect();
+        let mut cmds = p.offline_planner_cmds(&offline_lines)?;
         for (u, ss) in units.iter().zip(&stems) {
             for (l, s) in u.lines.iter().zip(ss) {
                 cmds.push(p.prefetch_cmd(l, s, u.role)?);
@@ -1074,6 +1386,15 @@ pub fn build_plan(
         None => skip("checks", p.checks_reason(any_staged)),
     });
 
+    if p.package_plan.is_some() {
+        let commands = p.verification_cmds()?;
+        phases.push(if p.verify_package_plan {
+            planned("verification", Some(Role::Short), commands)
+        } else {
+            skip("verification", "not requested")
+        });
+    }
+
     phases.push(match p.cache_cmd()? {
         Some(c) => planned("caches", Some(Role::Cache), vec![c]),
         None => skip("caches", "not configured"),
@@ -1092,12 +1413,14 @@ pub fn build_plan(
         build_type: p.scope.build_name().to_string(),
         run_id: p.scope.run_id.clone(),
         list: p.list_path.clone(),
+        package_plan_digest: p.package_plan.as_ref().map(|input| input.digest.clone()),
         log_dir: p.scope.log_dir(),
         lines: lines.len(),
         selected: p.scope.target.select.as_ref().map(|_| kept.len()),
         selected_list: p.selected_list_path().map(|x| x.display().to_string()),
         phases,
         deselected,
+        input_attestation: None,
     })
 }
 
@@ -1193,7 +1516,32 @@ pub fn read_units(dir: &Path) -> Result<Vec<Unit>, Fail> {
 
 #[cfg(test)]
 mod read_tests {
-    use super::read_units;
+    use super::{push_eb_line, read_units};
+
+    #[test]
+    fn easybuild_operand_order_changes_only_for_a_leading_dash() {
+        let mut ordinary = vec!["eb".to_string()];
+        push_eb_line(&mut ordinary, "Foo-1.0.eb", vec!["--rebuild".into()]);
+        assert_eq!(
+            ordinary,
+            ["eb", "Foo-1.0.eb", "--rebuild"],
+            "ordinary argv bytes and order stay unchanged"
+        );
+
+        let mut staged = vec!["eb-staged-rebuild".into(), "run".into(), "--".into()];
+        push_eb_line(&mut staged, "-Foo-1.0.eb", vec!["--rebuild".into()]);
+        assert_eq!(
+            staged,
+            [
+                "eb-staged-rebuild",
+                "run",
+                "--",
+                "--rebuild",
+                "--",
+                "-Foo-1.0.eb"
+            ]
+        );
+    }
 
     #[test]
     fn a_shard_plan_cannot_name_a_file_outside_its_directory() {

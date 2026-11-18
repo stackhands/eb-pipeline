@@ -1,1 +1,0 @@
-When the job directory wrapper of `filesystems.job_dir` stops the probe of a target's module environment, as when the job's node has no directory for it, the error of `watch` and the warning of a record quote the first line in which the wrapper says why, after the path of `eessi-probe.log`. Before, they gave the path only.
