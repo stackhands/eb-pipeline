@@ -9,7 +9,7 @@ use crate::resolve::{Role, Scope};
 use crate::tools::Tool;
 use crate::util::{list_word, parse_list, quote, ListLine};
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// One subprocess the driver starts.
@@ -1532,6 +1532,19 @@ pub fn read_units(dir: &Path) -> Result<Vec<Unit>, Fail> {
             format!("{} contains no build units", plan_path.display()),
         ));
     }
+    let mut names = BTreeSet::new();
+    for unit in &units {
+        if !names.insert(&unit.name) {
+            return Err(Fail::new(
+                exit::FAILED,
+                format!(
+                    "{} contains duplicate unit name `{}`",
+                    plan_path.display(),
+                    unit.name
+                ),
+            ));
+        }
+    }
     Ok(units)
 }
 
@@ -1614,6 +1627,25 @@ mod read_tests {
 
         let error = read_units(root.path()).unwrap_err();
         assert!(error.msg.contains("shards[1].file"), "{}", error.msg);
+    }
+
+    #[test]
+    fn a_shard_plan_cannot_reuse_a_unit_name() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("one.list"), "Foo-1.0.eb\n").unwrap();
+        std::fs::write(root.path().join("two.list"), "Bar-2.0.eb\n").unwrap();
+        std::fs::write(
+            root.path().join("plan.json"),
+            r#"{"shards":[{"name":"same","file":"one.list"},{"name":"same","file":"two.list"}]}"#,
+        )
+        .unwrap();
+
+        let error = read_units(root.path()).unwrap_err();
+        assert!(
+            error.msg.contains("duplicate unit name `same`"),
+            "{}",
+            error.msg
+        );
     }
 }
 
