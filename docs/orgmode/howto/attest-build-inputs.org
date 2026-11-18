@@ -1,0 +1,117 @@
+#+TITLE: Attest the inputs of a plan
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Attest the inputs of a plan
+
+Record the exact inputs of a finalized plan in an RFC 9162 sidecar log, and check that record again later.
+
+Leave =[attest]= out, or set =enabled = false=, and =plan= and =run= record nothing.
+=verify= is then a usage error, with exit 2.
+The record is of a build list or an easystack.
+=--package-plan= has no list, so =plan=, =run= and =verify= refuse it while =[attest]= is enabled, with exit 2.
+
+** Before you start
+
+- A site file that passes =check=.
+- =eb-stack= and =rfc9162-sidecar= on =PATH=, or named by =site.tools.eb_stack.bin= and =attest.bin=.
+- An absolute easyconfig tree, on =attest.easyconfigs= or, when that is empty, on =resume.easyconfigs= or =shards.easyconfigs=.
+- A PKCS#8 PEM Ed25519 key, and one trusted verifier line whose name is the checkpoint origin.
+- A directory used only as the sidecar log.
+
+Add the table:
+
+#+begin_src toml
+[attest]
+enabled = true
+log_dir = "$WORK/attest-log"
+key = "$WORK/keys/attest.pem"
+origin = "example.org/inputs"
+trusted = ["example.org/inputs+00000000+AQAAAA=="]
+easyconfigs = ["$WORK/easyconfigs"]
+easyblocks = ["$WORK/easyblocks"]
+patches = ["$WORK/patches"]
+image_digest_env = "EB_IMAGE_DIGEST"
+#+end_src
+
+=bin= defaults to =rfc9162-sidecar=.
+The program is not probed with =--version=.
+=image_digest_env= is optional.
+When it is set, =plan= and =run= refuse, with exit 78, if the variable is empty.
+The route receipt is whatever =targets.route.receipt_digest_env= names when that variable is set, and empty when it is not.
+An empty receipt does not by itself refuse the attestation.
+
+=log_dir= should hold this log and nothing else.
+=rfc9162-sidecar sync= records every file in the directory.
+
+The output on this page comes from =docs/examples/attest.sh=.
+A stand-in for =eb-stack= writes the resolved easyconfig path, and a stand-in for =rfc9162-sidecar= hashes the record and checks that hash.
+A real =rfc9162-sidecar= also checks the signed checkpoint and the inclusion path.
+
+** Steps
+
+1. Check the site, then plan.
+   =plan= hashes the inputs and appends the record.
+   A dry run does not:
+
+   #+begin_src bash
+   eb-pipeline check --site site.toml
+   eb-pipeline run --site site.toml --list lists/build.list --target cpu --build-type production --run-id nightly --log-stamp 20261117_090000 --dry-run
+   eb-pipeline plan --site site.toml --list lists/build.list --target cpu --build-type production --run-id nightly --log-stamp 20261117_090000 --out plan.json
+   #+end_src
+
+   #+begin_example
+   INFO [check] t: site file is valid
+   # [licences] not configured
+   # [shard] not configured
+   # [sources] not configured
+   # [admission] not configured
+   [build] eb Foo-1.0.eb
+   # [checks] not configured
+   # [caches] not configured
+   # [logs] not configured
+   INFO [run] cpu: dry run: nothing executed
+   #+end_example
+
+   =plan.json= has =input_attestation= only after the real =plan=.
+   =record_sha256= is the SHA-256 of the record in =log_dir/inputs/=.
+   =proof= is the JSON object =rfc9162-sidecar prove= wrote: the checkpoint note, the log entry and the inclusion path.
+
+2. Check the record against the inputs that are on disk now:
+
+   #+begin_src bash
+   eb-pipeline verify --site site.toml --list lists/build.list --target cpu --build-type production --from plan.json
+   #+end_src
+
+   #+begin_example
+   verified input record
+   #+end_example
+
+   The line continues with the record's SHA-256.
+   =verify= runs =eb-stack= again, rebuilds the record, checks the inclusion path with the published =rfc9162= library, and asks =rfc9162-sidecar verify-proof= to check the signed checkpoint and the rest of the stored proof.
+   Give =verify= the same site, list and target that produced the file.
+
+3. A changed input is refused.
+   After the patch file differs from the one that was hashed:
+
+   #+begin_src bash
+   eb-pipeline verify --site site.toml --list lists/build.list --target cpu --build-type production --from plan.json
+   #+end_src
+
+   #+begin_example
+   exit 78
+   #+end_example
+
+   The message says the recomputed record does not match the attestation.
+   A proof the sidecar rejects exits 1.
+   A plan or result with no =input_attestation= exits 78.
+
+=run= appends the same record when it starts, and stores it on the result file given to =--result=.
+=run --dry-run= does not append, and it writes no result file.
+
+** See also
+
+- [[file:../reference/site-file.org][The site file]], for every key of =[attest]=
+- [[file:../reference/plan-and-result.org][The plan and result files]], for =input_attestation=
+- [[file:../reference/exit-status.org][Exit status]]
+- [[file:../explanation/why-attest-inputs.org][Why a plan attests its inputs]]
