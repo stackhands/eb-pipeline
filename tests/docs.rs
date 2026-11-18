@@ -5,6 +5,7 @@
 
 use eb_pipeline::schema::SECTIONS;
 use std::path::PathBuf;
+use std::process::Command;
 
 fn page() -> String {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/orgmode/reference/site-file.org");
@@ -65,4 +66,53 @@ fn site_file_page_has_every_key_with_its_type_and_default() {
             assert!(!row[3].is_empty(), "{} in {h} has no meaning", f.key);
         }
     }
+}
+
+#[test]
+fn run_tests_howto_matches_eb_test_map_cli() {
+    let dir = tempfile::tempdir().unwrap();
+    let map = dir.path().join("map.tsv");
+    let list = dir.path().join("build.list");
+    std::fs::write(&map, "GROMACS gromacs\n").unwrap();
+    std::fs::write(&list, "Unmapped-1.0.eb\n").unwrap();
+
+    let reframe_unmapped = Command::new(env!("CARGO_BIN_EXE_eb-test-map"))
+        .arg("--map")
+        .arg(&map)
+        .arg("--list")
+        .arg(&list)
+        .args(["--format", "reframe", "--allow-unmapped"])
+        .output()
+        .unwrap();
+    assert_eq!(reframe_unmapped.status.code(), Some(0));
+
+    let missing_list = Command::new(env!("CARGO_BIN_EXE_eb-test-map"))
+        .env_remove("EB_PIPELINE_LIST")
+        .env_remove("EB_PIPELINE_RESULT")
+        .output()
+        .unwrap();
+    assert_eq!(missing_list.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&missing_list.stderr).contains("--list or --result is required")
+    );
+
+    let bad_format = Command::new(env!("CARGO_BIN_EXE_eb-test-map"))
+        .arg("--map")
+        .arg(&map)
+        .arg("--list")
+        .arg(&list)
+        .args(["--format", "bogus"])
+        .output()
+        .unwrap();
+    assert_eq!(bad_format.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&bad_format.stderr)
+        .contains("expected `text`, `reframe`, or `eessi-modules`"));
+
+    let howto_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("docs/orgmode/howto/run-tests-for-what-you-built.org");
+    let howto = std::fs::read_to_string(&howto_path).unwrap();
+    assert!(!howto.contains("applies to =--format text= only"));
+    assert!(!howto.contains("The format is not =text= or =eessi-modules="));
+    assert!(howto.contains("=--list or --result is required="));
+    assert!(howto.contains("`text`, `reframe`, or `eessi-modules`"));
 }
