@@ -4,6 +4,7 @@ use crate::exit::{self, Fail};
 use crate::run::log;
 use crate::schema::Site;
 use crate::tools::Tool;
+use crate::util;
 use std::io::Write;
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
@@ -73,7 +74,12 @@ pub fn run(site: Option<&Site>, list: &Path, opts: &Options<'_>) -> Result<i32, 
         .stdin(Stdio::null())
         .output()
         .map_err(|e| Fail::usage(format!("cannot run `{bin} stack from-commit`: {e}")))?;
-    let _ = std::io::stdout().write_all(&output.stdout);
+    util::write_stdout(&output.stdout).map_err(|error| {
+        Fail::new(
+            exit::FAILED,
+            format!("cannot print eb-stack output: {error}"),
+        )
+    })?;
     let _ = std::io::stderr().write_all(&output.stderr);
     let code = output
         .status

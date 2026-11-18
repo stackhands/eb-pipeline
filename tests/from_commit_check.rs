@@ -3,6 +3,8 @@
 mod common;
 
 use common::{code, eb_pipeline, setup, stderr, write_exec};
+use std::fs::OpenOptions;
+use std::process::{Command, Stdio};
 
 #[test]
 fn ordinary_check_matches_main_and_starts_no_from_commit_process() {
@@ -143,4 +145,42 @@ fn plain_check_still_requires_a_site() {
     let out = eb_pipeline(&t, &["check"], &[]);
     assert_eq!(code(&out), 2);
     assert!(stderr(&out).contains("--site") || out.status.code() == Some(2));
+}
+
+#[test]
+fn from_commit_reports_a_stdout_write_failure() {
+    let t = setup("");
+    write_exec(
+        &t.stubs.join("eb-stack"),
+        "#!/bin/sh\ndd if=/dev/zero bs=65536 count=2 2>/dev/null | tr '\\0' x\n",
+    );
+    let list = t.root().join("stack.yml");
+    std::fs::write(&list, "easyconfigs: []\n").unwrap();
+    let path = format!(
+        "{}:{}",
+        t.stubs.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let full = OpenOptions::new().write(true).open("/dev/full").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"))
+        .args([
+            "check",
+            "--list",
+            &list.display().to_string(),
+            "--check-from-commit",
+        ])
+        .env("PATH", path)
+        .env("STUB_DIR", t.root())
+        .stdin(Stdio::null())
+        .stdout(full)
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
+
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("cannot print eb-stack output"),
+        "{}",
+        stderr(&output)
+    );
 }
