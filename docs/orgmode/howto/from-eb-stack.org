@@ -156,5 +156,6 @@ Without =[shards]= the build keeps the argument, space included.
 ** Related
 
 - [[file:../reference/cli.org][The eb-pipeline command]], for =--list=
+- [[file:follow-runs.org][Follow runs through their summaries]], for a retry list kept to the classes =eb-stack stack bot-classify= reports, and to the lines =eb-stack stack oom= does not warn about
 - [[file:staged-rebuilds.org][Rebuild installed software through eb-staged-rebuild]]
 - [[file:../reference/log-tree.org][The log tree and its locks]], for =easystack-TARGET.list=
