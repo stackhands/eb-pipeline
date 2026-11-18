@@ -1,0 +1,62 @@
+#+TITLE: Check a build list with eb-stack
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Check a build list with eb-stack
+
+Use =check --stack-checks= when a build list should pass selected =eb-stack= checks before a pipeline run can allocate a scheduler job.
+The checks are opt-in; an ordinary =check --site site.toml= still validates only the site file.
+
+** Prepare the site paths
+
+Set =[shards].easyconfigs= to the EasyBuild robot trees that =eb-stack= should search.
+The =files= check also takes =filesystems.source_paths= and =filesystems.configs_repo= from the site file.
+When a source path contains ={target}=, =eb-pipeline= expands it for the selected target.
+
+For architecture-sensitive checks, set =cpu_target= on each relevant =[[targets]]= entry:
+
+#+begin_src toml
+[[targets]]
+name = "gpu"
+cpu_target = "x86_64/amd/zen4"
+
+[filesystems]
+source_paths = ["/srv/easybuild/sources/{target}"]
+configs_repo = "/srv/easybuild/easyconfigs-repo"
+
+[shards]
+easyconfigs = ["/srv/easybuild/easyconfigs/easybuild/easyconfigs"]
+#+end_src
+
+The configured =[site.tools.eb_stack].bin= is used when present; otherwise =eb-stack= is found on =PATH=.
+
+** Run the checks
+
+Pass an easystack and a comma-separated check list:
+
+#+begin_src bash
+eb-pipeline check \
+  --site site.toml \
+  --list stack.yml \
+  --target gpu \
+  --stack-checks files,arch,cuda-cc,generation,known-failures
+#+end_src
+
+=--target= selects one site target for ={target}= path expansion and =cpu_target=.
+Without it, the target-dependent values of every site target are passed to commands that accept them.
+
+Each selected check is a direct =eb-stack= subprocess.
+=eb-pipeline= does not start the site's scheduler launch command for these checks.
+It runs every requested check, reports each result on stderr, and exits 1 after they finish if any subprocess failed.
+
+The =provided= check instead takes a plain build list and compares it with the stack lock configured as =[sbom].lock=:
+
+#+begin_src bash
+eb-pipeline check \
+  --site site.toml \
+  --list site.list \
+  --stack-checks provided
+#+end_src
+
+That setting becomes =eb-stack stack provided --baseline-lock=.
+Without it, =eb-stack= refuses the check because it has no baseline to compare.
