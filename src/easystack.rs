@@ -177,13 +177,13 @@ fn eb_args(options: &Mapping) -> Result<Vec<String>, String> {
 /// `Some(true)` for a value that gives the bare option, and `Some(false)`
 /// for false. EasyBuild reads YAML 1.1, where yes, on, no and off are
 /// booleans too, and gives the bare option for each value in `[True,
-/// None]`, which in Python holds the number 1 as well.
+/// None]`, which in Python holds the numbers 1 and 1.0 as well.
 fn flag(v: &Value) -> Option<bool> {
     match v {
         Value::Null => Some(true),
         Value::Bool(b) => Some(*b),
         Value::String(s) => yaml11_bool(s),
-        Value::Number(n) if n.as_u64() == Some(1) => Some(true),
+        Value::Number(n) if n.as_f64() == Some(1.0) => Some(true),
         _ => None,
     }
 }
@@ -319,6 +319,25 @@ mod tests {
                 "--parallel=1",
                 "--rebuild"
             ]
+        );
+    }
+
+    #[test]
+    fn a_floating_one_gives_the_bare_option_as_in_easybuild() {
+        let l = &parse("easyconfigs:\n  - x.eb: {options: {rebuild: 1.0, parallel: '1.0'}}\n")
+            .unwrap()[0];
+        assert_eq!(l.args, ["--parallel=1.0", "--rebuild"]);
+    }
+
+    #[test]
+    fn ordinary_option_output_keeps_its_exact_bytes() {
+        let l = &parse(
+            "easyconfigs:\n  - x.eb: {options: {rebuild: true, parallel: 4, robot: false}}\n",
+        )
+        .unwrap()[0];
+        assert_eq!(
+            l.raw.as_bytes(),
+            b"x.eb --parallel=4 --rebuild --disable-robot"
         );
     }
 
