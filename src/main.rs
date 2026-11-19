@@ -468,6 +468,10 @@ fn cmd_check(
     stack_checks: &[stack_checks::StackCheck],
     opt_in: OptInChecks<'_>,
 ) -> Result<i32, Fail> {
+    validate_option_values(&[("--generation", opt_in.gap.generation.as_deref())])?;
+    if let Some((_, opts)) = &opt_in.from_commit {
+        validate_option_values(&[("--easybuild-version", opts.easybuild_version)])?;
+    }
     let site = match site_path {
         Some(path) => Some(load_valid(path, lists_dir)?),
         None if opt_in.from_commit.is_none() || !stack_checks.is_empty() => {

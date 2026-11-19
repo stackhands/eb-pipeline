@@ -157,6 +157,34 @@ fn gap_options_require_each_other() {
 }
 
 #[test]
+fn empty_or_control_generations_fail_before_site_loading() {
+    for generation in ["   ", "2026.1\n2026.2"] {
+        let dir = tempfile::tempdir().unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"))
+            .current_dir(dir.path())
+            .args([
+                "check",
+                "--site",
+                "not-read.toml",
+                "--gap-out",
+                "not-written",
+                "--generation",
+                generation,
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(code(&output), 2, "{}", stderr(&output));
+        assert!(
+            stderr(&output)
+                .contains("--generation must be non-empty and contain no control characters"),
+            "{}",
+            stderr(&output)
+        );
+        assert!(!dir.path().join("not-written").exists());
+    }
+}
+
+#[test]
 fn a_missing_eb_stack_is_a_usage_error() {
     let t = configured();
     let mut site = std::fs::read_to_string(&t.site).unwrap();
