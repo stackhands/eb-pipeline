@@ -306,7 +306,9 @@ fn canonical(req: &Request<'_>) -> Result<(String, Vec<u8>), Fail> {
             None => recipe_easyblock(req, path)?,
         };
         classes.entry(class).or_insert(None);
-        for name in patch_literals(text) {
+        for name in patch_literals(text)
+            .map_err(|error| Fail::new(exit::REFUSED, format!("{}: {error}", path.display())))?
+        {
             patch_names.insert(name, ());
         }
     }
@@ -524,7 +526,7 @@ fn route_receipt(req: &Request<'_>) -> Value {
 }
 
 /// A quoted literal that ends in `.patch`.
-fn patch_literals(text: &str) -> Vec<String> {
+fn patch_literals(text: &str) -> Result<Vec<String>, &'static str> {
     let mut out = Vec::new();
     for statement in python_statements(text) {
         let Some(rest) = statement.trim().strip_prefix("patches") else {
@@ -541,16 +543,16 @@ fn patch_literals(text: &str) -> Vec<String> {
         if !append {
             out.clear();
         }
-        for literal in python_string_literals(rhs) {
+        for literal in python_string_literals(rhs)? {
             if literal.ends_with(".patch") && literal != ".patch" {
                 out.push(literal);
             }
         }
     }
-    out
+    Ok(out)
 }
 
-fn python_string_literals(text: &str) -> Vec<String> {
+fn python_string_literals(text: &str) -> Result<Vec<String>, &'static str> {
     let characters: Vec<char> = text.chars().collect();
     let mut literals = Vec::new();
     let mut index = 0;
@@ -591,7 +593,7 @@ fn python_string_literals(text: &str) -> Vec<String> {
                 }
             }
             if !closed {
-                return literals;
+                return Err("unclosed quoted string in `patches`");
             }
             while index < characters.len() && characters[index].is_whitespace() {
                 index += 1;
@@ -603,7 +605,7 @@ fn python_string_literals(text: &str) -> Vec<String> {
         }
         literals.push(literal);
     }
-    literals
+    Ok(literals)
 }
 
 fn python_statements(text: &str) -> Vec<String> {
@@ -943,7 +945,7 @@ mod tests {
     fn a_quoted_patch_and_an_easyblock_literal_are_read() {
         let text = "easyblock = 'EB_Foo'  # local\npatches = ['a.patch', \"dir/b.patch\"]\n";
         assert_eq!(easyblock_literal(text).as_deref(), Some("EB_Foo"));
-        assert_eq!(patch_literals(text), ["a.patch", "dir/b.patch"]);
+        assert_eq!(patch_literals(text).unwrap(), ["a.patch", "dir/b.patch"]);
     }
 
     #[test]
@@ -968,7 +970,7 @@ patches = [
     # 'comment.patch'
 ]
 ";
-        assert_eq!(patch_literals(text), ["real.patch"]);
+        assert_eq!(patch_literals(text).unwrap(), ["real.patch"]);
     }
 
     #[test]
@@ -978,13 +980,22 @@ patches = ['old.patch']
 patches = ['new.patch']
 patches += ['extra.patch']
 ";
-        assert_eq!(patch_literals(text), ["new.patch", "extra.patch"]);
+        assert_eq!(patch_literals(text).unwrap(), ["new.patch", "extra.patch"]);
     }
 
     #[test]
     fn adjacent_patch_string_literals_are_concatenated() {
         let text = "patches = ['a' '.patch', 'dir/' \"b.patch\"]\n";
-        assert_eq!(patch_literals(text), ["a.patch", "dir/b.patch"]);
+        assert_eq!(patch_literals(text).unwrap(), ["a.patch", "dir/b.patch"]);
+    }
+
+    #[test]
+    fn an_unclosed_patch_string_does_not_return_a_partial_list() {
+        let text = "patches = ['first.patch', 'second.patch\n";
+        assert_eq!(
+            patch_literals(text).unwrap_err(),
+            "unclosed quoted string in `patches`"
+        );
     }
 
     #[test]
