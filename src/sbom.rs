@@ -90,5 +90,20 @@ pub fn store(site: &Site, sbom: &Sbom, run_dir: &Path) -> Result<PathBuf, Fail> 
             ),
         ));
     }
+    let document = std::fs::File::open(&out)
+        .map_err(|error| error.to_string())
+        .and_then(|file| {
+            serde_json::from_reader::<_, serde_json::Value>(file).map_err(|error| error.to_string())
+        });
+    if let Err(error) = document {
+        let _ = std::fs::remove_file(&out);
+        return Err(Fail::new(
+            exit::FAILED,
+            format!(
+                "eb-stack stack sbom --lock {lock} wrote invalid JSON to {}: {error}",
+                out.display()
+            ),
+        ));
+    }
     Ok(out)
 }
