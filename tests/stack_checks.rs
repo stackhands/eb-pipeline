@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{code, eb_pipeline, setup, stderr};
+use common::{code, eb_pipeline, setup, stderr, write_exec};
 
 fn configured() -> common::T {
     let t = setup(
@@ -227,5 +227,30 @@ fn provided_cannot_share_an_input_with_easystack_checks() {
         stderr(&output).contains("cannot combine provided with easystack checks"),
         "{}",
         stderr(&output)
+    );
+}
+
+#[test]
+fn check_from_commit_refuses_invalid_json_from_a_successful_eb_stack() {
+    let t = setup("");
+    write_exec(
+        &t.stubs.join("eb-stack"),
+        "#!/bin/sh\necho \"$*\" >> \"$STUB_DIR/ebstack.calls\"\nprintf '{'\n",
+    );
+    let list = t.root().join("stack.yml");
+    std::fs::write(&list, "easyconfigs: []\n").unwrap();
+    let list = list.display().to_string();
+
+    let output = eb_pipeline(&t, &["check", "--list", &list, "--check-from-commit"], &[]);
+
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("eb-stack stack from-commit wrote invalid JSON"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(
+        t.calls("ebstack"),
+        format!("stack from-commit --easystack {list} --json\n")
     );
 }
