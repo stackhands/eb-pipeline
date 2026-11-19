@@ -1,1 +1,0 @@
-`eb-test-map --format eessi-modules` prints one `reframe --setvar modules=Name/Version,...` argument for the applications in a build list. The European Environment for Scientific Software Installations (EESSI) test suite reads that comma-separated list in `set_modules`. `--map` is not required for this format. The default output, one test name per line, is unchanged.

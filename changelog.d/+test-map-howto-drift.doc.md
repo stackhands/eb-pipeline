@@ -1,1 +1,0 @@
-Updated the `eb-test-map` how-to guide to document `--allow-unmapped` for `--format reframe`, `--result` alongside `--list`, and exact error messages for missing inputs, unknown `--format`, and malformed list entries.

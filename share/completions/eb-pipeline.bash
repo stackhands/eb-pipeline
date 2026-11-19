@@ -184,7 +184,7 @@ _eb__pipeline() {
                     return 0
                     ;;
                 --stack-checks)
-                    COMPREPLY=($(compgen -W "files arch cuda-cc generation provided known-failures" -- "${cur}"))
+                    COMPREPLY=($(compgen -W "files arch cuda-cc generation provided known-failures buildenv" -- "${cur}"))
                     return 0
                     ;;
                 --easyconfigs-repo)

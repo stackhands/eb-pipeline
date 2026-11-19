@@ -101,6 +101,8 @@ case "$cmd" in
     else
       printf '{"prelude":null,"shards":[{"name":"shard-01","file":"shard-01.list"}],"lines":[%s]}\n' "$lines" > "$out/plan.json"
     fi;;
+  stack-from-commit)
+    printf '{}\n';;
 esac
 exit 0
 "#;
