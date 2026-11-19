@@ -869,6 +869,34 @@ fn the_module_wrapper_sources_an_init_that_reads_unset_variables() {
 }
 
 #[test]
+fn eessi_commands_do_not_inherit_another_install_mode_or_cpu_override() {
+    let env = setup("\n[modules.eessi]\nsite_install = true\n");
+    let init = format!(
+        r#"
+[ -z "${{EESSI_CVMFS_INSTALL+x}}" ] || exit 17
+[ -z "${{EESSI_SOFTWARE_SUBDIR_OVERRIDE+x}}" ] || exit 18
+[ "${{EESSI_SITE_INSTALL:-}}" = 1 ] || exit 19
+{MODULE_FN}"#
+    );
+    with_modules(
+        &env,
+        &init,
+        &["EESSI/2026.06", "EESSI-extend/2026.06-easybuild"],
+    );
+
+    let o = go(
+        &env,
+        "Foo-1.0-foss-2025a.eb\n",
+        &[
+            ("EESSI_CVMFS_INSTALL", "1"),
+            ("EESSI_SOFTWARE_SUBDIR_OVERRIDE", "x86_64/amd/zen4"),
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(calls(&env, "eb.calls").len(), 1);
+}
+
+#[test]
 fn the_module_wrapper_sources_an_init_whose_last_test_is_false() {
     let env = setup("");
     let init = format!("{MODULE_FN}[ -n \"${{EESSI_MODULE_DEBUG_INIT:-}}\" ] && echo debug\n");
