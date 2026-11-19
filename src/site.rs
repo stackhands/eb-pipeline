@@ -458,6 +458,10 @@ fn validate_select(t: &str, s: &Select, e: &mut Vec<String>) {
             e.push(format!(
                 "targets.{t}.select.aliases: an alias must not be empty"
             ));
+        } else if alias.trim() != alias {
+            e.push(format!(
+                "targets.{t}.select.aliases: `{alias}` has surrounding whitespace, which no token of a line keeps"
+            ));
         } else if !s.separator.is_empty() && alias.contains(&s.separator) {
             e.push(format!(
                 "targets.{t}.select.aliases: `{alias}` contains the separator `{}`",

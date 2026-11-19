@@ -968,6 +968,10 @@ fn selection_is_validated() {
             "repeats select.value",
         ),
         (
+            "option = \"--x\"\nvalue = \"o\"\naliases = [\" gpu\"]",
+            "surrounding whitespace",
+        ),
+        (
             "option = \"--x\"\nvalue = \"o\"\nexclude_option = \"not\"",
             "select.exclude_option",
         ),
