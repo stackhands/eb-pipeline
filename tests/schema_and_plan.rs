@@ -855,6 +855,29 @@ fn selection_when_absent_all_and_strip() {
 }
 
 #[test]
+fn selection_with_a_group_alias_and_an_exclude_option() {
+    // `other` belongs to group `site`. A line that names the group is planned; a line that
+    // excludes the target or its group is not, even when it also includes it.
+    let site = with_target(
+        "[targets.select]\noption = \"--only-targets\"\nvalue = \"other\"\naliases = [\"site\"]\nexclude_option = \"--not-targets\"\nstrip = true\n",
+    );
+    let list = "A-1.0.eb\nB-1.0.eb --only-targets=site\nC-1.0.eb --only-targets=x\nD-1.0.eb --not-targets=other\nE-1.0.eb --only-targets=site --not-targets site\nF-1.0.eb --only-targets=other --not-targets=x --rebuild\n";
+    let v = plan_of(&site, list, "other");
+    assert_eq!(
+        build_names(&v),
+        ["build:A-1.0", "build:B-1.0", "build:F-1.0"]
+    );
+    for c in phase(&v, "build")["commands"].as_array().unwrap() {
+        let argv = argv_of(c);
+        assert!(!argv.iter().any(|a| a.contains("-targets")), "{argv:?}");
+    }
+    let last = &phase(&v, "build")["commands"][2];
+    assert!(argv_of(last).contains(&"--rebuild".to_string()));
+    assert_eq!(v["selected"], 3);
+    assert_eq!(v["deselected"].as_array().unwrap().len(), 3);
+}
+
+#[test]
 fn stripping_keeps_an_argument_the_list_reader_returns() {
     let text = with_target(
         "[targets.select]\noption = \"--only-targets\"\nvalue = \"other\"\nstrip = true\n",
@@ -935,6 +958,26 @@ fn selection_is_validated() {
         (
             "option = \"--x\"\nvalue = \"o\"\nseparator = \"\"",
             "separator",
+        ),
+        (
+            "option = \"--x\"\nvalue = \"o\"\naliases = [\"a,b\"]",
+            "select.aliases",
+        ),
+        (
+            "option = \"--x\"\nvalue = \"o\"\naliases = [\"o\"]",
+            "repeats select.value",
+        ),
+        (
+            "option = \"--x\"\nvalue = \"o\"\naliases = [\" gpu\"]",
+            "surrounding whitespace",
+        ),
+        (
+            "option = \"--x\"\nvalue = \"o\"\nexclude_option = \"not\"",
+            "select.exclude_option",
+        ),
+        (
+            "option = \"--x\"\nvalue = \"o\"\nexclude_option = \"--x\"",
+            "must differ from select.option",
         ),
     ] {
         let s = site::parse(&with_target(&format!("[targets.select]\n{frag}\n"))).unwrap();

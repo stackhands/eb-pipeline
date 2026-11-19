@@ -339,6 +339,18 @@ compress_after_days = 3
     }
 }
 
+/// Drop the caller's `EESSI_*` variables from a command's environment. The stub
+/// module environment prints the environment it inherits, so a test started
+/// inside a loaded EESSI stack would probe that stack and not its fixture.
+pub fn without_host_eessi(c: &mut Command) -> &mut Command {
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("EESSI_") {
+            c.env_remove(key);
+        }
+    }
+    c
+}
+
 /// `eb-pipeline ARGS`, with the stubs first on PATH.
 pub fn eb_pipeline(t: &T, args: &[&str], vars: &[(&str, &str)]) -> Output {
     let path = format!(
@@ -347,7 +359,8 @@ pub fn eb_pipeline(t: &T, args: &[&str], vars: &[(&str, &str)]) -> Output {
         std::env::var("PATH").unwrap_or_default()
     );
     let mut c = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"));
-    c.args(args)
+    without_host_eessi(&mut c)
+        .args(args)
         .env("PATH", path)
         .env("STUB_DIR", t.root())
         .env_remove("EB_PIPELINE_LOG_STAMP")
