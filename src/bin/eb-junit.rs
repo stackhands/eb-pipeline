@@ -3,11 +3,10 @@
 //! Each recorded line keeps the status the result file already has. This
 //! tool does not classify failures and does not call eb-stack.
 
-use eb_pipeline::util;
+use eb_pipeline::{exit, util};
 use serde_json::{Map, Number, Value};
 use std::collections::BTreeMap;
 use std::env;
-use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -69,14 +68,14 @@ fn run() -> Result<ExitCode, String> {
     util::refuse_output_alias("--out", args.out.as_deref().map(Path::new), &inputs)?;
     let mut labeled = Vec::with_capacity(args.results.len());
     for path in &args.results {
-        let text = fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
-        let value = serde_json::from_str(&text).map_err(|e| format!("cannot parse {path}: {e}"))?;
+        let (_, value) = exit::read_json_output(Path::new(path), "eb-pipeline run", exit::USAGE)
+            .map_err(|error| error.msg)?;
         labeled.push((path.clone(), value));
     }
     let mut reframe = Vec::with_capacity(args.reframe_reports.len());
     for path in &args.reframe_reports {
-        let text = fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
-        let value = serde_json::from_str(&text).map_err(|e| format!("cannot parse {path}: {e}"))?;
+        let (_, value) = exit::read_json_output(Path::new(path), "ReFrame", exit::USAGE)
+            .map_err(|error| error.msg)?;
         reframe.push((path.clone(), value));
     }
     let (report, failures) = render_labeled_counted(&labeled, &reframe, &args.properties)?;
