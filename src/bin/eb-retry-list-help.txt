@@ -3,6 +3,7 @@ eb-retry-list: extract the unfinished lines of a build list from a run result or
   eb-retry-list (--result FILE | --summary FILE --target NAME)
                 (--list FILE | --recorded-list)
                 [--status STATUS,...] [--classify] [--class CLASS,...]
+                [--refuse-systemic-failure]
                 [--node CORES:MEMORY_MIB[:TARGET]] [--drop-oom]
                 [--easyconfigs DIR]... [--arch ARCH]... [--out FILE]
                 [--require-lines]
@@ -26,6 +27,17 @@ Without `--status`, every unfinished status (`failed`, `refused`, `pending`,
 Deselected lines and lines recorded as `success` are left out. A `skipped`
 line whose note starts with `resumed:` is also left out because its outputs
 were already checked. Pass `--status skipped` to include it explicitly.
+
+`--refuse-systemic-failure` is a guard for `--result`. It classifies each
+failed line log with `eb-stack stack bot-classify --json` and refuses output
+when every failed line is one infrastructure class:
+
+- command path failures (`command not found`, `exit 126/127`)
+- disk full (`No space left on device`)
+- network or fetch failures
+- missing module tree
+
+Ordinary build failures still produce a retry list.
 
 With `--classify`, each unfinished line's recorded log is passed to
 `eb-stack stack bot-classify --json`. Without `--class`, only the

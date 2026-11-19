@@ -2,6 +2,7 @@
 
 pub mod attest;
 pub mod audit;
+pub mod classify;
 pub mod easystack;
 pub mod eessi;
 pub mod exit;
