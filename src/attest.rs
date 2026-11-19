@@ -384,6 +384,7 @@ fn canonical(req: &Request<'_>) -> Result<(String, Vec<u8>), Fail> {
             "path": site_path.display().to_string(),
             "sha256": sha256_hex(&read_bytes(&site_path)?),
         },
+        "target": req.target,
     });
     let mut bytes = serde_json::to_vec_pretty(&record)
         .map_err(|e| Fail::new(exit::FAILED, format!("cannot encode the input record: {e}")))?;
