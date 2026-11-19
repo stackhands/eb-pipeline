@@ -1474,6 +1474,8 @@ mod tests {
             software_subdir: "x86_64/amd/zen4".into(),
             repository: None,
             modules_dirs: Vec::new(),
+            loaded_modules: None,
+            module_table_sha256: None,
         };
         let names = |found: Vec<(&String, &Install)>| -> Vec<String> {
             found.into_iter().map(|(n, _)| n.clone()).collect()
@@ -1543,6 +1545,8 @@ mod tests {
             software_subdir: "x86_64/generic".into(),
             repository: None,
             modules_dirs: Vec::new(),
+            loaded_modules: None,
+            module_table_sha256: None,
         };
         let foo = Verdict {
             module: "Foo/1.0".into(),
@@ -1597,6 +1601,8 @@ mod tests {
             software_subdir: "x86_64/generic".into(),
             repository: Some(repo.display().to_string()),
             modules_dirs: vec![module_dir],
+            loaded_modules: None,
+            module_table_sha256: None,
         };
 
         assert!(!unchanged_at(&state, &probe, Some(42)));
