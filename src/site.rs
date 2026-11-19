@@ -15,7 +15,7 @@ pub fn parse(text: &str) -> Result<Site, Fail> {
 /// Read and parse a site file, then apply the `EB_PIPELINE__*` overrides
 /// from the environment (see [`parse_with_overrides`]).
 pub fn load(path: &Path) -> Result<Site, Fail> {
-    let text = std::fs::read_to_string(path)
+    let text = crate::util::read_text_file(path)
         .map_err(|e| Fail::usage(format!("cannot read {}: {e}", path.display())))?;
     let mut vars = Vec::new();
     for (name, value) in std::env::vars_os() {
@@ -1107,7 +1107,9 @@ impl Site {
 #[cfg(test)]
 mod override_tests {
     use super::*;
-    use std::os::unix::ffi::OsStringExt;
+    use std::ffi::CString;
+    use std::io::Write;
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
     const BASE: &str = include_str!("../templates/small-cluster.toml");
 
@@ -1127,6 +1129,31 @@ mod override_tests {
             serde_json::to_string(&a).unwrap(),
             serde_json::to_string(&b).unwrap()
         );
+    }
+
+    #[test]
+    fn site_loader_refuses_a_fifo() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("site.toml");
+        let raw_path = CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(raw_path.as_ptr(), 0o600) }, 0);
+
+        let mut feeder = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        feeder.write_all(BASE.as_bytes()).unwrap();
+        let closer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            drop(feeder);
+        });
+        let result = load(&path);
+        closer.join().unwrap();
+
+        let error = result.unwrap_err();
+        assert_eq!(error.code, 2);
+        assert!(error.msg.contains("not a regular file"), "{error:?}");
     }
 
     #[test]

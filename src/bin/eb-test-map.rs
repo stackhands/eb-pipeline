@@ -11,7 +11,6 @@
 use eb_pipeline::util;
 use std::collections::BTreeSet;
 use std::env;
-use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -78,7 +77,8 @@ fn text_names(args: &Args) -> Result<ExitCode, String> {
         .map
         .as_deref()
         .ok_or_else(|| "--map is required".to_string())?;
-    let map = fs::read_to_string(map_path).map_err(|e| format!("cannot read {map_path}: {e}"))?;
+    let map = util::read_text_file(Path::new(map_path))
+        .map_err(|e| format!("cannot read {map_path}: {e}"))?;
     let rows = parse_map(&map)?;
     let packages = package_names(args)?;
     let mut tests = BTreeSet::new();
@@ -307,7 +307,8 @@ fn easyconfigs_from_list(path: &str) -> Result<Vec<String>, String> {
         let lines = easystack::read(Path::new(path))?;
         Ok(lines.into_iter().map(|line| line.easyconfig).collect())
     } else {
-        let list_text = fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+        let list_text = util::read_text_file(Path::new(path))
+            .map_err(|e| format!("cannot read {path}: {e}"))?;
         Ok(util::parse_list(&list_text)
             .map_err(|error| format!("{path}: {}", error.msg))?
             .into_iter()
@@ -324,7 +325,8 @@ fn package_names_from_result(path: &str, include_resumed: bool) -> Result<Vec<St
 }
 
 fn easyconfigs_from_result(path: &str, include_resumed: bool) -> Result<Vec<String>, String> {
-    let text = fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+    let text =
+        util::read_text_file(Path::new(path)).map_err(|e| format!("cannot read {path}: {e}"))?;
     let value: Value =
         serde_json::from_str(&text).map_err(|e| format!("cannot parse {path}: {e}"))?;
     let obj = object(&value, "result")?;

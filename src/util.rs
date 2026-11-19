@@ -2,10 +2,26 @@
 
 use crate::exit::Fail;
 use std::fs::OpenOptions;
-use std::io::Write;
-use std::os::unix::fs::MetadataExt;
-use std::os::unix::fs::PermissionsExt;
+use std::io::{Read, Write};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+
+/// Read a regular file as UTF-8 without waiting on special files.
+pub fn read_text_file(path: &Path) -> std::io::Result<String> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ));
+    }
+    let mut text = String::new();
+    file.read_to_string(&mut text)?;
+    Ok(text)
+}
 
 /// Write all bytes to standard output, treating a closed pipeline consumer as
 /// successful completion.

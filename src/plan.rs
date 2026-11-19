@@ -7,7 +7,7 @@ use crate::exit::{self, Fail};
 use crate::package_plan::{Input as PackagePlanInput, Verification, R_DESCRIPTION_CHECK};
 use crate::resolve::{Role, Scope};
 use crate::tools::Tool;
-use crate::util::{list_word, parse_list, quote, ListLine};
+use crate::util::{list_word, parse_list, quote, read_text_file, ListLine};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -1497,7 +1497,7 @@ pub fn read_units(dir: &Path) -> Result<Vec<Unit>, Fail> {
             return Ok(());
         };
         let path = shard_list_path(dir, file)?;
-        let list = std::fs::read_to_string(&path)
+        let list = read_text_file(&path)
             .map_err(|e| Fail::new(exit::FAILED, format!("cannot read {}: {e}", path.display())))?;
         let lines = parse_list(&list)?;
         if lines.is_empty() {
