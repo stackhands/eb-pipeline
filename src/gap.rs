@@ -224,6 +224,12 @@ pub fn run(site: &Site, args: &GapArgs) -> Result<(), Fail> {
         if !output.status.success() {
             return Err(failed(&bin, &shadow, &output, &shadow_stderr));
         }
+        if let Err(error) =
+            exit::read_json_output(&shadow_json, "eb-stack stack shadow", exit::FAILED)
+        {
+            let _ = std::fs::remove_file(&shadow_json);
+            return Err(error);
+        }
     }
     Ok(())
 }

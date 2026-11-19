@@ -453,6 +453,37 @@ fn validate_select(t: &str, s: &Select, e: &mut Vec<String>) {
             s.when_absent
         ));
     }
+    for alias in &s.aliases {
+        if alias.trim().is_empty() {
+            e.push(format!(
+                "targets.{t}.select.aliases: an alias must not be empty"
+            ));
+        } else if alias.trim() != alias {
+            e.push(format!(
+                "targets.{t}.select.aliases: `{alias}` has surrounding whitespace, which no token of a line keeps"
+            ));
+        } else if !s.separator.is_empty() && alias.contains(&s.separator) {
+            e.push(format!(
+                "targets.{t}.select.aliases: `{alias}` contains the separator `{}`",
+                s.separator
+            ));
+        } else if alias == &s.value {
+            e.push(format!(
+                "targets.{t}.select.aliases: `{alias}` repeats select.value"
+            ));
+        }
+    }
+    if let Some(x) = &s.exclude_option {
+        if !x.starts_with("--") || x.len() < 3 || x.contains(['=', ' ']) {
+            e.push(format!(
+                "targets.{t}.select.exclude_option: expected a long option with its leading dashes, such as `--name`, found `{x}`"
+            ));
+        } else if x == &s.option {
+            e.push(format!(
+                "targets.{t}.select.exclude_option: must differ from select.option"
+            ));
+        }
+    }
 }
 
 /// The forms EESSI accepts: `cpu_target` as `<arch>/<uarch>` or

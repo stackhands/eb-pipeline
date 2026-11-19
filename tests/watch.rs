@@ -1082,7 +1082,7 @@ exec "{}" "$@"
         std::env::var("PATH").unwrap_or_default()
     );
     let mut command = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"));
-    command
+    without_host_eessi(&mut command)
         .args([
             "watch",
             "--site",

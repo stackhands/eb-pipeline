@@ -13,33 +13,31 @@ pub struct Selected {
     pub args: Vec<String>,
 }
 
-/// Tokens of every occurrence of the option on a line, and whether it occurs.
-fn tokens(sel: &Select, line: &ListLine) -> Result<(bool, Vec<String>), Fail> {
+/// Tokens of every occurrence of `option` on a line, and whether it occurs.
+fn tokens(option: &str, separator: &str, line: &ListLine) -> Result<(bool, Vec<String>), Fail> {
+    let needs_value = || {
+        Fail::usage(format!(
+            "selector option `{option}` needs a value in `{}`",
+            line.raw
+        ))
+    };
     let mut found = false;
     let mut out = Vec::new();
-    let eq = format!("{}=", sel.option);
+    let eq = format!("{option}=");
     let mut i = 0;
     while i < line.args.len() {
         let a = &line.args[i];
-        let value = if a == &sel.option {
+        let value = if a == option {
             found = true;
             i += 1;
             match line.args.get(i) {
                 Some(value) if !value.starts_with('-') => Some(value.as_str()),
-                _ => {
-                    return Err(Fail::usage(format!(
-                        "selector option `{}` needs a value in `{}`",
-                        sel.option, line.raw
-                    )));
-                }
+                _ => return Err(needs_value()),
             }
         } else if let Some(v) = a.strip_prefix(&eq) {
             found = true;
             if v.is_empty() {
-                return Err(Fail::usage(format!(
-                    "selector option `{}` needs a value in `{}`",
-                    sel.option, line.raw
-                )));
+                return Err(needs_value());
             }
             Some(v)
         } else {
@@ -47,16 +45,13 @@ fn tokens(sel: &Select, line: &ListLine) -> Result<(bool, Vec<String>), Fail> {
         };
         if let Some(v) = value {
             let tokens = v
-                .split(sel.separator.as_str())
+                .split(separator)
                 .map(str::trim)
                 .filter(|token| !token.is_empty())
                 .map(str::to_string)
                 .collect::<Vec<_>>();
             if tokens.is_empty() {
-                return Err(Fail::usage(format!(
-                    "selector option `{}` needs a value in `{}`",
-                    sel.option, line.raw
-                )));
+                return Err(needs_value());
             }
             out.extend(tokens);
         }
@@ -65,12 +60,13 @@ fn tokens(sel: &Select, line: &ListLine) -> Result<(bool, Vec<String>), Fail> {
     Ok((found, out))
 }
 
-fn stripped(sel: &Select, args: &[String]) -> Vec<String> {
-    let eq = format!("{}=", sel.option);
+/// `args` without any occurrence of `option`, in either form.
+fn stripped(option: &str, args: &[String]) -> Vec<String> {
+    let eq = format!("{option}=");
     let mut out = Vec::new();
     let mut i = 0;
     while i < args.len() {
-        if args[i] == sel.option {
+        if args[i] == option {
             i += 2;
             continue;
         }
@@ -82,19 +78,38 @@ fn stripped(sel: &Select, args: &[String]) -> Vec<String> {
     out
 }
 
+/// Whether one of the tokens names the target: its `value` or one of its `aliases`.
+fn names_target(sel: &Select, tokens: &[String]) -> bool {
+    tokens
+        .iter()
+        .any(|t| t == &sel.value || sel.aliases.iter().any(|alias| alias == t))
+}
+
 /// Decide whether `line` is planned for the target that owns `sel`.
+///
+/// The line is included when `option` names the target, or, without the option, when
+/// `when_absent` is `all`. An `exclude_option` that names the target then leaves the line
+/// out: an exclusion takes priority over an inclusion.
 pub fn select_line(sel: &Select, line: &ListLine) -> Result<Selected, Fail> {
-    let (found, toks) = tokens(sel, line)?;
-    let planned = if found {
-        toks.iter().any(|t| t == &sel.value)
+    let (found, included) = tokens(&sel.option, &sel.separator, line)?;
+    let mut planned = if found {
+        names_target(sel, &included)
     } else {
         sel.when_absent != "none"
     };
-    let args = if sel.strip {
-        stripped(sel, &line.args)
-    } else {
-        line.args.clone()
-    };
+    let mut args = line.args.clone();
+    if sel.strip {
+        args = stripped(&sel.option, &args);
+    }
+    if let Some(exclude) = &sel.exclude_option {
+        let (_, excluded) = tokens(exclude, &sel.separator, line)?;
+        if names_target(sel, &excluded) {
+            planned = false;
+        }
+        if sel.strip {
+            args = stripped(exclude, &args);
+        }
+    }
     Ok(Selected { planned, args })
 }
 
@@ -109,6 +124,17 @@ mod tests {
             separator: separator.into(),
             when_absent: when_absent.into(),
             strip,
+            aliases: Vec::new(),
+            exclude_option: None,
+        }
+    }
+
+    /// A selector for target `a` of group `site`, with an exclude option.
+    fn grouped(strip: bool) -> Select {
+        Select {
+            aliases: vec!["site".into()],
+            exclude_option: Some("--not-targets".into()),
+            ..sel(strip, "all", ",")
         }
     }
 
@@ -184,5 +210,57 @@ mod tests {
             ["--rebuild", "--x"]
         );
         assert_eq!(selected(&sel(false, "all", ","), &l).args, l.args);
+    }
+
+    #[test]
+    fn an_alias_selects_like_the_value() {
+        let s = grouped(false);
+        assert!(selected(&s, &line(&["--only-targets=site"])).planned);
+        assert!(selected(&s, &line(&["--only-targets=b,site"])).planned);
+        assert!(!selected(&s, &line(&["--only-targets=b,other-site"])).planned);
+        // without aliases the group name selects nothing
+        assert!(!selected(&sel(false, "all", ","), &line(&["--only-targets=site"])).planned);
+    }
+
+    #[test]
+    fn an_exclusion_takes_priority_over_an_inclusion() {
+        let s = grouped(false);
+        // named by value or alias under the exclude option: left out
+        assert!(!selected(&s, &line(&["--not-targets=a"])).planned);
+        assert!(!selected(&s, &line(&["--not-targets=site"])).planned);
+        assert!(!selected(&s, &line(&["--only-targets=a", "--not-targets=a"])).planned);
+        assert!(!selected(&s, &line(&["--only-targets=site", "--not-targets=a"])).planned);
+        assert!(!selected(&s, &line(&["--only-targets=a", "--not-targets", "b,site"])).planned);
+        // an exclusion of other targets changes nothing
+        assert!(selected(&s, &line(&["--not-targets=b"])).planned);
+        assert!(selected(&s, &line(&["--only-targets=a", "--not-targets=b,c"])).planned);
+        assert!(!selected(&s, &line(&["--only-targets=b", "--not-targets=c"])).planned);
+    }
+
+    #[test]
+    fn an_exclusion_is_ignored_without_exclude_option() {
+        let s = sel(false, "all", ",");
+        assert!(selected(&s, &line(&["--not-targets=a"])).planned);
+    }
+
+    #[test]
+    fn strip_removes_the_exclude_option_too() {
+        let l = line(&["--rebuild", "--only-targets=a", "--not-targets", "b", "--x"]);
+        assert_eq!(selected(&grouped(true), &l).args, ["--rebuild", "--x"]);
+        assert_eq!(selected(&grouped(false), &l).args, l.args);
+    }
+
+    #[test]
+    fn exclude_option_without_a_value_is_refused() {
+        let s = grouped(false);
+        for args in [
+            &["--not-targets"][..],
+            &["--not-targets="][..],
+            &["--not-targets=,"][..],
+        ] {
+            let err = select_line(&s, &line(args)).unwrap_err();
+            assert_eq!(err.code, 2);
+            assert!(err.msg.contains("--not-targets"), "{}", err.msg);
+        }
     }
 }

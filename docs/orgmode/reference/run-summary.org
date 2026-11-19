@@ -160,7 +160,7 @@ cat site/logs/20261117_090000/summary.json
       "status": "success"
     }
   ],
-  "tool": "eb-pipeline 0.3.1",
+  "tool": "eb-pipeline 0.4.0",
   "updated_at": "2026-11-17T06:48:31.856935881+00:00"
 }
 #+end_example
@@ -312,7 +312,7 @@ eb-pipeline status --site site.toml --target zen4 --format json
             "status": "success"
           }
         ],
-        "tool": "eb-pipeline 0.3.1",
+        "tool": "eb-pipeline 0.4.0",
         "updated_at": "2026-11-17T06:48:31.856935881+00:00"
       }
     }

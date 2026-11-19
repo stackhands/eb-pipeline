@@ -228,7 +228,12 @@ struct Exec {
 
 /// Run one command to completion with output in a log file. A signal that
 /// arrives is forwarded to the child once.
-fn exec(cmd: &Cmd, base_env: &BTreeMap<String, String>, log: &Path) -> Result<Exec, Fail> {
+fn exec(
+    cmd: &Cmd,
+    base_env: &BTreeMap<String, String>,
+    unset_env: &BTreeSet<String>,
+    log: &Path,
+) -> Result<Exec, Fail> {
     if let Some(dir) = log.parent() {
         std::fs::create_dir_all(dir).map_err(|e| {
             Fail::new(
@@ -247,6 +252,9 @@ fn exec(cmd: &Cmd, base_env: &BTreeMap<String, String>, log: &Path) -> Result<Ex
         .try_clone()
         .map_err(|e| Fail::new(exit::FAILED, format!("cannot duplicate log handle: {e}")))?;
     let mut c = Command::new(&cmd.argv[0]);
+    for name in unset_env {
+        c.env_remove(name);
+    }
     c.args(&cmd.argv[1..])
         .envs(base_env)
         .envs(&cmd.env)
@@ -311,9 +319,10 @@ fn exec(cmd: &Cmd, base_env: &BTreeMap<String, String>, log: &Path) -> Result<Ex
 pub fn exec_logged(
     cmd: &Cmd,
     base_env: &BTreeMap<String, String>,
+    unset_env: &BTreeSet<String>,
     log: &Path,
 ) -> Result<i32, Fail> {
-    exec(cmd, base_env, log).map(|e| e.code)
+    exec(cmd, base_env, unset_env, log).map(|e| e.code)
 }
 
 fn last_json_line(path: &Path) -> Option<String> {
@@ -658,9 +667,10 @@ impl State {
         phase: &str,
         cmd: &Cmd,
         env: &BTreeMap<String, String>,
+        unset_env: &BTreeSet<String>,
         log: &Path,
     ) -> Result<Exec, Fail> {
-        let ex = exec(cmd, env, log)?;
+        let ex = exec(cmd, env, unset_env, log)?;
         *self.spent.entry(phase.to_string()).or_default() += ex.elapsed;
         Ok(ex)
     }
@@ -674,6 +684,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
     let site = p.scope.site;
     let target = p.scope.target.name.clone();
     let env = p.scope.env();
+    let unset_env = p.scope.eessi_unset_env();
     let log_dir = PathBuf::from(p.scope.log_dir());
     let mut st = State {
         res: RunResult {
@@ -987,7 +998,8 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
             }
             Ok(cmd) => {
                 let hashes = resume::hashes_path(&p.scope.log_dir());
-                let ex = match st.exec("shard", &cmd, &env, &log_dir.join("order.log")) {
+                let ex = match st.exec("shard", &cmd, &env, &unset_env, &log_dir.join("order.log"))
+                {
                     Ok(e) => e,
                     Err(f) => {
                         st.res.message = Some(f.msg);
@@ -1091,7 +1103,8 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                     &target,
                     &format!("planning {} shards", sh.count),
                 );
-                let ex = match st.exec("shard", &cmd, &env, &log_dir.join("shard.log")) {
+                let ex = match st.exec("shard", &cmd, &env, &unset_env, &log_dir.join("shard.log"))
+                {
                     Ok(e) => e,
                     Err(f) => {
                         st.res.message = Some(f.msg);
@@ -1178,7 +1191,8 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                     &target,
                     &format!("planning {count} shards"),
                 );
-                let ex = match st.exec("shard", &cmd, &env, &log_dir.join("shard.log")) {
+                let ex = match st.exec("shard", &cmd, &env, &unset_env, &log_dir.join("shard.log"))
+                {
                     Ok(e) => e,
                     Err(f) => {
                         st.res.message = Some(f.msg);
@@ -1328,6 +1342,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                 "sources",
                 cmd,
                 &env,
+                &unset_env,
                 &log_dir.join(format!("offline-planner-{:02}.log", i + 1)),
             ) {
                 Ok(ex) => ex,
@@ -1376,6 +1391,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                     "sources",
                     &cmd,
                     &env,
+                    &unset_env,
                     &log_dir.join(format!("{s}.fetch.log")),
                 ) {
                     Ok(e) => e,
@@ -1532,6 +1548,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                     "admission",
                     &cmd,
                     &env,
+                    &unset_env,
                     &log_dir.join(format!("admission-{}.{attempt}.log", u.name)),
                 ) {
                     Ok(e) => e,
@@ -1659,7 +1676,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                 log("WARN", "build", &target, &format!("{s}: {w}"));
             }
             log("INFO", "build", &target, &format!("{s}: start"));
-            let ex = match st.exec("build", &cmd, &env, Path::new(&p.log_stdout(s))) {
+            let ex = match st.exec("build", &cmd, &env, &unset_env, Path::new(&p.log_stdout(s))) {
                 Ok(e) => e,
                 Err(f) => {
                     st.res.message = Some(f.msg);
@@ -1727,6 +1744,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                             "logs",
                             &kc,
                             &env,
+                            &unset_env,
                             &log_dir.join(format!("{s}.keep-logs.log")),
                         );
                         match kx {
@@ -1788,7 +1806,13 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
         Ok(Some(cmd)) => {
             if !st.failed && !st.refused && !st.pending {
                 log("INFO", "checks", &target, "start");
-                match st.exec("checks", &cmd, &env, &log_dir.join("checks.log")) {
+                match st.exec(
+                    "checks",
+                    &cmd,
+                    &env,
+                    &unset_env,
+                    &log_dir.join("checks.log"),
+                ) {
                     Ok(ex) => {
                         if ex.code == 0 {
                             st.phase("checks", "ok", Some(0), None);
@@ -1838,6 +1862,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                         "verification",
                         cmd,
                         &env,
+                        &unset_env,
                         &log_dir.join(format!("verification-{}.log", index + 1)),
                     ) {
                         Ok(ex) if ex.code == 0 => {
@@ -1888,7 +1913,13 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
         match p.cache_cmd() {
             Ok(Some(cmd)) => {
                 log("INFO", "caches", &target, "start");
-                match st.exec("caches", &cmd, &env, &log_dir.join("caches.log")) {
+                match st.exec(
+                    "caches",
+                    &cmd,
+                    &env,
+                    &unset_env,
+                    &log_dir.join("caches.log"),
+                ) {
                     Ok(ex) => {
                         if ex.code == 0 {
                             st.phase("caches", "ok", Some(0), None);
@@ -1962,7 +1993,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                         p.rotate_cmd(false).ok().flatten().unwrap_or(cmd)
                     }
                 };
-                match st.exec("logs", &cmd, &env, &log_dir.join("rotate.log")) {
+                match st.exec("logs", &cmd, &env, &unset_env, &log_dir.join("rotate.log")) {
                     Ok(ex) => match map_rotate(ex.code) {
                         RotateOutcome::Ok => st.phase("logs", "ok", Some(0), note),
                         RotateOutcome::Locked => {
