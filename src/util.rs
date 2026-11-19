@@ -90,23 +90,20 @@ pub fn refuse_output_alias(
     Ok(())
 }
 
-/// Atomically replace `path` through a fully written temporary sibling.
+/// Atomically replace a non-symlink `path` through a fully written temporary
+/// sibling.
 ///
 /// An existing regular file's permission bits are applied to the temporary
 /// file before the rename. Ownership follows the account creating the
 /// temporary file.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let destination = if path.is_symlink() {
-        let target = std::fs::read_link(path)?;
-        let target = if target.is_absolute() {
-            target
-        } else {
-            path.parent().unwrap_or_else(|| Path::new(".")).join(target)
-        };
-        resolved_path(&target)
-    } else {
-        path.to_path_buf()
-    };
+    if path.is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "output path is a symbolic link",
+        ));
+    }
+    let destination = path.to_path_buf();
     let parent = destination.parent().unwrap_or_else(|| Path::new("."));
     let existing_mode = match std::fs::metadata(&destination) {
         Ok(metadata) if metadata.is_file() => Some(metadata.permissions().mode() & 0o7777),
@@ -405,19 +402,25 @@ mod tests {
     }
 
     #[test]
-    fn atomic_write_preserves_an_output_symlink() {
+    fn atomic_write_refuses_output_symlinks() {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("result.json");
         let link = dir.path().join("latest.json");
         std::fs::write(&target, b"old bytes\n").unwrap();
         std::os::unix::fs::symlink("result.json", &link).unwrap();
-        let old_inode = std::fs::metadata(&target).unwrap().ino();
 
-        write_atomic(&link, b"new bytes\n").unwrap();
-
+        let error = write_atomic(&link, b"new bytes\n").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(std::fs::read(&target).unwrap(), b"old bytes\n");
         assert!(link.is_symlink());
-        assert_eq!(std::fs::read(&link).unwrap(), b"new bytes\n");
-        assert_ne!(std::fs::metadata(&target).unwrap().ino(), old_inode);
+
+        let missing = dir.path().join("missing.json");
+        let dangling = dir.path().join("dangling.json");
+        std::os::unix::fs::symlink("missing.json", &dangling).unwrap();
+        let error = write_atomic(&dangling, b"new bytes\n").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(!missing.exists());
+        assert!(dangling.is_symlink());
     }
 
     #[test]
