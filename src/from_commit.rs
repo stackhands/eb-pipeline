@@ -74,17 +74,25 @@ pub fn run(site: Option<&Site>, list: &Path, opts: &Options<'_>) -> Result<i32, 
         .stdin(Stdio::null())
         .output()
         .map_err(|e| Fail::usage(format!("cannot run `{bin} stack from-commit`: {e}")))?;
+    let _ = std::io::stderr().write_all(&output.stderr);
+    let code = output
+        .status
+        .code()
+        .unwrap_or_else(|| 128 + output.status.signal().unwrap_or(0));
     util::write_stdout(&output.stdout).map_err(|error| {
         Fail::new(
             exit::FAILED,
             format!("cannot print eb-stack output: {error}"),
         )
     })?;
-    let _ = std::io::stderr().write_all(&output.stderr);
-    let code = output
-        .status
-        .code()
-        .unwrap_or_else(|| 128 + output.status.signal().unwrap_or(0));
+    if output.status.success() {
+        exit::parse_json_output(
+            &output.stdout,
+            Path::new("stdout"),
+            "eb-stack stack from-commit",
+            exit::FAILED,
+        )?;
+    }
     if output.status.success() {
         log("INFO", "from-commit", label, "from-commit passed");
         Ok(exit::OK)

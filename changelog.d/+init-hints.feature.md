@@ -1,1 +1,0 @@
-`eb-pipeline init --hints` and `EB_PIPELINE_INIT_HINTS=1` print next steps on stderr after writing a template, including `targets --site` for `eessi-site` and `small-cluster`. `docs/examples/init-hints.sh` checks the lines.

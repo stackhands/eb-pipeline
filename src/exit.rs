@@ -76,6 +76,24 @@ impl std::fmt::Display for Fail {
 
 impl std::error::Error for Fail {}
 
+/// Parse JSON output written by a subprocess.
+pub fn parse_json_output(
+    bytes: &[u8],
+    path: &Path,
+    producer: &str,
+    error_code: i32,
+) -> Result<serde_json::Value, Fail> {
+    serde_json::from_slice(bytes).map_err(|error| {
+        Fail::new(
+            error_code,
+            format!(
+                "{producer} wrote invalid JSON to {}: {error}",
+                path.display()
+            ),
+        )
+    })
+}
+
 /// Read and parse a JSON file written by a subprocess.
 pub fn read_json_output(
     path: &Path,
@@ -88,14 +106,6 @@ pub fn read_json_output(
             format!("cannot read {}: {error}", path.display()),
         )
     })?;
-    let value = serde_json::from_slice(&bytes).map_err(|error| {
-        Fail::new(
-            error_code,
-            format!(
-                "{producer} wrote invalid JSON to {}: {error}",
-                path.display()
-            ),
-        )
-    })?;
+    let value = parse_json_output(&bytes, path, producer, error_code)?;
     Ok((bytes, value))
 }

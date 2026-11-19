@@ -132,7 +132,7 @@ The installs that a failed record leaves out are not seen to change until a late
 ** What watch compares
 
 =watch= reads the EESSI that the module environment of the target loads, as a record does, and the record of the target, holding =STATE_DIR/TARGET.watch.lock= from start to end.
-While the CVMFS revision of the repository is the one that every install was last found at, over the same module trees, all inside the repository, no module in them can have changed, and =watch= compares none:
+While the CVMFS revision of the repository is the one that every install was last found at, over the same module trees, each resolving inside the repository, no module in them can have changed, and =watch= compares none:
 
 #+begin_src bash
 eb-pipeline watch --site site.toml --target zen4 --build-type production --log-stamp 20261117_120000 --dry-run

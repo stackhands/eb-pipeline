@@ -4,6 +4,212 @@ All notable changes to this project are documented here.
 
 <!-- towncrier release notes start -->
 
+## 0.4.0 (2026-11-19)
+
+### Features
+
+- =eb-pipeline run --metrics-file= and =eb-cvmfs --metrics-file= atomically publish their final Prometheus metrics for a node exporter textfile collector while preserving an existing file's permission bits. Pipeline metrics remain independent of =--result= and refuse its destination; CVMFS metrics preserve the last successful publish and serialize invocations that share a file.
+- Add an opt-in `[watch.abi_drift]` table that lets `watch` run host ABI probe commands, map changed fields to provider easyconfigs, and feed that provider set into `eb-stack rebuild-set` for selective rebuild planning.
+- Add an opt-in `eb-cvmfs --verify-cmd CMD` check between synchronization and publish, aborting the transaction when verification fails.
+- Add an opt-in `eb-cvmfs` `--archive-manifest` check that refuses to open a CernVM File System (CVMFS) transaction unless one directory contains exactly the expected non-empty archive, with normalized paths, explicit parent directories, and user and group ids that fit the configured integer type.
+- Add opt-in `eb-cvmfs --sync-timeout SEC` and `--verify-timeout SEC` deadlines that terminate the command process group, abort the transaction, record the timed-out phase, and prevent retries and publication.
+- Add opt-in `eb-cvmfs --tag`, `--tag-description`, and `--check` for named publish tags and post-publish integrity checks.
+- Add opt-in checksum-indexed offline bundles for prefetched EasyBuild files and configured test or runtime assets, with eb-stack planner artifacts and a site-provided network-isolation wrapper for later phases.
+- Adds `eb-pipeline audit`, an opt-in command that runs eb-stack vulnerability subcommands and copies generated rebuild easystacks to `--out-dir/rebuilds/*.yml` for `eb-pipeline run --list`.
+- The JUnit tool adds custom suite properties when requested.
+- The `eb-cvmfs` command bounds integrity checks with an optional deadline.
+- The `eb-cvmfs` command bounds publishing with an optional deadline.
+- The `eb-junit` command returns 1 for failing reports when requested.
+- The `status` command lists only problematic runs when requested.
+- The retry-list command reports empty selections through its status.
+- The retry-list tool reuses the recorded build list when requested.
+- The run command writes its execution plan when requested.
+- The shard-weights tool requires a minimum sample count when requested.
+- The test-map tool includes resumed lines when requested.
+- The verify command reuses a recorded list path when requested.
+- `[attest]` records the exact inputs of a finalized plan in an rfc9162 sidecar log. `plan` and `run` append that record when the table is enabled, and `verify` recomputes it and checks the inclusion path. Without the table, a plan and a result stay unchanged.
+- `[targets.select]` takes `aliases`, further tokens that name the target such as a group name shared by several targets, and `exclude_option`, a second option whose tokens leave a line out for the target. An exclusion takes priority over an inclusion, and `strip` removes both options.
+- `check --gap-out DIR --generation GEN` delegates site-layer gap analysis to `eb-stack stack gap`; `--shadow` also writes the `stack shadow` JavaScript Object Notation (JSON) report.
+- `check --stack-checks buildenv` runs `eb-stack stack buildenv --build-list FILE --strict` and fails while a toolchain of a plain build list has no `buildenv` line. `provided` and `buildenv` can be requested together. Needs eb-stack 0.9.0 or newer.
+- `check --stack-checks` can delegate selected build-list checks to the configured `eb-stack` before any scheduler allocation.
+- `eb-junit` now accepts `--reframe-report FILE` and folds ReFrame `--report-file` JSON testcases into extra JUnit suites in the same XML output.
+- `eb-pipeline check --list FILE --check-from-commit` is opt-in. It runs
+  `eb-stack stack from-commit --json` with JavaScript Object Notation (JSON)
+  output on an easystack before a pipeline run.
+  Continuous integration (CI) can then refuse stale pins already in the EasyBuild
+  release tag.
+- `eb-pipeline init --hints` and `EB_PIPELINE_INIT_HINTS=1` print next steps on stderr after writing a template, including `targets --site` for `eessi-site` and `small-cluster`. `docs/examples/init-hints.sh` checks the lines.
+- `eb-pipeline run --resume-result FILE` continues a run whose `[resume]` table is enabled. It asks `eb-stack stack order --hashes-out` for the input identity, refuses when that digest differs from `FILE`, and skips a successful prelude or shard only when every module file that unit declared is still present. A requeued Slurm job uses a workspace directory qualified by `filesystems.configs_repo`. Without `[resume]`, `run` is unchanged.
+- `eb-retry-list --classify --class CLASS,...` keeps unfinished lines whose `eb-stack stack bot-classify --json` `class` or `sub_class` is one of those names. Without `--class`, the command still keeps `interrupted`, `resource` and `timeout`. `--node CORES:MEMORY_MIB[:TARGET]` asks `eb-stack stack oom` about the lines that remain, warns on standard error when one may run out of memory, and `--drop-oom` leaves those lines out. `--easyconfigs` and `--arch` are passed through to that command. The new options do nothing unless they are set, and each of them needs `--classify`.
+- `eb-test-map --format eessi-modules` prints one `reframe --setvar modules=Name/Version,...` argument for the applications in a build list. The European Environment for Scientific Software Installations (EESSI) test suite reads that comma-separated list in `set_modules`. `--map` is not required for this format. The default output, one test name per line, is unchanged.
+- `eb-test-map` now reads `--list` as either a plain build list or a `.yml`/`.yaml` easystack, accepts `--result` to map only `status == "success"` lines from a run result, and offers `--format reframe` to print escaped `-n ^...$` selectors.
+- `plan` and `run` can take an eb-stack package-plan bundle, build its emitted recipes in declared order, and record the SHA-256 of `package.plan.json`. An explicit verification option runs `pip check` for PyPI products and an installed R DESCRIPTION dependency check for CRAN products.
+- eb-pipeline now generates bash, zsh and fish completion scripts and man pages for every binary in a release from their live command help during CI and release packaging.
+
+### Fixes
+
+- ABI drift checks preserve gone installs so watch can drop their stale records.
+- Accept `--archive-manifest=PATH` in `eb-cvmfs`, matching the `=` syntax already supported for the other value options.
+- Accept `-V` and `--version` on `eb-test-map`, printing `eb-test-map <version>` on stdout and exiting `0` like its sibling binaries.
+- Accept an ingest directory supplied through a symbolic link.
+- Admission retries retain the last valid JSON report when later output is malformed.
+- Allow a caches table to omit `targets`, using the documented empty-list default.
+- Apply `patches =` replacement and `patches +=` extension in execution order.
+- Archive manifests reject tar numeric fields with data after their terminator.
+- Attest patch literals only from uncommented `patches` assignments.
+- Attest the last easyblock assignment in an easyconfig, matching Python execution.
+- Attestation reports an unavailable helper executable as a usage error.
+- Audit preserves SIGINT and SIGTERM exit codes from eb-stack subprocesses.
+- CVMFS value options reject a following long option.
+- Companion value options report a missing value instead of consuming the next long option.
+- Compare resolved module trees before skipping a watch assessment.
+- Complete the truncated `watch` exit status `1` sentence in `WATCH_EXIT` (`eb-pipeline watch --help`) and `docs/orgmode/reference/cli.org`.
+- Concatenate adjacent patch string literals before recording attested paths.
+- Derive missing metrics counts from the result's recorded lines instead of reporting every status as zero.
+- Easystack diagnostics point to the repeated key.
+- Easystack errors name the source line and column.
+- Easystack parsing applies YAML merge keys before reading options.
+- Easystack-only stack checks reject plain build-list paths before starting eb-stack.
+- Example lint accepts placeholder URLs whose authority contains user information.
+- From-commit checks report an unavailable eb-stack executable as a usage error.
+- Gap checks report an unavailable eb-stack executable as a usage error.
+- Ignore an initial UTF-8 byte-order mark in plain build lists.
+- Ignore unrelated non-Unicode environment values while loading site overrides.
+- Include the source archive in release build-provenance attestations alongside the binary archives.
+- Input attestation finds an explicit easyblock assignment after other easyconfig settings.
+- Input attestation reports a helper signal death with its conventional exit status.
+- Input attestation writes records through unique temporary files that tolerate stale writer state.
+- Interrupted source prefetch records the active line and every unbuilt line.
+- Let standalone command help and version output exit cleanly when a pipeline consumer closes early.
+- Licence thresholds apply their group when a package version is not dotted numbers.
+- Metrics reject result counts whose status is outside the result schema.
+- Module scanning reads quoted Lua and Tcl root paths without retaining quote characters.
+- Name the full `eb-stack stack admit` and `eb-stack stack shard` commands in CLI exit-code help.
+- Offline bundles reject conflicting files that share one consumer locator.
+- Output commands protect input files from aliased destinations.
+- Output writers replace completed files atomically.
+- Package plans reject duplicate build-order recipes instead of building one recipe twice.
+- Package plans reject verification recipes that are absent from the build order.
+- Plan and dry-run commands exit cleanly when an output consumer closes.
+- Plan and run reject input paths that JSON cannot represent without changing their bytes.
+- Preserve a separately written EasyBuild robot path when source prefetch disables dependency resolution.
+- Preserve one-letter EasyBuild options when generating an easystack for memory checks.
+- Recognize uppercase `.YML` and `.YAML` build-list extensions as easystacks, matching the check commands.
+- Record the aggregate build phase as pending when a staged rebuild waits for a ledger event.
+- Refuse duplicate `--map`, `--list`, `--result`, and `--format` options in `eb-test-map` with exit status `2`.
+- Refuse duplicate `--result`, `--summary`, `--target`, `--list`, and `--out` options in `eb-retry-list` with exit status `2` instead of silently overwriting earlier values.
+- Refuse duplicate single-value options (`--log-root`, `--last`, `--target`, `--existing`, `--min-samples`, `--mode`, and `--out`) in `eb-shard-weights` with exit status `2`.
+- Refuse invalid JSON emitted by `eb-stack stack from-commit`.
+- Refuse invalid JSON from `eb-stack stack shadow`.
+- Refuse retry inputs whose easyconfig paths disagree instead of dropping outcomes.
+- Refuse special files before reading the test map.
+- Refuse successful summary packages without valid shard-weight durations.
+- Refuse symbolic-link destinations for atomic file outputs.
+- Refuse unreadable completed summaries instead of emitting partial shard weights.
+- Reject an empty CycloneDX file from a successful SBOM command instead of reporting that it was written.
+- Reject duplicate phase names before rendering contradictory status series.
+- Reject empty or control-filled build types and run identifiers.
+- Reject environment variable names that process launchers cannot export.
+- Reject malformed JSON written by a successful SBOM command.
+- Reject mixing the `provided` stack check with checks that require an easystack, instead of passing one file as both incompatible input formats.
+- Reject package-plan recipe and easyblock paths that escape the bundle through symbolic links.
+- Reject release archives in which a declared binary is present but lacks executable permissions.
+- Reject selector values made only of separators instead of silently deselecting the build-list line.
+- Remove a newly created site template when writing or syncing it fails.
+- Report `from-commit` standard-output write failures instead of returning success after losing its JSON report.
+- Report malformed documentation URLs as link errors instead of stopping the whole site check.
+- Resume workspace names distinguish repository paths that differ by separators.
+- Retry errors name the source build list.
+- Route standard output writes across `eb-pipeline` subcommands (`explain`, `targets`, `status`, `metrics`, `init`, `watch --dry-run`, `verify`, and `schema`) through `util::write_stdout` so early closed pipes exit `0` instead of panicking with exit `101`.
+- Routed commands create phase directories referenced only by route environment values.
+- Run each package-plan verification once when closure references share an emitted recipe.
+- Run plans and dry runs use supplied shard units without replanning them.
+- Run signals now reach every process in the active phase command.
+- Runs preserve a summary that does not parse instead of replacing every target.
+- SBOM generation preserves signal exit codes.
+- SBOM generation refuses success when eb-stack leaves only a stale document.
+- Saved shard plans without build units fail instead of completing without builds.
+- Shard execution atomically materializes selected and easystack build lists.
+- Shard plan loading rejects duplicate unit names before commands or logs collide.
+- Shard plan loading rejects shard entries that omit their build-list file.
+- Shard weights refuse duplicate modules in an existing weights file.
+- Share the EESSI template's routed build work directory as writable so CPU prerequisite builds can use it.
+- Site validation rejects duplicate shard module paths and variable names.
+- Stabilize the shared `eb-cvmfs` metrics-lock test.
+- Stack checks preserve subprocess exit statuses for pipeline callers.
+- Status reports when a selected target has not written its summary entry yet.
+- Target selectors reject an empty equals-form value.
+- Target selectors reject missing values.
+- Target-filtered status output derives its run status from the selected target.
+- Test stubs now use a shared executable writer and synchronized command launch path with bounded ETXTBSY retries to stabilize parallel test runs.
+- The JUnit companion now uses EB_PIPELINE_RESULT when no input flag is present.
+- The documentation checker reports invalid forbidden patterns as usage errors.
+- The documentation checker resolves root-relative links within the built site.
+- The easystack reader treats floating-point one as a bare option.
+- The from-commit check now preserves the conventional exit status when its eb-stack process dies from a signal.
+- The init command now reports output filesystem errors with exit status 1.
+- The metrics output option rejects the argument separator as a file path.
+- The planner keeps leading-dash easyconfig names as robot-searchable operands.
+- The retry command now preserves each selected line's EasyBuild options during memory checks.
+- The retry companion now uses common pipeline input variables when their flags are absent.
+- The retry-list command protects its input files from output writes.
+- The run command rejects dry-run resume combinations.
+- The shard weights command now rejects a target that matches none of its inputs.
+- The shard weights command now rejects successful result lines with invalid durations.
+- The shard weights companion now uses common result and target variables when their flags are absent.
+- The test map command now parses per-line EasyBuild options in plain build lists.
+- The test map companion now uses common list and result variables when their flags are absent.
+- The test map companion prefers result input when both pipeline input variables are set.
+- The watch command writes assessed plans when rebuild preparation stops.
+- Tool version checks reject a command that prints a version and exits nonzero.
+- Treat `BrokenPipe` on standard output writes as clean exit `0` across `eb-junit`, `eb-retry-list`, `eb-shard-weights`, `eb-test-map`, and `eb-cvmfs --dry-run`.
+- Treat a closed gap-report output consumer as successful after the report files have been written.
+- Treat only a parent path component as leaving the built documentation site, not a file name that begins with two dots.
+- Unbracketed IPv6 webhook addresses are rejected before notification delivery.
+- Use the final module-file root assignment for watch identity and easyconfig discovery.
+- Watch preserves an install that another run records while a rebuild is in progress.
+- Webhook validation rejects URLs whose authority contains only a port.
+- `eb-junit` preserves distinct testcase names when XML character removal makes their recorded names equal.
+- `eb-pipeline --help` now lists the companion commands `eb-retry-list`, `eb-shard-weights`, `eb-test-map`, `eb-junit` and `eb-cvmfs`, `docs/examples/tutorial.sh` builds the binary when a fresh checkout has no `target/debug/eb-pipeline` yet, and a `rust-toolchain.toml` pins the local toolchain to `1.90.0` to match CI.
+- `eb-pipeline audit` refuses a malformed SBOM from `eb-stack stack sbom` before component analysis.
+- `eb-pipeline audit` refuses a malformed `component-reach.json` from `eb-stack component-reach`.
+- `eb-retry-list` leaves verified resume-skipped lines out of its default retry selection.
+- eb-cvmfs reports 128 plus the signal for terminated commands.
+
+### Documentation
+
+- A how-to records a plan's inputs in the sidecar log and checks the inclusion path. An explanation says why the record covers the resolved files rather than a commit.
+- Clarify that an ingest directory may be a symbolic link while its archive entry may not.
+- Document `EB_PIPELINE_RESULT` input fallback for `eb-junit` in `junit.org`.
+- Document `EB_PIPELINE_RESULT`, `EB_PIPELINE_INIT_HINTS`, `EB_PIPELINE_WORKSPACE_REPO`, `EB_PIPELINE_CHECK_*`, and `EB_PIPELINE_LINT_DENY` in `reference/environment.org`.
+- Document `audit` exit statuses (`0`, `1`, `2`, `75`, `78`) in `exit-status.org` and `cli.org`, note the hidden `completions` and `man` packaging subcommands, and update `run-summary.org` examples to `eb-pipeline 0.3.1`.
+- Document `init --hints` (`EB_PIPELINE_INIT_HINTS`), update `audit` synopsis and `0.3.1` version output, and cross-reference `eb-test-map` and `eb-cvmfs` in `reference/cli.org`.
+- Document default omission of `resumed:` skipped lines by `eb-retry-list` in `cli.org`.
+- Fix the `v0.3.0` release contents in `howto/install.org`, `docs/examples/install.sh`, and `README.md`, and update source-build `--version` output to `0.3.1`.
+- The CLI reference and a how-to describe selecting and configuring pre-allocation eb-stack checks.
+- The README and documentation carry the stackhands logo and the table of the other tools.
+- The how-to and command/result references explain how to build an eb-stack package-plan bundle, opt in to Python or R consistency verification, and interpret its digest and verification logs.
+- Update `docs/examples/init-hints.sh` to match the full target-hint message printed by `eb-pipeline init --hints`.
+- Updated the `eb-junit` how-to guide to show the actual `--result or --reframe-report is required` error message when neither input option is provided.
+- Updated the `eb-test-map` how-to guide to document `--allow-unmapped` for `--format reframe`, `--result` alongside `--list`, and exact error messages for missing inputs, unknown `--format`, and malformed list entries.
+- `docs/orgmode/howto/resume-a-run.org` explains `run --resume-result`, and the command, result, exit status and phase pages name `[resume]`, `input_digest` and `outputs`.
+
+### Miscellaneous
+
+- A release is cut with `cog bump`: `cog.toml` runs `tools/release-prepare`, which builds the changelog and sets the version wherever the release workflow or a download command names it. `RELEASING.md` has the steps.
+- Add one nonblocking regular-file reader for hostile CLI inputs.
+- Main command handlers share validation for user-provided option values.
+- Read JUnit source JSON through the shared subprocess output helper.
+- Read metrics result JSON through the shared subprocess output helper.
+- Read shard-weight result JSON through the shared subprocess output helper.
+- Read shard-weight summary JSON through the shared subprocess output helper.
+- Read verification plan JSON through the shared subprocess output helper.
+- Read watch rebuild-set JSON through the shared subprocess output helper.
+- Read watch shard plan JSON through the shared subprocess output helper.
+- Subprocess JSON files share one reader that names the producer and path on a parse failure.
+- The CVMFS tests write stub executables atomically and serialize test forks so concurrent test runs execute stubs reliably.
+
+
 ## 0.3.1 (2026-11-17)
 
 ### Features

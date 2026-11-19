@@ -764,16 +764,19 @@ pub fn other_eessi<'a>(state: &'a State, probe: &Probe) -> Vec<(&'a String, &'a 
 }
 
 /// Whether every install was last found at the repository's revision now,
-/// over the same module trees, all inside the repository: then no module
-/// can have changed under them.
+/// over the same module trees, each resolving inside the repository: then
+/// no module can have changed under them.
 pub fn unchanged_at(state: &State, probe: &Probe, revision: Option<u64>) -> bool {
     let (Some(rev), Some(repo)) = (revision, &probe.repository) else {
+        return false;
+    };
+    let Ok(repo) = std::fs::canonicalize(repo) else {
         return false;
     };
     probe
         .modules_dirs
         .iter()
-        .all(|d| Path::new(d).starts_with(repo))
+        .all(|d| std::fs::canonicalize(d).is_ok_and(|d| d.starts_with(&repo)))
         && state.installs.values().all(|i| {
             i.revision == Some(rev) && i.modules_dirs == probe.modules_dirs && i.pending.is_empty()
         })
@@ -1576,6 +1579,31 @@ mod tests {
         )
         .unwrap();
         assert!(load(&dir, "cpu").unwrap_err().contains("schema_version 2"));
+    }
+
+    #[test]
+    fn an_external_module_tree_reached_through_the_repository_is_not_unchanged() {
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path().join("repository");
+        let outside = root.path().join("outside");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let linked = repo.join("overlay");
+        std::os::unix::fs::symlink(&outside, &linked).unwrap();
+        let module_dir = linked.display().to_string();
+        let mut state = State::new("cpu");
+        let mut install = recorded("2026.06", "x86_64/generic");
+        install.revision = Some(42);
+        install.modules_dirs = vec![module_dir.clone()];
+        state.installs.insert("Foo/1.0".into(), install);
+        let probe = Probe {
+            version: "2026.06".into(),
+            software_subdir: "x86_64/generic".into(),
+            repository: Some(repo.display().to_string()),
+            modules_dirs: vec![module_dir],
+        };
+
+        assert!(!unchanged_at(&state, &probe, Some(42)));
     }
 
     #[test]

@@ -258,6 +258,35 @@ fn audit_refuses_truncated_component_json() {
 }
 
 #[test]
+fn empty_or_control_cves_fail_before_site_loading() {
+    for cve in ["   ", "CVE-2026-0001\nCVE-2026-0002"] {
+        let dir = tempfile::tempdir().unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"))
+            .current_dir(dir.path())
+            .args([
+                "audit",
+                "--site",
+                "not-read.toml",
+                "--target",
+                "cpu",
+                "--cve",
+                cve,
+                "--out-dir",
+                "not-written",
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(code(&output), 2, "{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("--cve must be non-empty and contain no control characters"),
+            "{}",
+            stderr(&output)
+        );
+        assert!(!dir.path().join("not-written").exists());
+    }
+}
+
+#[test]
 fn an_audit_helper_signal_keeps_its_exit_code() {
     let t = setup("");
     write_exec(&t.stubs.join("eb-stack"), EB_STACK_AUDIT);

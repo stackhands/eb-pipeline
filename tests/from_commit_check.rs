@@ -51,6 +51,34 @@ fn from_commit_invokes_eb_stack_with_json_and_repo_flags() {
 }
 
 #[test]
+fn empty_or_control_easybuild_versions_fail_before_list_loading() {
+    for version in ["   ", "5.4.0\n5.5.0"] {
+        let t = setup("");
+        let output = eb_pipeline(
+            &t,
+            &[
+                "check",
+                "--list",
+                "not-read.yml",
+                "--check-from-commit",
+                "--easybuild-version",
+                version,
+            ],
+            &[],
+        );
+        assert_eq!(code(&output), 2, "{}", stderr(&output));
+        assert!(
+            stderr(&output).contains(
+                "--easybuild-version must be non-empty and contain no control characters"
+            ),
+            "{}",
+            stderr(&output)
+        );
+        assert!(t.calls("ebstack").is_empty());
+    }
+}
+
+#[test]
 fn from_commit_without_site_uses_the_stub_on_path() {
     let t = setup("");
     let list = t.root().join("stack.yml");
