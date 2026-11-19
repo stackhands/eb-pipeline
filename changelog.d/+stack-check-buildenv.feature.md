@@ -1,0 +1,1 @@
+`check --stack-checks buildenv` runs `eb-stack stack buildenv --build-list FILE --strict` and fails while a toolchain of a plain build list has no `buildenv` line. `provided` and `buildenv` can be requested together. Needs eb-stack 0.9.0 or newer.
