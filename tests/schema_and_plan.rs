@@ -1480,6 +1480,10 @@ fn without_robot_keeps_the_last_robot_path() {
     use eb_pipeline::plan::without_robot;
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     assert_eq!(
+        without_robot(s(&["--robot", "/a", "-x"]).iter()),
+        ["-x", "--robot-paths=/a:"]
+    );
+    assert_eq!(
         without_robot(s(&["--robot=/a", "--robot=/b", "-x"]).iter()),
         ["-x", "--robot-paths=/b:"]
     );
