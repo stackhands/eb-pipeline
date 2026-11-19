@@ -77,11 +77,7 @@ fn module_table_sha256(env: &BTreeMap<String, String>) -> Option<String> {
             }
             joined
         }
-        None => {
-            return env
-                .get("_ModuleTable_")
-                .map(|table| format!("{:x}", Sha256::digest(table)))
-        }
+        None => env.get("_ModuleTable_")?.to_string(),
     };
     let bytes = base64::engine::general_purpose::URL_SAFE
         .decode(encoded)
@@ -420,6 +416,31 @@ mod tests {
     #[test]
     fn a_missing_module_table_chunk_is_not_recorded() {
         let env = parse_env0(b"EESSI_VERSION=2023.06\0EESSI_SOFTWARE_SUBDIR=x86_64/generic\0EESSI_MODULEPATH=/e/modules/all\0_ModuleTable_Sz_=2\0_ModuleTable001_=YWJj\0");
+        assert_eq!(
+            Probe::from_env(&env, None, &[])
+                .unwrap()
+                .module_table_sha256,
+            None
+        );
+    }
+
+    #[test]
+    fn singleton_and_chunked_module_table_exports_hash_the_same() {
+        let singleton = parse_env0(b"EESSI_VERSION=2023.06\0EESSI_SOFTWARE_SUBDIR=x86_64/generic\0EESSI_MODULEPATH=/e/modules/all\0_ModuleTable_=YWJj\0");
+        let chunked = parse_env0(b"EESSI_VERSION=2023.06\0EESSI_SOFTWARE_SUBDIR=x86_64/generic\0EESSI_MODULEPATH=/e/modules/all\0_ModuleTable_Sz_=1\0_ModuleTable001_=YWJj\0");
+        assert_eq!(
+            Probe::from_env(&singleton, None, &[])
+                .unwrap()
+                .module_table_sha256,
+            Probe::from_env(&chunked, None, &[])
+                .unwrap()
+                .module_table_sha256
+        );
+    }
+
+    #[test]
+    fn a_malformed_singleton_module_table_is_not_recorded() {
+        let env = parse_env0(b"EESSI_VERSION=2023.06\0EESSI_SOFTWARE_SUBDIR=x86_64/generic\0EESSI_MODULEPATH=/e/modules/all\0_ModuleTable_=!\0");
         assert_eq!(
             Probe::from_env(&env, None, &[])
                 .unwrap()
