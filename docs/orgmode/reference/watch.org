@@ -439,10 +439,18 @@ cat site/zen4/.eb-pipeline-watch/zen4.json
 | Key              | Type    | Meaning                                    |
 |------------------+---------+--------------------------------------------|
 | =abi_baseline=   | object  | The last host ABI fingerprint that =watch= compared against, when =[watch.abi_drift]= is enabled. |
+| =inputs=         | object  | The site file and configured easyconfig trees whose content supplied the record. |
 | =installs=       | object  | Each recorded install, by its module name. |
 | =kind=           | string  | =watch-state=.                             |
 | =schema_version= | integer | =1=.                                       |
 | =target=         | string  | The name of the target.                    |
+
+*** =inputs=
+
+=site_file= and each entry of =easyconfig_trees= hold the canonical =path=, =size= and
+=sha256=. The size is the file size, or the total size of regular files in a
+tree. The SHA-256 covers the file or tree content and decides its identity;
+modification times only detect a concurrent write while eb-pipeline reads it.
 
 *** =abi_baseline=
 
