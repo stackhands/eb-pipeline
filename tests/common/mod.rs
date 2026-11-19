@@ -96,7 +96,11 @@ case "$cmd" in
       { m = $1; sub(/\.eb$/, "", m); sub(/-/, "/", m)
         printf "%s{\"easyconfig\":\"%s\",\"module\":\"%s\",\"closure\":[%s\"%s\"]}", (n++ ? "," : ""), $1, m, need[$1], m }' \
       "$D/missing.txt" "$out/shard-01.list")
-    printf '{"prelude":null,"shards":[{"name":"shard-01","file":"shard-01.list"}],"lines":[%s]}\n' "$lines" > "$out/plan.json";;
+    if [ -n "${STUB_SHARD_PLAN_JSON+x}" ]; then
+      printf '%s' "$STUB_SHARD_PLAN_JSON" > "$out/plan.json"
+    else
+      printf '{"prelude":null,"shards":[{"name":"shard-01","file":"shard-01.list"}],"lines":[%s]}\n' "$lines" > "$out/plan.json"
+    fi;;
 esac
 exit 0
 "#;
