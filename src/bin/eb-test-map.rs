@@ -306,7 +306,8 @@ fn easyconfigs_from_list(path: &str) -> Result<Vec<String>, String> {
         let lines = easystack::read(Path::new(path))?;
         Ok(lines.into_iter().map(|line| line.easyconfig).collect())
     } else {
-        let list_text = fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+        let list_text = util::read_text_file(Path::new(path))
+            .map_err(|e| format!("cannot read {path}: {e}"))?;
         Ok(util::parse_list(&list_text)
             .map_err(|error| format!("{path}: {}", error.msg))?
             .into_iter()
@@ -522,6 +523,25 @@ mod tests {
         let error = receive
             .recv_timeout(std::time::Duration::from_secs(1))
             .expect("map reader blocked")
+            .unwrap_err();
+        assert!(error.contains("not a regular file"), "{error}");
+        reader.join().unwrap();
+    }
+
+    #[test]
+    fn list_reader_refuses_a_fifo_promptly() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("build.list");
+        let raw = CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+        let shown = path.display().to_string();
+        let (send, receive) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            send.send(easyconfigs_from_list(&shown)).unwrap();
+        });
+        let error = receive
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("list reader blocked")
             .unwrap_err();
         assert!(error.contains("not a regular file"), "{error}");
         reader.join().unwrap();
