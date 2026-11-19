@@ -126,7 +126,8 @@ The keys of =[scheduler.env]= come first, and a variable of the table below with
 For an EESSI command, =eb-pipeline= removes inherited EESSI installation-mode
 variables and target overrides before setting the values in this table. An
 unset =cpu_target= or =accel_target= therefore uses EESSI detection instead
-of a value left by the calling shell.
+of a value left by the calling shell. This clears the default EESSI override
+names and a custom =cpu_override_var= or =accel_override_var=.
 =[licences]= is on when its =enabled= and =enforce= are not =false=.
 =EESSI= stands for the European Environment for Scientific Software Installations.
 

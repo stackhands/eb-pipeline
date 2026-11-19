@@ -4,7 +4,7 @@ use crate::exit::Fail;
 use crate::schema::*;
 use crate::util::{package_of, split_args};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A phase role: which launch arguments a command takes from
 /// `[phase_defaults]` or the target's `phases`.
@@ -500,6 +500,27 @@ impl<'a> Scope<'a> {
             put("EESSI_SITE_SOFTWARE_PREFIX", self.install_prefix());
         }
         e
+    }
+
+    /// EESSI variables removed from a child before its configured environment
+    /// is applied.
+    pub fn eessi_unset_env(&self) -> BTreeSet<String> {
+        let Some(es) = self.site.eessi_on() else {
+            return BTreeSet::new();
+        };
+        [
+            "EESSI_CVMFS_INSTALL".to_string(),
+            "EESSI_SITE_INSTALL".to_string(),
+            "EESSI_PROJECT_INSTALL".to_string(),
+            "EESSI_USER_INSTALL".to_string(),
+            "EESSI_ACCELERATOR_INSTALL".to_string(),
+            "EESSI_SOFTWARE_SUBDIR_OVERRIDE".to_string(),
+            "EESSI_ACCELERATOR_TARGET_OVERRIDE".to_string(),
+            es.cpu_override_var.clone(),
+            es.accel_override_var.clone(),
+        ]
+        .into_iter()
+        .collect()
     }
 
     /// Environment added for one build list line.

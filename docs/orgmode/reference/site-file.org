@@ -454,7 +454,7 @@ The module wrapper starts when =init= is not empty, =unuse_path= is =true= or =s
 | =cpu_override_var=     | string  | =EESSI_SOFTWARE_SUBDIR_OVERRIDE=    | The variable that carries the target's =cpu_target=.   |
 | =accel_override_var=   | string  | =EESSI_ACCELERATOR_TARGET_OVERRIDE= | The variable that carries the target's =accel_target=. |
 
-With the table on, every command also gets =EESSI_SITE_SOFTWARE_PREFIX=, the target's install prefix, and =check= checks the form of each target's =cpu_target= and =accel_target=. Before it starts an EESSI command, =eb-pipeline= removes inherited EESSI target overrides, so an unset target value leaves detection to EESSI.
+With the table on, every command also gets =EESSI_SITE_SOFTWARE_PREFIX=, the target's install prefix, and =check= checks the form of each target's =cpu_target= and =accel_target=. Before it starts an EESSI command, =eb-pipeline= removes inherited default and configured =cpu_override_var= and =accel_override_var= names, so an unset target value leaves detection to EESSI.
 
 ** =[caches]=
 
