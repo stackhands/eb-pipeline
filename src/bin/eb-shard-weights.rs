@@ -102,14 +102,18 @@ fn run() -> Result<ExitCode, String> {
         // falls back cleanly when timestamps match.
         for entry in entries.into_iter().rev() {
             let path = entry.dir.join("summary.json");
-            if let Ok(s) = entry.summary {
-                target_matched |= collect_summary(
-                    &s,
-                    &path,
-                    args.target.as_deref(),
-                    &mut observations,
-                    &mut seq,
-                )?;
+            match entry.summary {
+                Ok(s) => {
+                    target_matched |= collect_summary(
+                        &s,
+                        &path,
+                        args.target.as_deref(),
+                        &mut observations,
+                        &mut seq,
+                    )?;
+                }
+                Err(error) if path.exists() => return Err(error),
+                Err(_) => {}
             }
         }
     }
