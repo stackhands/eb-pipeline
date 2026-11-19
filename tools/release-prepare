@@ -16,14 +16,13 @@
 #     version, so the page matches what `eb-pipeline man` writes and CI's
 #     comparison passes;
 #   - docs/orgmode: the `--version` line and the `tool` field of the example
-#     summaries;
-#   - docs/: the Markdown pages, exported again from their Org sources.
+#     summaries.
 #
 # Not done here, because it is prose: the paragraph of
 # docs/orgmode/howto/install.org that says what the previous release lacks.
 # Edit it in a commit before the bump.
 #
-# Needs: towncrier (or uvx), emacs for docs/export.el. A refused run can leave
+# Needs: towncrier (or uvx). A refused run can leave
 # edited files behind; `git checkout -- .` puts the tree back.
 set -euo pipefail
 
@@ -65,8 +64,6 @@ for page in howto/install.org reference/cli.org reference/run-summary.org tutori
         -e "s/^(eb-pipeline )${old_re}\$/\1${new}/" \
         -e "s/(\"tool\": \"eb-pipeline )${old_re}\"/\1${new}\"/"
 done
-
-emacs --batch -l docs/export.el > /dev/null 2>&1
 
 echo "release-prepare: ${old} -> ${new}"
 git status --short | awk '{print $1}' | sort | uniq -c
