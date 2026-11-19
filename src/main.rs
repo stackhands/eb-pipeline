@@ -614,10 +614,7 @@ fn cmd_status(
 }
 
 fn cmd_metrics(path: &Path, format: StatusFormat) -> Result<i32, Fail> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| Fail::usage(format!("cannot read {}: {e}", path.display())))?;
-    let value: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| Fail::usage(format!("cannot parse {}: {e}", path.display())))?;
+    let (_, value) = exit::read_json_output(path, "eb-pipeline run", exit::USAGE)?;
     let status = metrics::from_result(&value)?;
     match format {
         StatusFormat::Prometheus => write_stdout_text(&metrics::prometheus(&status))?,
