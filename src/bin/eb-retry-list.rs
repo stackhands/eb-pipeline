@@ -3,6 +3,7 @@
 //! Preserves original list order and per-line `eb` options (including options
 //! parsed from an easystack), leaving out `success` and `deselected` entries.
 
+use eb_pipeline::classify;
 use eb_pipeline::easystack;
 use eb_pipeline::exit;
 use eb_pipeline::util::{self, ListLine};
@@ -29,6 +30,7 @@ struct Args {
     statuses: Option<BTreeSet<String>>,
     out: Option<String>,
     require_lines: bool,
+    refuse_systemic_failure: bool,
     classify: bool,
     classes: Option<BTreeSet<String>>,
     node: Option<String>,
@@ -88,6 +90,13 @@ fn run() -> Result<ExitCode, String> {
         let list = args.list.as_deref().expect("validated in parse");
         (read_list(list)?, read_recorded()?, list.to_string())
     };
+    if args.refuse_systemic_failure {
+        if let Some((class, count)) = systemic_infrastructure_failure(&recorded)? {
+            return Err(format!(
+                "all {count} failed lines match infrastructure class `{class}`; fix the shared failure first, or rerun without --refuse-systemic-failure"
+            ));
+        }
+    }
 
     let mut selected = select_retry_lines(&lines, &recorded, args.statuses.as_ref())?;
     if args.classify {
@@ -126,6 +135,39 @@ fn run() -> Result<ExitCode, String> {
     }
 }
 
+fn systemic_infrastructure_failure(
+    recorded: &RunOutcomes,
+) -> Result<Option<(String, usize)>, String> {
+    let failed: Vec<_> = recorded
+        .outcomes
+        .values()
+        .flatten()
+        .filter(|outcome| outcome.status == "failed")
+        .collect();
+    if failed.len() < 2 {
+        return Ok(None);
+    }
+    let mut shared: Option<String> = None;
+    for outcome in &failed {
+        let Some(log) = outcome.log.as_deref() else {
+            return Ok(None);
+        };
+        let path = Path::new(log);
+        let text = util::read_text_file(path)
+            .map_err(|e| format!("cannot read {log} for --refuse-systemic-failure: {e}"))?;
+        let job = classify::classify_log(path)?;
+        let Some(class) = classify::infrastructure_class(&job, &text) else {
+            return Ok(None);
+        };
+        match &shared {
+            None => shared = Some(class.to_string()),
+            Some(existing) if existing == class => {}
+            Some(_) => return Ok(None),
+        }
+    }
+    Ok(shared.map(|class| (class, failed.len())))
+}
+
 fn check_output_alias(out: Option<&str>, inputs: &[(&str, Option<&str>)]) -> Result<(), String> {
     let paths: Vec<_> = inputs
         .iter()
@@ -158,6 +200,7 @@ struct Parsed {
     statuses: Option<BTreeSet<String>>,
     out: Option<String>,
     require_lines: bool,
+    refuse_systemic_failure: bool,
     classify: bool,
     classes: Option<BTreeSet<String>>,
     node: Option<String>,
@@ -176,6 +219,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
         statuses: None,
         out: None,
         require_lines: false,
+        refuse_systemic_failure: false,
         classify: false,
         classes: None,
         node: None,
@@ -201,6 +245,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
             "--classify" => parsed.classify = true,
             "--recorded-list" => parsed.recorded_list = true,
             "--require-lines" => parsed.require_lines = true,
+            "--refuse-systemic-failure" => parsed.refuse_systemic_failure = true,
             "--drop-oom" => parsed.drop_oom = true,
             "--result" | "--summary" | "--target" | "--list" | "--status" | "--out" | "--class"
             | "--node" | "--easyconfigs" | "--arch" => {
@@ -253,6 +298,9 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     if parsed.result.is_some() && parsed.target.is_some() {
         return Err("--target is used with --summary, not --result".into());
     }
+    if parsed.summary.is_some() && parsed.refuse_systemic_failure {
+        return Err("--refuse-systemic-failure needs --result".into());
+    }
     if parsed.summary.is_some() && parsed.target.is_none() {
         return Err("--target is required with --summary".into());
     }
@@ -296,6 +344,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
         statuses: parsed.statuses,
         out: parsed.out,
         require_lines: parsed.require_lines,
+        refuse_systemic_failure: parsed.refuse_systemic_failure,
         classify: parsed.classify,
         classes: parsed.classes,
         node: parsed.node,
@@ -624,55 +673,12 @@ fn classify_retry_lines(
             .log
             .as_deref()
             .ok_or_else(|| format!("cannot classify `{}`: no log was recorded", line.raw))?;
-        let output = Command::new("eb-stack")
-            .args(["stack", "bot-classify", "--json"])
-            .arg(log)
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|e| format!("cannot run eb-stack for {log}: {e}"))?;
-        if !output.status.success() {
-            let detail = String::from_utf8_lossy(&output.stderr);
-            let detail = detail.trim();
-            let detail = if detail.is_empty() {
-                String::new()
-            } else {
-                format!(": {detail}")
-            };
-            return Err(format!(
-                "eb-stack failed for {log} with {}{detail}",
-                output.status
-            ));
-        }
-        let report: Value = serde_json::from_slice(&output.stdout)
-            .map_err(|e| format!("eb-stack returned invalid JSON for {log}: {e}"))?;
-        let jobs = report
-            .get("jobs")
-            .and_then(Value::as_array)
-            .ok_or_else(|| format!("eb-stack JSON for {log} has no `jobs` array"))?;
-        if jobs.len() != 1 {
-            return Err(format!(
-                "eb-stack JSON for {log} classified {} jobs, expected 1",
-                jobs.len()
-            ));
-        }
-        if job_matches(&jobs[0], classes) {
+        let job = classify::classify_log(Path::new(log))?;
+        if classes.contains(&job.class) || classes.contains(&job.sub_class) {
             retryable.push(line);
         }
     }
     Ok(retryable)
-}
-
-/// True when `stack bot-classify --json` put this job in one of `classes`.
-///
-/// The names are the `class` and `sub_class` strings of that JSON. eb-retry-list
-/// does not decide the class.
-fn job_matches(job: &Value, classes: &BTreeSet<String>) -> bool {
-    let named = |key: &str| {
-        job.get(key)
-            .and_then(Value::as_str)
-            .is_some_and(|name| classes.contains(name))
-    };
-    named("sub_class") || named("class")
 }
 
 #[derive(Debug)]
