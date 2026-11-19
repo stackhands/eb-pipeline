@@ -255,6 +255,39 @@ fn plan_is_deterministic_and_sorted() {
 }
 
 #[test]
+fn plan_refuses_empty_or_control_run_labels() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = dir.path().join("build.list");
+    std::fs::write(&list, "Foo-1.0-foss-2025a.eb\n").unwrap();
+
+    for (option, value) in [
+        ("--build-type", ""),
+        ("--build-type", "\n"),
+        ("--run-id", ""),
+        ("--run-id", "\r"),
+    ] {
+        let mut command = bin();
+        command
+            .args(["plan", "--site"])
+            .arg(example("eessi-site.toml"))
+            .arg("--list")
+            .arg(&list)
+            .args(["--target", "gpu-a"]);
+        if option != "--build-type" {
+            command.args(["--build-type", "production"]);
+        }
+        let output = command.arg(option).arg(value).output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{option}={value:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty(), "{option}={value:?}");
+    }
+}
+
+#[test]
 fn plan_and_run_outputs_refuse_input_aliases_before_writing() {
     let dir = tempfile::tempdir().unwrap();
     let site = dir.path().join("site.toml");
