@@ -49,6 +49,25 @@ fn successful_build_durations_become_sorted_tab_separated_weights() {
 }
 
 #[test]
+fn malformed_result_names_the_producer_and_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let result = dir.path().join("result.json");
+    std::fs::write(&result, "{").unwrap();
+
+    let output = bin().args(["--result"]).arg(&result).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stdout, b"");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        format!(
+            "eb-shard-weights: eb-pipeline run wrote invalid JSON to {}: EOF while parsing an object at line 1 column 1\n",
+            result.display()
+        )
+    );
+}
+
+#[test]
 fn common_environment_falls_back_and_flags_win() {
     let dir = tempfile::tempdir().unwrap();
     let result = dir.path().join("result.json");
