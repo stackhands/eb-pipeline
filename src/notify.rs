@@ -20,7 +20,11 @@ pub fn check_url(url: &str) -> Result<(), String> {
     {
         return Err("must not hold a space, a quote, a backslash or a control character".into());
     }
-    if host_name(host(rest)).is_empty() {
+    let authority = host(rest);
+    if !authority.starts_with('[') && authority.matches(':').count() > 1 {
+        return Err("an IPv6 address must be enclosed in brackets".into());
+    }
+    if host_name(authority).is_empty() {
         return Err("names no host".into());
     }
     Ok(())

@@ -261,3 +261,19 @@ fn notify_settings_are_checked_without_repeating_the_url() {
         assert!(!stderr(&o).contains(SECRET), "{}", stderr(&o));
     }
 }
+
+#[test]
+fn an_unbracketed_ipv6_webhook_is_refused() {
+    let t = setup(&format!(
+        "[notify]\nwebhook = \"https://2001:db8::1:8443/{SECRET}\"\n"
+    ));
+    let site = t.site.display().to_string();
+    let o = eb_pipeline(&t, &["check", "--site", &site], &[]);
+    assert_eq!(code(&o), 2, "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("notify.webhook: an IPv6 address must be enclosed in brackets"),
+        "{}",
+        stderr(&o)
+    );
+    assert_no_secret(&t, &o);
+}
