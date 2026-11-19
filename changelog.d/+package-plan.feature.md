@@ -1,1 +1,0 @@
-`plan` and `run` can take an eb-stack package-plan bundle, build its emitted recipes in declared order, and record the SHA-256 of `package.plan.json`. An explicit verification option runs `pip check` for PyPI products and an installed R DESCRIPTION dependency check for CRAN products.

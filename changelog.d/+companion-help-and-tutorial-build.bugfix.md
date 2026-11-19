@@ -1,1 +1,0 @@
-`eb-pipeline --help` now lists the companion commands `eb-retry-list`, `eb-shard-weights`, `eb-test-map`, `eb-junit` and `eb-cvmfs`, `docs/examples/tutorial.sh` builds the binary when a fresh checkout has no `target/debug/eb-pipeline` yet, and a `rust-toolchain.toml` pins the local toolchain to `1.90.0` to match CI.
