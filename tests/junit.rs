@@ -44,6 +44,30 @@ fn help_and_version_exit_zero() {
 }
 
 #[test]
+fn malformed_inputs_name_their_producers_and_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    for (flag, name, producer) in [
+        ("--result", "result.json", "eb-pipeline run"),
+        ("--reframe-report", "reframe.json", "ReFrame"),
+    ] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, "{").unwrap();
+
+        let output = bin().arg(flag).arg(&path).output().unwrap();
+
+        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(output.stdout, b"");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            format!(
+                "eb-junit: {producer} wrote invalid JSON to {}: EOF while parsing an object at line 1 column 1\n",
+                path.display()
+            )
+        );
+    }
+}
+
+#[test]
 fn default_stdout_and_status_remain_byte_for_byte_unchanged() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("result.json");
