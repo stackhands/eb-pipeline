@@ -226,11 +226,11 @@ A build list can mark a line for some targets only, with an option of the line t
 |---------------+---------+----------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | =option=      | string  | required | The long option that carries the selection, with its leading dashes, such as =--only-targets=; a line carries it as =--only-targets=a,b= or =--only-targets a,b=. |
 | =value=       | string  | required | The token of this target in the option's list; not empty, and without =separator=.                                                                                |
+| =aliases=     | array of string | =[]= | Further tokens that name this target, such as the name of a group of targets; a line that lists one of them is planned like one that lists =value=. |
+| =exclude_option= | string | none | A second long option whose tokens leave a line out for this target. It takes priority over =option=, uses the same =separator=, and is removed by =strip=. |
 | =separator=   | string  | =,=      | What separates the tokens; not empty.                                                                                                                             |
 | =when_absent= | string  | =all=    | =all= builds a line without the option on this target; =none= leaves it out.                                                                                      |
 | =strip=       | boolean | =false=  | =true= removes the option from the line before =eb= gets it.                                                                                                      |
-| =aliases=     | array of string | =[]= | Further tokens that name this target, such as the name of a group of targets; a line that lists one of them is planned like one that lists =value=. |
-| =exclude_option= | string | none | A second long option whose tokens leave a line out for this target. It takes priority over =option=, uses the same =separator=, and is removed by =strip=. |
 
 =plan= and =run= apply the selection to the whole list, or to each shard unit, and drop a unit left without lines.
 With a selection, =run= writes the lines it keeps, in list order and with =strip= applied, to =LOG_DIR/selected-TARGET.list=, and passes that file to =stack shard --build-list=.
