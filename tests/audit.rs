@@ -30,7 +30,11 @@ case "$cmd" in
     echo "changed=1 rows=1 must-rebuild=1 review=0 no-rebuild=0 missing=0 easystacks=1 skipped_easyconfigs=0 findings_modules=1 backport=$backport_count out=$out"
     ;;
   stack-sbom)
-    : > "$outfile"
+    if [ -n "${STUB_AUDIT_TRUNCATED_SBOM:-}" ]; then
+      printf '{' > "$outfile"
+    else
+      printf '%s\n' '{"bomFormat":"CycloneDX","specVersion":"1.5"}' > "$outfile"
+    fi
     : > "$backport"
     echo "sbom=$outfile components=1 recipes_read=1 recipes_unreadable=0 with_artifact_facts=0"
     echo "backport=$backport_count recorded=1 stack=1 out=$backport"
@@ -170,6 +174,45 @@ fn cve_mode_runs_stack_sbom_and_component_reach() {
         .filter(|line| line.starts_with("component-reach "))
         .count();
     assert_eq!(component_calls, 2, "{calls}");
+}
+
+#[test]
+fn audit_refuses_truncated_sbom_json() {
+    let t = setup("[sbom]\nenabled = true\nlock = \"@ROOT@/stack.lock.json\"");
+    write_exec(&t.stubs.join("eb-stack"), EB_STACK_AUDIT);
+    t.eessi_module("Foo", "1.0-GCCcore-13.2.0");
+    std::fs::write(t.root().join("stack.lock.json"), "{\"packages\":[]}").unwrap();
+    let out_dir = t.root().join("audit");
+    let mut vars: Vec<(&str, &str)> = eessi_vars(&t, "2026.06")
+        .into_iter()
+        .map(|(key, value)| (key, Box::leak(value.into_boxed_str()) as &str))
+        .collect();
+    vars.push(("STUB_AUDIT_TRUNCATED_SBOM", "1"));
+
+    let output = eb_pipeline(
+        &t,
+        &[
+            "audit",
+            "--site",
+            &t.site.display().to_string(),
+            "--target",
+            "cpu",
+            "--cve",
+            "CVE-2026-0001",
+            "--out-dir",
+            &out_dir.display().to_string(),
+        ],
+        &vars,
+    );
+
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("stack.cdx.json")
+            && stderr(&output).contains("wrote invalid JSON"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!t.calls("ebstack").contains("component-reach"));
 }
 
 #[test]
