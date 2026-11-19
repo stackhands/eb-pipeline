@@ -847,6 +847,7 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
     validate_option_values(&[
         ("--build-type", Some(c.build_type.as_str())),
         ("--run-id", c.run_id.as_deref()),
+        ("--node", oom_node),
     ])?;
     let source_inputs = [
         ("--site", Some(c.site.as_path())),
