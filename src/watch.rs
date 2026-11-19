@@ -1601,6 +1601,8 @@ mod tests {
             software_subdir: "x86_64/generic".into(),
             repository: Some(repo.display().to_string()),
             modules_dirs: vec![module_dir],
+            loaded_modules: None,
+            module_table_sha256: None,
         };
 
         assert!(!unchanged_at(&state, &probe, Some(42)));
