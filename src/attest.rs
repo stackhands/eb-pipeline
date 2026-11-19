@@ -692,7 +692,7 @@ fn easyblock_literal(text: &str) -> Option<String> {
             continue;
         };
         let name = &body[..end];
-        if is_ident(name) {
+        if body[end + quote.len_utf8()..].trim().is_empty() && is_ident(name) {
             literal = Some(name.to_string());
         }
     }
@@ -956,6 +956,15 @@ mod tests {
         );
         assert_eq!(
             easyblock_literal("easyblock = 'EB_Old'\neasyblock = selected_easyblock\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn an_easyblock_expression_is_not_a_string_literal() {
+        assert_eq!(easyblock_literal("easyblock = 'EB_Base' + '_Tool'\n"), None);
+        assert_eq!(
+            easyblock_literal("easyblock = 'ConfigureMake', 'autoconf'\n"),
             None
         );
     }
