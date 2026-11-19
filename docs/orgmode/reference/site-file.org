@@ -449,12 +449,12 @@ The module wrapper starts when =init= is not empty, =unuse_path= is =true= or =s
 | Key                    | Type    | Default                             | Meaning                                                |
 |------------------------+---------+-------------------------------------+--------------------------------------------------------|
 | =enabled=              | boolean | =true=                              | =false= ignores the table.                             |
-| =site_install=         | boolean | =false=                             | =true= exports =EESSI_SITE_INSTALL=1=.                 |
+| =site_install=         | boolean | =false=                             | =true= exports =EESSI_SITE_INSTALL=1= after removing inherited EESSI installation modes. |
 | =bootstrap_modulepath= | string  | none                                | Exported as =EESSI_SITE_BOOTSTRAP_MODULEPATH=.         |
 | =cpu_override_var=     | string  | =EESSI_SOFTWARE_SUBDIR_OVERRIDE=    | The variable that carries the target's =cpu_target=.   |
 | =accel_override_var=   | string  | =EESSI_ACCELERATOR_TARGET_OVERRIDE= | The variable that carries the target's =accel_target=. |
 
-With the table on, every command also gets =EESSI_SITE_SOFTWARE_PREFIX=, the target's install prefix, and =check= checks the form of each target's =cpu_target= and =accel_target=.
+With the table on, every command also gets =EESSI_SITE_SOFTWARE_PREFIX=, the target's install prefix, and =check= checks the form of each target's =cpu_target= and =accel_target=. Before it starts an EESSI command, =eb-pipeline= removes inherited EESSI target overrides, so an unset target value leaves detection to EESSI.
 
 ** =[caches]=
 

@@ -247,6 +247,19 @@ fn exec(cmd: &Cmd, base_env: &BTreeMap<String, String>, log: &Path) -> Result<Ex
         .try_clone()
         .map_err(|e| Fail::new(exit::FAILED, format!("cannot duplicate log handle: {e}")))?;
     let mut c = Command::new(&cmd.argv[0]);
+    if base_env.contains_key("EESSI_SITE_SOFTWARE_PREFIX") {
+        for name in [
+            "EESSI_CVMFS_INSTALL",
+            "EESSI_SITE_INSTALL",
+            "EESSI_PROJECT_INSTALL",
+            "EESSI_USER_INSTALL",
+            "EESSI_SOFTWARE_SUBDIR_OVERRIDE",
+            "EESSI_ACCELERATOR_TARGET_OVERRIDE",
+            "EESSI_ACCELERATOR_INSTALL",
+        ] {
+            c.env_remove(name);
+        }
+    }
     c.args(&cmd.argv[1..])
         .envs(base_env)
         .envs(&cmd.env)
