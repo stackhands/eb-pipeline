@@ -6,9 +6,9 @@
 
 Install the =eb-pipeline= command for the account that runs the builds, from a release or from source.
 
-These pages describe the code on the main branch.
-Release 0.3.0 is older: it has no =targets= command, no ={target}= in =[filesystems]= paths, no =rebuild.lock_timeout=, no rotation locks, and only the =eb-pipeline= binary (without the five companion commands added after 0.3.0), and it prints =eb-pipeline 0.3.0= instead of =eb-pipeline 0.3.1=.
-Until the next release, install from source to have them.
+These pages describe release 0.4.0.
+Release 0.3.1 is older: it has no =audit=, =verify=, =completions= or =man= command, no =check --stack-checks= or =check --check-from-commit=, no =aliases= or =exclude_option= in =[targets.select]=, and no offline source bundle.
+The [[https://github.com/stackhands/eb-pipeline/blob/main/CHANGELOG.md][changelog]] lists the rest.
 
 ** Before you start
 
