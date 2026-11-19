@@ -87,6 +87,34 @@ Tail-1.0-foss-2025a.eb --from-pr=123
 }
 
 #[test]
+fn an_unmatched_result_easyconfig_prevents_partial_retry_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = dir.path().join("build.list");
+    let result = dir.path().join("result.json");
+    std::fs::write(&list, "subdir/Fail-1.0.eb\n").unwrap();
+    std::fs::write(
+        &result,
+        r#"{"kind":"result","exit_code":0,"lines":[{"easyconfig":"Fail-1.0.eb","status":"failed"}]}"#,
+    )
+    .unwrap();
+
+    let output = bin()
+        .args(["--result"])
+        .arg(&result)
+        .args(["--list"])
+        .arg(&list)
+        .sync_output();
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("recorded `easyconfig` `Fail-1.0.eb` has no matching build-list line"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn common_environment_variables_supply_result_and_list() {
     let dir = tempfile::tempdir().unwrap();
     let list = dir.path().join("build.list");
