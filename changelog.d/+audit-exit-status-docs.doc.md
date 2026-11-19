@@ -1,1 +1,0 @@
-Document `audit` exit statuses (`0`, `1`, `2`, `75`, `78`) in `exit-status.org` and `cli.org`, note the hidden `completions` and `man` packaging subcommands, and update `run-summary.org` examples to `eb-pipeline 0.3.1`.

@@ -93,7 +93,7 @@ eb-pipeline --version
 
 #+begin_example
 $HOME/.local/bin/eb-pipeline
-eb-pipeline 0.3.1
+eb-pipeline 0.4.0
 #+end_example
 
 A build from source also has the =targets= command:

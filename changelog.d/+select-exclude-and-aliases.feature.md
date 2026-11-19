@@ -1,1 +1,0 @@
-`[targets.select]` takes `aliases`, further tokens that name the target such as a group name shared by several targets, and `exclude_option`, a second option whose tokens leave a line out for the target. An exclusion takes priority over an inclusion, and `strip` removes both options.
