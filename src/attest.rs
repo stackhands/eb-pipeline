@@ -761,7 +761,12 @@ fn find_easyblock(class: &str, index: &Index) -> Result<Option<ResolvedFile>, Fa
     let mut found = Vec::new();
     for paths in index.by_name.values() {
         for path in paths {
-            let text = fs::read_to_string(path).unwrap_or_default();
+            let text = fs::read_to_string(path).map_err(|e| {
+                Fail::new(
+                    exit::REFUSED,
+                    format!("cannot read {}: {e}", path.display()),
+                )
+            })?;
             if defines_class(&text, class) {
                 found.push(path.clone());
             }
@@ -931,7 +936,7 @@ impl Drop for RemoveDir {
 
 #[cfg(test)]
 mod tests {
-    use super::{easyblock_literal, patch_literals, run};
+    use super::{easyblock_literal, find_easyblock, index_files, patch_literals, run};
     use crate::exit;
 
     #[test]
@@ -986,6 +991,25 @@ patches += ['extra.patch']
     fn a_commented_easyblock_is_not_a_literal() {
         let text = "# easyblock = 'No'\nname = 'Foo'\n";
         assert_eq!(easyblock_literal(text), None);
+    }
+
+    #[test]
+    fn an_unreadable_easyblock_file_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("eb_foo.py");
+        std::fs::write(&path, [0xff]).unwrap();
+        let index = index_files(&[root.path().to_path_buf()], ".py").unwrap();
+        let failure = match find_easyblock("EB_Foo", &index) {
+            Err(failure) => failure,
+            Ok(_) => panic!("an unreadable easyblock was ignored"),
+        };
+        assert_eq!(failure.code, exit::REFUSED);
+        assert!(failure.msg.contains("cannot read"), "{}", failure.msg);
+        assert!(
+            failure.msg.contains(&path.display().to_string()),
+            "{}",
+            failure.msg
+        );
     }
 
     #[test]
