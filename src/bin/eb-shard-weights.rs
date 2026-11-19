@@ -85,11 +85,13 @@ fn run() -> Result<ExitCode, String> {
         )?;
     }
     for path in &args.summaries {
-        let text = fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
-        let s = parse_summary_json(&text, Path::new(path))?;
+        let path = Path::new(path);
+        let (_, value) = exit::read_json_output(path, "eb-pipeline run", exit::USAGE)
+            .map_err(|error| error.msg)?;
+        let s = parse_summary_json(value, path)?;
         target_matched |= collect_summary(
             &s,
-            Path::new(path),
+            path,
             args.target.as_deref(),
             &mut observations,
             &mut seq,
@@ -464,9 +466,7 @@ fn collect_result(
     Ok(true)
 }
 
-fn parse_summary_json(text: &str, path: &Path) -> Result<Summary, String> {
-    let v: Value =
-        serde_json::from_str(text).map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
+fn parse_summary_json(v: Value, path: &Path) -> Result<Summary, String> {
     let kind = v
         .get("kind")
         .and_then(Value::as_str)
