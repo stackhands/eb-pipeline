@@ -145,6 +145,11 @@ pub fn run(args: Args<'_>) -> Result<i32, Fail> {
                 &argv,
                 &work.join(format!("component-reach-{tag}.log")),
             )?;
+            let _ = exit::read_json_output(
+                &out.join("component-reach.json"),
+                "eb-stack component-reach",
+                exit::FAILED,
+            )?;
         }
     }
 
