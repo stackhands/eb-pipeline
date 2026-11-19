@@ -25,6 +25,7 @@ name = "eb_pipeline"
 path = "src/lib.rs"
 
 [dependencies]
+base64 = "0.23.1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"

@@ -75,6 +75,8 @@ With =[watch]= on, a run that records its installs, and =watch=, run =env -0= in
 | =EESSI_CVMFS_REPO=       | The repository whose revision is read, unless =watch.repository= is set.                                         |
 | =EESSI_MODULEPATH=       | The EESSI module tree, unless =watch.modules_dirs= is set.                                                       |
 | =EESSI_MODULEPATH_ACCEL= | The EESSI module tree for the accelerator, after the other, unless =watch.modules_dirs= is set.                  |
+| =LOADEDMODULES=          | The loaded module names, recorded in the watch plan's =eessi= object.                                             |
+| =_ModuleTable_Sz_= and =_ModuleTable001_= onward | The Lmod module table, whose decoded bytes are recorded as =module_table_sha256= in the watch plan's =eessi= object. |
 | =EBROOTEASYBUILD=        | For =watch=, the install of EasyBuild, whose =easybuild/easyconfigs= tree is the default of =watch.easyconfigs=. |
 
 Without =watch.modules_dirs=, =EESSI_MODULEPATH= or =EESSI_MODULEPATH_ACCEL= is required.

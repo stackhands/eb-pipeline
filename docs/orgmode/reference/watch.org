@@ -256,7 +256,7 @@ cat plan.json
 
 | Key              | Type            | Meaning                                                                                                                                                           |
 |------------------+-----------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| =eessi=          | object          | The EESSI that the module environment loads: =modules_dirs=, =repository=, =software_subdir= and =version=, as for a record; =repository= only when there is one. |
+| =eessi=          | object          | The EESSI that the module environment loads: =loaded_modules=, =module_table_sha256=, =modules_dirs=, =repository=, =software_subdir= and =version=; =repository= only when there is one, and the module fields only when Lmod exports them. |
 | =installs=       | array           | What =watch= found for each recorded install, in the order of their module names.                                                                                 |
 | =kind=           | string          | =watch-plan=.                                                                                                                                                     |
 | =outcome=        | string          | =unchanged= when the revision is the recorded one, else =rebuild= when an install is to be rebuilt, =kept= when one is kept, and =unaffected=.                    |
