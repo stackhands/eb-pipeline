@@ -253,7 +253,11 @@ mod tests {
     #[test]
     fn exclude_option_without_a_value_is_refused() {
         let s = grouped(false);
-        for args in [&["--not-targets"][..], &["--not-targets="][..], &["--not-targets=,"][..]] {
+        for args in [
+            &["--not-targets"][..],
+            &["--not-targets="][..],
+            &["--not-targets=,"][..],
+        ] {
             let err = select_line(&s, &line(args)).unwrap_err();
             assert_eq!(err.code, 2);
             assert!(err.msg.contains("--not-targets"), "{}", err.msg);
