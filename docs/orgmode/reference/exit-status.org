@@ -44,6 +44,7 @@ An error that ends a command is written to stderr as =ERROR [main] -: MESSAGE=.
 - =run=: =eb-stack stack sbom= could not be started, exited with a status other than 0, or wrote no =sbom.cdx.json=, after a clean build.
 - =run=: =eb-keep-logs rotate= exited with a status other than 0 and 75.
 - =run=: a log file, a log directory, the list of selected lines or the result file could not be written.
+- =run= or =watch=: the run summary could not be written.
 - =plan=: the shard plan given to =--shard-plan= could not be read, or the plan could not be written to =--out=.
 - =plan= or =run=: =[attest]= is enabled and =rfc9162-sidecar= could not be started or exited with a status other than 0.
 - =verify=: the inclusion proof does not meet its checkpoint, or the blob file does not match the proof.
@@ -52,7 +53,7 @@ An error that ends a command is written to stderr as =ERROR [main] -: MESSAGE=.
 - =audit=: =--out-dir= or its working directory could not be created, an =eb-stack= subcommand exited non-zero or its log could not be read, a rebuild list could not be copied, or =--strict= saw one or more backport items.
 
 A failed =eb-keep-logs failed= after a failed line leaves the status as it is, with a =WARN= line.
-So does a run summary that cannot be written, or sent to the webhook of =[notify]=, as [[file:run-summary.org][The run summary]] says, and a record of =[watch]= that fails, as [[file:watch.org][The watch state and plan]] says.
+So does a summary that cannot be sent to the webhook of =[notify]=, as [[file:run-summary.org][The run summary]] says, and a record of =[watch]= that fails, as [[file:watch.org][The watch state and plan]] says.
 
 *** 2
 
@@ -112,7 +113,7 @@ An attestation helper killed by a signal reports and returns =128 + signal=.
 ** When several apply
 
 A signal ends a run with 130 or 143, and a usage error with 2, whatever else happened before.
-This holds for a result file or a metrics file that cannot be written after the signal: the run reports the error and still exits 130 or 143.
+This holds for a result file, a metrics file or a run summary that cannot be written after the signal: the run reports the error and still exits 130 or 143.
 Otherwise the first of these that applies is the status of the run:
 
 1. a line or a phase failed: 1;
