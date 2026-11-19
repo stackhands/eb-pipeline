@@ -104,6 +104,7 @@ pub fn run(args: Args<'_>) -> Result<i32, Fail> {
                 )
             })?;
         let backport = work.join("backport.md");
+        let sbom = work.join("stack.cdx.json");
         let mut argv = vec![
             "stack".into(),
             "sbom".into(),
@@ -112,13 +113,14 @@ pub fn run(args: Args<'_>) -> Result<i32, Fail> {
             "--backport-list".into(),
             backport.display().to_string(),
             "--out".into(),
-            work.join("stack.cdx.json").display().to_string(),
+            sbom.display().to_string(),
         ];
         for cve in args.cves {
             argv.push("--cve".into());
             argv.push(cve.clone());
         }
         let summary = run_eb_stack(&planner, &argv, &work.join("stack-sbom.log"))?;
+        let _ = exit::read_json_output(&sbom, "eb-stack stack sbom", exit::FAILED)?;
         strict_backports += parse_metric(&summary, "backport").unwrap_or(0);
 
         for cve in args.cves {
