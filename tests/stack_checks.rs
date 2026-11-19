@@ -254,3 +254,60 @@ fn check_from_commit_refuses_invalid_json_from_a_successful_eb_stack() {
         format!("stack from-commit --easystack {list} --json\n")
     );
 }
+
+#[test]
+fn shadow_refuses_invalid_json_from_a_successful_eb_stack() {
+    let t = setup(
+        r#"
+[shards]
+enabled = false
+easyconfigs = ["/recipes/local"]
+installed_modules_dirs = ["/base/cpu"]
+"#,
+    );
+    write_exec(
+        &t.stubs.join("eb-stack"),
+        r#"#!/bin/sh
+echo "$*" >> "$STUB_DIR/gap.calls"
+case "$1 $2" in
+  "stack gap")
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "--out-dir" ]; then out=$2; shift; fi
+      shift
+    done
+    mkdir -p "$out"
+    exit 0;;
+  "stack shadow")
+    printf '{'
+    exit 0;;
+esac
+exit 2
+"#,
+    );
+    let out_dir = t.root().join("gap-report");
+    let output = eb_pipeline(
+        &t,
+        &[
+            "check",
+            "--site",
+            &t.site.display().to_string(),
+            "--gap-out",
+            &out_dir.display().to_string(),
+            "--generation",
+            "2026.1",
+            "--shadow",
+        ],
+        &[],
+    );
+
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("eb-stack stack shadow wrote invalid JSON"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!out_dir.join("shadow.json").exists());
+    assert!(t
+        .calls("gap")
+        .contains("stack shadow --easyconfigs /recipes/local --base /base/cpu --json\n"));
+}
