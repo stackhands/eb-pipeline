@@ -1169,15 +1169,13 @@ pub fn order(
         ));
     }
     let plan_path = out.join("plan.json");
-    let plan: ShardPlan = std::fs::read_to_string(&plan_path)
-        .map_err(|e| e.to_string())
-        .and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))
-        .map_err(|e| {
-            Fail::new(
-                exit::FAILED,
-                format!("cannot read {}: {e}", plan_path.display()),
-            )
-        })?;
+    let (_, plan_value) = exit::read_json_output(&plan_path, "eb-stack stack shard", exit::FAILED)?;
+    let plan: ShardPlan = serde_json::from_value(plan_value).map_err(|error| {
+        Fail::new(
+            exit::FAILED,
+            format!("cannot read {}: {error}", plan_path.display()),
+        )
+    })?;
     let listed: Vec<&str> = plan.lines.iter().map(|l| l.module.as_str()).collect();
     let closure_of: BTreeMap<&str, &[String]> = plan
         .lines

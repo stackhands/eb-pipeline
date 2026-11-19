@@ -97,6 +97,25 @@ fn malformed_rebuild_set_names_the_producer_and_path() {
     );
 }
 
+#[test]
+fn malformed_shard_plan_names_the_producer_and_path() {
+    let t = built("");
+    change(&t);
+    let vars = eessi_vars(&t, "2023.06");
+    let mut malformed = with(&vars);
+    malformed.push(("STUB_SHARD_PLAN_JSON", "{"));
+
+    let output = watch(&t, LATER, &["--dry-run"], &malformed);
+
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("eb-stack stack shard wrote invalid JSON to")
+            && stderr(&output).contains("plan.json: EOF while parsing an object"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 fn watch(t: &T, stamp: &str, extra: &[&str], vars: &[(&str, &str)]) -> Output {
     let site = t.site.display().to_string();
     let mut args = vec![
