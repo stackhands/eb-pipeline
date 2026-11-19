@@ -484,6 +484,26 @@ fn explain_prints_toml_and_json() {
 }
 
 #[test]
+fn explain_refuses_empty_or_control_build_type() {
+    for build_type in ["   ", "production\nother"] {
+        let output = bin()
+            .args(["explain", "--site"])
+            .arg(example("eessi-site.toml"))
+            .args(["--build-type", build_type])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("--build-type must be non-empty and contain no control characters"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
+    }
+}
+
+#[test]
 fn plan_shows_job_id_placeholder_and_default_footprint() {
     let d = tempfile::tempdir().unwrap();
     let list = d.path().join("l.txt");
