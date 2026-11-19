@@ -1,6 +1,6 @@
 //! Read-only consumption of bundles written by `eb-stack package plan`.
 
-use crate::exit::Fail;
+use crate::exit::{self, Fail};
 use crate::plan::module_rel;
 use crate::util::{list_word, ListLine};
 use serde_json::Value;
@@ -51,14 +51,6 @@ pub struct Input {
     pub lines: Vec<ListLine>,
     /// Checks implied by package origins, one per emitted recipe.
     pub verification: Vec<Verification>,
-}
-
-fn read_json(path: &Path) -> Result<(Vec<u8>, Value), Fail> {
-    let bytes = std::fs::read(path)
-        .map_err(|e| Fail::usage(format!("cannot read {}: {e}", path.display())))?;
-    let value = serde_json::from_slice(&bytes)
-        .map_err(|e| Fail::usage(format!("cannot parse {}: {e}", path.display())))?;
-    Ok((bytes, value))
 }
 
 fn schema_one(path: &Path, value: &Value) -> Result<(), Fail> {
@@ -146,7 +138,7 @@ fn declared_recipes(bundle: &Path) -> Result<Vec<PathBuf>, Fail> {
     if !order.is_file() {
         return discover(bundle, &bundle.join("easyconfigs"), "eb");
     }
-    let (_, value) = read_json(&order)?;
+    let (_, value) = exit::read_json_output(&order, "eb-stack package plan", exit::USAGE)?;
     schema_one(&order, &value)?;
     let recipes = value
         .get("recipes")
@@ -177,7 +169,7 @@ fn declared_recipes(bundle: &Path) -> Result<Vec<PathBuf>, Fail> {
 }
 
 fn plan_identity(path: &Path) -> Result<(String, String), Fail> {
-    let (_, value) = read_json(path)?;
+    let (_, value) = exit::read_json_output(path, "eb-stack package plan", exit::USAGE)?;
     schema_one(path, &value)?;
     let origin = value
         .get("origin")
@@ -196,7 +188,7 @@ fn verification(bundle: &Path, recipes: &[PathBuf]) -> Result<Vec<Verification>,
         let (origin, package) = plan_identity(&bundle.join("package.plan.json"))?;
         return Ok(for_recipes(&origin, &package, recipes));
     }
-    let (_, value) = read_json(&closure)?;
+    let (_, value) = exit::read_json_output(&closure, "eb-stack package plan", exit::USAGE)?;
     schema_one(&closure, &value)?;
     let root = value.get("root").ok_or_else(|| {
         Fail::usage(format!(
@@ -285,7 +277,7 @@ pub fn load(path: &Path) -> Result<Input, Fail> {
         )));
     }
     let manifest = bundle.join("package.plan.json");
-    let (bytes, value) = read_json(&manifest)?;
+    let (bytes, value) = exit::read_json_output(&manifest, "eb-stack package plan", exit::USAGE)?;
     schema_one(&manifest, &value)?;
     let digest = format!("{:x}", Sha256::digest(&bytes));
     let recipes = declared_recipes(&bundle)?;

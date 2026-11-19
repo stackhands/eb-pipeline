@@ -255,6 +255,39 @@ fn plan_is_deterministic_and_sorted() {
 }
 
 #[test]
+fn plan_refuses_empty_or_control_run_labels() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = dir.path().join("build.list");
+    std::fs::write(&list, "Foo-1.0-foss-2025a.eb\n").unwrap();
+
+    for (option, value) in [
+        ("--build-type", ""),
+        ("--build-type", "\n"),
+        ("--run-id", ""),
+        ("--run-id", "\r"),
+    ] {
+        let mut command = bin();
+        command
+            .args(["plan", "--site"])
+            .arg(example("eessi-site.toml"))
+            .arg("--list")
+            .arg(&list)
+            .args(["--target", "gpu-a"]);
+        if option != "--build-type" {
+            command.args(["--build-type", "production"]);
+        }
+        let output = command.arg(option).arg(value).output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{option}={value:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty(), "{option}={value:?}");
+    }
+}
+
+#[test]
 fn plan_and_run_outputs_refuse_input_aliases_before_writing() {
     let dir = tempfile::tempdir().unwrap();
     let site = dir.path().join("site.toml");
@@ -447,6 +480,26 @@ fn explain_prints_toml_and_json() {
         assert_eq!(o.status.code(), Some(0));
         let t = String::from_utf8(o.stdout).unwrap();
         assert!(t.contains("EESSI_ACCELERATOR_TARGET_OVERRIDE"), "{fmt}");
+    }
+}
+
+#[test]
+fn explain_refuses_empty_or_control_build_type() {
+    for build_type in ["   ", "production\nother"] {
+        let output = bin()
+            .args(["explain", "--site"])
+            .arg(example("eessi-site.toml"))
+            .args(["--build-type", build_type])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("--build-type must be non-empty and contain no control characters"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
     }
 }
 
@@ -822,6 +875,29 @@ fn selection_when_absent_all_and_strip() {
 }
 
 #[test]
+fn selection_with_a_group_alias_and_an_exclude_option() {
+    // `other` belongs to group `site`. A line that names the group is planned; a line that
+    // excludes the target or its group is not, even when it also includes it.
+    let site = with_target(
+        "[targets.select]\noption = \"--only-targets\"\nvalue = \"other\"\naliases = [\"site\"]\nexclude_option = \"--not-targets\"\nstrip = true\n",
+    );
+    let list = "A-1.0.eb\nB-1.0.eb --only-targets=site\nC-1.0.eb --only-targets=x\nD-1.0.eb --not-targets=other\nE-1.0.eb --only-targets=site --not-targets site\nF-1.0.eb --only-targets=other --not-targets=x --rebuild\n";
+    let v = plan_of(&site, list, "other");
+    assert_eq!(
+        build_names(&v),
+        ["build:A-1.0", "build:B-1.0", "build:F-1.0"]
+    );
+    for c in phase(&v, "build")["commands"].as_array().unwrap() {
+        let argv = argv_of(c);
+        assert!(!argv.iter().any(|a| a.contains("-targets")), "{argv:?}");
+    }
+    let last = &phase(&v, "build")["commands"][2];
+    assert!(argv_of(last).contains(&"--rebuild".to_string()));
+    assert_eq!(v["selected"], 3);
+    assert_eq!(v["deselected"].as_array().unwrap().len(), 3);
+}
+
+#[test]
 fn stripping_keeps_an_argument_the_list_reader_returns() {
     let text = with_target(
         "[targets.select]\noption = \"--only-targets\"\nvalue = \"other\"\nstrip = true\n",
@@ -902,6 +978,26 @@ fn selection_is_validated() {
         (
             "option = \"--x\"\nvalue = \"o\"\nseparator = \"\"",
             "separator",
+        ),
+        (
+            "option = \"--x\"\nvalue = \"o\"\naliases = [\"a,b\"]",
+            "select.aliases",
+        ),
+        (
+            "option = \"--x\"\nvalue = \"o\"\naliases = [\"o\"]",
+            "repeats select.value",
+        ),
+        (
+            "option = \"--x\"\nvalue = \"o\"\naliases = [\" gpu\"]",
+            "surrounding whitespace",
+        ),
+        (
+            "option = \"--x\"\nvalue = \"o\"\nexclude_option = \"not\"",
+            "select.exclude_option",
+        ),
+        (
+            "option = \"--x\"\nvalue = \"o\"\nexclude_option = \"--x\"",
+            "must differ from select.option",
         ),
     ] {
         let s = site::parse(&with_target(&format!("[targets.select]\n{frag}\n"))).unwrap();
@@ -1479,6 +1575,10 @@ fn disable_robot_in_extra_args_fetches_own_sources_only() {
 fn without_robot_keeps_the_last_robot_path() {
     use eb_pipeline::plan::without_robot;
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        without_robot(s(&["--robot", "/a", "-x"]).iter()),
+        ["-x", "--robot-paths=/a:"]
+    );
     assert_eq!(
         without_robot(s(&["--robot=/a", "--robot=/b", "-x"]).iter()),
         ["-x", "--robot-paths=/b:"]

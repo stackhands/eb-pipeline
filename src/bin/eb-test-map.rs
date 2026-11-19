@@ -78,8 +78,7 @@ fn text_names(args: &Args) -> Result<ExitCode, String> {
         .map
         .as_deref()
         .ok_or_else(|| "--map is required".to_string())?;
-    let map = fs::read_to_string(map_path).map_err(|e| format!("cannot read {map_path}: {e}"))?;
-    let rows = parse_map(&map)?;
+    let rows = read_map(map_path)?;
     let packages = package_names(args)?;
     let mut tests = BTreeSet::new();
     let mut missing = Vec::new();
@@ -388,6 +387,12 @@ fn escape_regex_literal(s: &str) -> String {
     out
 }
 
+fn read_map(path: &str) -> Result<Vec<(String, String)>, String> {
+    let text =
+        util::read_text_file(Path::new(path)).map_err(|e| format!("cannot read {path}: {e}"))?;
+    parse_map(&text)
+}
+
 /// `software` and `test` rows. A `#` line is a comment.
 fn parse_map(text: &str) -> Result<Vec<(String, String)>, String> {
     let mut rows = Vec::new();
@@ -500,6 +505,27 @@ fn is_toolchain(name: &str, extra: &BTreeSet<String>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    #[test]
+    fn map_reader_refuses_a_fifo_promptly() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test-map.tsv");
+        let raw = CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+        let shown = path.display().to_string();
+        let (send, receive) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            send.send(read_map(&shown)).unwrap();
+        });
+        let error = receive
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("map reader blocked")
+            .unwrap_err();
+        assert!(error.contains("not a regular file"), "{error}");
+        reader.join().unwrap();
+    }
 
     #[test]
     fn a_version_starts_at_the_first_numeric_component() {

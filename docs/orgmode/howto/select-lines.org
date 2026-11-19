@@ -27,6 +27,18 @@ It adds the table of step 1 to each target of the site file of [[file:build-from
 
    =strip = true= removes the option from a line before =eb= gets it, as the option is for eb-pipeline, not for EasyBuild.
    A line without the option builds on every target; =when_absent = "none"= builds it on none.
+   Two more keys cover lists that name groups or carve out exceptions:
+
+   #+begin_src toml
+   [targets.select]
+   option = "--only-targets"
+   value = "zen4"
+   aliases = ["cluster"]              # --only-targets=cluster also selects zen4
+   exclude_option = "--not-targets"   # --not-targets=zen4 (or =cluster) leaves the line out
+   strip = true
+   #+end_src
+
+   An exclusion takes priority: a line with =--only-targets=cluster --not-targets=zen4= builds on every target of the group but =zen4=.
 2. Check the site file:
 
    #+begin_src bash

@@ -90,5 +90,10 @@ pub fn store(site: &Site, sbom: &Sbom, run_dir: &Path) -> Result<PathBuf, Fail> 
             ),
         ));
     }
+    let producer = format!("eb-stack stack sbom --lock {lock}");
+    if let Err(error) = exit::read_json_output(&out, &producer, exit::FAILED) {
+        let _ = std::fs::remove_file(&out);
+        return Err(error);
+    }
     Ok(out)
 }

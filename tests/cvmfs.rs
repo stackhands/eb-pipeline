@@ -1442,6 +1442,29 @@ fn archive_manifest_accepts_equals_form_and_rejects_empty_or_duplicate() {
 }
 
 #[test]
+fn metrics_file_equals_separator_is_a_usage_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
+        .current_dir(dir.path())
+        .args([
+            "--dry-run",
+            "--metrics-file=--",
+            "repo.example",
+            "--",
+            "sync",
+        ])
+        .sync_output();
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("--metrics-file requires PATH"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(output.stdout.is_empty());
+    assert!(!dir.path().join("--").exists());
+}
+
+#[test]
 fn value_options_do_not_consume_the_next_long_option() {
     let fixture = Fixture::new();
     let cases = [

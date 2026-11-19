@@ -78,6 +78,44 @@ fn change(t: &T) {
     .unwrap();
 }
 
+#[test]
+fn malformed_rebuild_set_names_the_producer_and_path() {
+    let t = built("");
+    change(&t);
+    let vars = eessi_vars(&t, "2023.06");
+    let mut malformed = with(&vars);
+    malformed.push(("STUB_REBUILD_SET_JSON", "{"));
+
+    let output = watch(&t, LATER, &["--dry-run"], &malformed);
+
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("eb-stack rebuild-set wrote invalid JSON to")
+            && stderr(&output).contains("rebuild-set.json: EOF while parsing an object"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn malformed_shard_plan_names_the_producer_and_path() {
+    let t = built("");
+    change(&t);
+    let vars = eessi_vars(&t, "2023.06");
+    let mut malformed = with(&vars);
+    malformed.push(("STUB_SHARD_PLAN_JSON", "{"));
+
+    let output = watch(&t, LATER, &["--dry-run"], &malformed);
+
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("eb-stack stack shard wrote invalid JSON to")
+            && stderr(&output).contains("plan.json: EOF while parsing an object"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 fn watch(t: &T, stamp: &str, extra: &[&str], vars: &[(&str, &str)]) -> Output {
     let site = t.site.display().to_string();
     let mut args = vec![
@@ -1044,7 +1082,7 @@ exec "{}" "$@"
         std::env::var("PATH").unwrap_or_default()
     );
     let mut command = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"));
-    command
+    without_host_eessi(&mut command)
         .args([
             "watch",
             "--site",

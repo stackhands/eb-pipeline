@@ -222,6 +222,11 @@ doc_struct! {
         option: String => ("string", "", true,
             "Long option that carries the selection on a build list line, leading dashes included: `option = \"--name\"` reads `--name=a,b` or `--name a,b`."),
         value: String => ("string", "", true, "This target's token in the option's value list."),
+        #[serde(default)]
+        aliases: Vec<String> => ("array of string", "[]", false,
+            "Further tokens that name this target, such as the name of a group it belongs to. A line that lists any of them, or `value`, is planned for the target."),
+        exclude_option: Option<String> => ("string", "none", false,
+            "Long option that leaves a line out, leading dashes included: a line that lists `value` or an alias under it is not planned for this target, whatever `option` says. Read with the same `separator` and removed with `strip`."),
         #[serde(default = "d_sep")]
         separator: String => ("string", ",", false, "Separator between tokens in the option's value."),
         #[serde(default = "d_all")]

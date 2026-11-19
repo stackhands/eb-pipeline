@@ -1,1 +1,0 @@
-Add opt-in `eb-cvmfs --tag`, `--tag-description`, and `--check` for named publish tags and post-publish integrity checks.

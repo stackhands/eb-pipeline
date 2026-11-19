@@ -49,6 +49,44 @@ fn successful_build_durations_become_sorted_tab_separated_weights() {
 }
 
 #[test]
+fn malformed_result_names_the_producer_and_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let result = dir.path().join("result.json");
+    std::fs::write(&result, "{").unwrap();
+
+    let output = bin().args(["--result"]).arg(&result).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stdout, b"");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        format!(
+            "eb-shard-weights: eb-pipeline run wrote invalid JSON to {}: EOF while parsing an object at line 1 column 1\n",
+            result.display()
+        )
+    );
+}
+
+#[test]
+fn malformed_summary_names_the_producer_and_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let summary = dir.path().join("summary.json");
+    std::fs::write(&summary, "{").unwrap();
+
+    let output = bin().args(["--summary"]).arg(&summary).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stdout, b"");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        format!(
+            "eb-shard-weights: eb-pipeline run wrote invalid JSON to {}: EOF while parsing an object at line 1 column 1\n",
+            summary.display()
+        )
+    );
+}
+
+#[test]
 fn common_environment_falls_back_and_flags_win() {
     let dir = tempfile::tempdir().unwrap();
     let result = dir.path().join("result.json");
@@ -401,6 +439,32 @@ fn invalid_inputs_exit_2() {
 }
 
 #[test]
+fn a_corrupt_log_root_summary_prevents_partial_weights() {
+    let dir = tempfile::tempdir().unwrap();
+    let logs = dir.path().join("logs");
+    let run = logs.join("20261118_230000");
+    let existing = dir.path().join("existing.tsv");
+    std::fs::create_dir_all(&run).unwrap();
+    std::fs::write(run.join("summary.json"), "not json\n").unwrap();
+    std::fs::write(&existing, "Keep/1.0\t7\n").unwrap();
+
+    let output = bin()
+        .args(["--log-root"])
+        .arg(&logs)
+        .args(["--existing"])
+        .arg(&existing)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("summary.json"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn docs_name_eb_shard_weights() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/orgmode");
     for rel in ["howto/build-from-ci.org", "reference/cli.org"] {
@@ -605,6 +669,55 @@ fn a_successful_result_line_requires_a_numeric_duration() {
     assert_eq!(valid.status.code(), Some(0));
     assert_eq!(valid.stdout, b"A/1.0\t2\n");
     assert_eq!(valid.stderr, b"");
+}
+
+#[test]
+fn a_successful_summary_package_requires_a_duration() {
+    let dir = tempfile::tempdir().unwrap();
+    let summary = dir.path().join("summary.json");
+    std::fs::write(
+        &summary,
+        r#"{
+  "schema_version": 1,
+  "kind": "summary",
+  "tool": "eb-pipeline 0.3.1",
+  "site": "example",
+  "run": "20261118_230000",
+  "updated_at": "2026-11-18T23:10:00Z",
+  "exit_code": 0,
+  "status": "success",
+  "targets": [{
+    "name": "cpu",
+    "command": "run",
+    "build_type": "production",
+    "run_id": "r1",
+    "list": "build.list",
+    "log_dir": "/tmp/logs/cpu",
+    "started_at": "2026-11-18T23:00:00Z",
+    "ended_at": "2026-11-18T23:10:00Z",
+    "duration_seconds": 600.0,
+    "exit_code": 0,
+    "status": "success",
+    "counts": {"success": 2},
+    "phases": [],
+    "packages": [
+      {"easyconfig": "A-1.0.eb", "unit": "all", "phase": "build", "status": "success", "log": "/tmp/a.log"},
+      {"easyconfig": "B-1.0.eb", "unit": "all", "phase": "build", "status": "success", "duration_seconds": 3.0, "log": "/tmp/b.log"}
+    ]
+  }]
+}"#,
+    )
+    .unwrap();
+
+    let output = bin().args(["--summary"]).arg(&summary).output().unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("targets[0].packages[0].duration_seconds must be a non-negative number"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]

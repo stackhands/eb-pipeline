@@ -82,7 +82,11 @@ case "$cmd" in
   rebuild-set)
     rows=$(awk -F'\t' 'NR == FNR { c[$1] = 1; next }
       ($2 in c) { printf "%s{\"changed\":\"%s\",\"dependent\":\"%s\",\"class\":\"%s\",\"edge_kind\":\"%s\",\"reason\":\"stub\"}", (n++ ? "," : ""), $2, $1, $3, $4 }' "$changed" "$D/deps.tsv")
-    printf '{"schema_version":5,"rows":[%s]}\n' "$rows" > "$out/rebuild-set.json";;
+    if [ -n "${STUB_REBUILD_SET_JSON+x}" ]; then
+      printf '%s' "$STUB_REBUILD_SET_JSON" > "$out/rebuild-set.json"
+    else
+      printf '{"schema_version":5,"rows":[%s]}\n' "$rows" > "$out/rebuild-set.json"
+    fi;;
   stack-sbom)
     printf '%s\n' '{"bomFormat":"CycloneDX","specVersion":"1.5"}' > "$outfile";;
   stack-shard)
@@ -92,7 +96,13 @@ case "$cmd" in
       { m = $1; sub(/\.eb$/, "", m); sub(/-/, "/", m)
         printf "%s{\"easyconfig\":\"%s\",\"module\":\"%s\",\"closure\":[%s\"%s\"]}", (n++ ? "," : ""), $1, m, need[$1], m }' \
       "$D/missing.txt" "$out/shard-01.list")
-    printf '{"prelude":null,"shards":[{"name":"shard-01","file":"shard-01.list"}],"lines":[%s]}\n' "$lines" > "$out/plan.json";;
+    if [ -n "${STUB_SHARD_PLAN_JSON+x}" ]; then
+      printf '%s' "$STUB_SHARD_PLAN_JSON" > "$out/plan.json"
+    else
+      printf '{"prelude":null,"shards":[{"name":"shard-01","file":"shard-01.list"}],"lines":[%s]}\n' "$lines" > "$out/plan.json"
+    fi;;
+  stack-from-commit)
+    printf '{}\n';;
 esac
 exit 0
 "#;
@@ -331,6 +341,18 @@ compress_after_days = 3
     }
 }
 
+/// Drop the caller's `EESSI_*` variables from a command's environment. The stub
+/// module environment prints the environment it inherits, so a test started
+/// inside a loaded EESSI stack would probe that stack and not its fixture.
+pub fn without_host_eessi(c: &mut Command) -> &mut Command {
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("EESSI_") {
+            c.env_remove(key);
+        }
+    }
+    c
+}
+
 /// `eb-pipeline ARGS`, with the stubs first on PATH.
 pub fn eb_pipeline(t: &T, args: &[&str], vars: &[(&str, &str)]) -> Output {
     let path = format!(
@@ -339,7 +361,8 @@ pub fn eb_pipeline(t: &T, args: &[&str], vars: &[(&str, &str)]) -> Output {
         std::env::var("PATH").unwrap_or_default()
     );
     let mut c = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"));
-    c.args(args)
+    without_host_eessi(&mut c)
+        .args(args)
         .env("PATH", path)
         .env("STUB_DIR", t.root())
         .env_remove("EB_PIPELINE_LOG_STAMP")

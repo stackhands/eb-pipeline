@@ -6,7 +6,7 @@
 
 use eb_pipeline::plan::module_rel;
 use eb_pipeline::summary::{self, Summary};
-use eb_pipeline::util;
+use eb_pipeline::{exit, util};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::env;
@@ -85,9 +85,17 @@ fn run() -> Result<ExitCode, String> {
         )?;
     }
     for path in &args.summaries {
-        let text = fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
-        let s = parse_summary_json(&text, Path::new(path))?;
-        target_matched |= collect_summary(&s, args.target.as_deref(), &mut observations, &mut seq);
+        let path = Path::new(path);
+        let (_, value) = exit::read_json_output(path, "eb-pipeline run", exit::USAGE)
+            .map_err(|error| error.msg)?;
+        let s = parse_summary_json(value, path)?;
+        target_matched |= collect_summary(
+            &s,
+            path,
+            args.target.as_deref(),
+            &mut observations,
+            &mut seq,
+        )?;
     }
     if let Some(root) = &args.log_root {
         let last = args.last.unwrap_or(10);
@@ -95,9 +103,19 @@ fn run() -> Result<ExitCode, String> {
         // `summary::runs` returns newest first; collect chronologically so `latest`
         // falls back cleanly when timestamps match.
         for entry in entries.into_iter().rev() {
-            if let Ok(s) = entry.summary {
-                target_matched |=
-                    collect_summary(&s, args.target.as_deref(), &mut observations, &mut seq);
+            let path = entry.dir.join("summary.json");
+            match entry.summary {
+                Ok(s) => {
+                    target_matched |= collect_summary(
+                        &s,
+                        &path,
+                        args.target.as_deref(),
+                        &mut observations,
+                        &mut seq,
+                    )?;
+                }
+                Err(error) if path.exists() => return Err(error),
+                Err(_) => {}
             }
         }
     }
@@ -375,10 +393,8 @@ fn collect_result(
     out: &mut Vec<Observation>,
     seq: &mut usize,
 ) -> Result<bool, String> {
-    let text =
-        fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    let v: Value =
-        serde_json::from_str(&text).map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
+    let (_, v) =
+        exit::read_json_output(path, "eb-pipeline run", exit::USAGE).map_err(|error| error.msg)?;
     let obj = v
         .as_object()
         .ok_or_else(|| format!("{} must be a JSON object", path.display()))?;
@@ -450,9 +466,7 @@ fn collect_result(
     Ok(true)
 }
 
-fn parse_summary_json(text: &str, path: &Path) -> Result<Summary, String> {
-    let v: Value =
-        serde_json::from_str(text).map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
+fn parse_summary_json(v: Value, path: &Path) -> Result<Summary, String> {
     let kind = v
         .get("kind")
         .and_then(Value::as_str)
@@ -468,27 +482,34 @@ fn parse_summary_json(text: &str, path: &Path) -> Result<Summary, String> {
 
 fn collect_summary(
     s: &Summary,
+    path: &Path,
     target_filter: Option<&str>,
     out: &mut Vec<Observation>,
     seq: &mut usize,
-) -> bool {
+) -> Result<bool, String> {
     let mut matched = target_filter.is_none();
-    for t in &s.targets {
+    for (target_index, t) in s.targets.iter().enumerate() {
         if let Some(want) = target_filter {
             if t.name != want {
                 continue;
             }
             matched = true;
         }
-        for p in &t.packages {
+        for (package_index, p) in t.packages.iter().enumerate() {
             if p.phase != "build" || p.status != "success" {
                 continue;
             }
-            let Some(secs) = p.duration_seconds else {
-                continue;
-            };
+            let secs = p.duration_seconds.ok_or_else(|| {
+                format!(
+                    "{}: targets[{target_index}].packages[{package_index}].duration_seconds must be a non-negative number",
+                    path.display()
+                )
+            })?;
             if !secs.is_finite() || secs < 0.0 {
-                continue;
+                return Err(format!(
+                    "{}: targets[{target_index}].packages[{package_index}].duration_seconds must be a non-negative number",
+                    path.display()
+                ));
             }
             let module = module_key(p.module.as_deref(), &p.easyconfig);
             *seq += 1;
@@ -500,7 +521,7 @@ fn collect_summary(
             });
         }
     }
-    matched
+    Ok(matched)
 }
 
 fn module_key(module: Option<&str>, easyconfig: &str) -> String {

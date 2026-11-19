@@ -104,6 +104,7 @@ pub fn run(args: Args<'_>) -> Result<i32, Fail> {
                 )
             })?;
         let backport = work.join("backport.md");
+        let sbom = work.join("stack.cdx.json");
         let mut argv = vec![
             "stack".into(),
             "sbom".into(),
@@ -112,13 +113,14 @@ pub fn run(args: Args<'_>) -> Result<i32, Fail> {
             "--backport-list".into(),
             backport.display().to_string(),
             "--out".into(),
-            work.join("stack.cdx.json").display().to_string(),
+            sbom.display().to_string(),
         ];
         for cve in args.cves {
             argv.push("--cve".into());
             argv.push(cve.clone());
         }
         let summary = run_eb_stack(&planner, &argv, &work.join("stack-sbom.log"))?;
+        let _ = exit::read_json_output(&sbom, "eb-stack stack sbom", exit::FAILED)?;
         strict_backports += parse_metric(&summary, "backport").unwrap_or(0);
 
         for cve in args.cves {
@@ -142,6 +144,11 @@ pub fn run(args: Args<'_>) -> Result<i32, Fail> {
                 &planner,
                 &argv,
                 &work.join(format!("component-reach-{tag}.log")),
+            )?;
+            let _ = exit::read_json_output(
+                &out.join("component-reach.json"),
+                "eb-stack component-reach",
+                exit::FAILED,
             )?;
         }
     }
@@ -176,7 +183,12 @@ fn probe_target_env(
         .collect();
     let cmd = planner.plan_role_cmd(PHASE, inner)?;
     let log_path = work.join("probe.log");
-    let code = exec_logged(&cmd, &planner.scope.env(), &log_path)?;
+    let code = exec_logged(
+        &cmd,
+        &planner.scope.env(),
+        &planner.scope.eessi_unset_env(),
+        &log_path,
+    )?;
     let bytes = std::fs::read(&out).unwrap_or_default();
     let _ = std::fs::remove_file(&out);
     if code != 0 || bytes.is_empty() {
@@ -238,7 +250,12 @@ fn run_eb_stack(planner: &Planner<'_>, tail: &[String], log_path: &Path) -> Resu
     let mut argv = vec![Tool::EbStack.bin(planner.scope.site)];
     argv.extend(tail.iter().cloned());
     let cmd = planner.plan_role_cmd(PHASE, argv)?;
-    let code = exec_logged(&cmd, &planner.scope.env(), log_path)?;
+    let code = exec_logged(
+        &cmd,
+        &planner.scope.env(),
+        &planner.scope.eessi_unset_env(),
+        log_path,
+    )?;
     if code != 0 {
         let exit_code = match code {
             exit::USAGE => exit::USAGE,

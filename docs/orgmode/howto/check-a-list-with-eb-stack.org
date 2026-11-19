@@ -60,3 +60,16 @@ eb-pipeline check \
 
 That setting becomes =eb-stack stack provided --baseline-lock=.
 Without it, =eb-stack= refuses the check because it has no baseline to compare.
+
+The =buildenv= check also takes a plain build list. It fails while a toolchain that a line of the list builds with has no =buildenv-default-<toolchain>.eb= line, and prints the line to add for each:
+
+#+begin_src bash
+eb-pipeline check \
+  --site site.toml \
+  --list site.list \
+  --stack-checks buildenv
+#+end_src
+
+Software a user compiles by hand links with the stack's libraries only through the build environment of its toolchain, so a toolchain without one is a toolchain users cannot build against.
+=provided= and =buildenv= can be requested together; neither can share a =--list= with the easystack checks.
+The check needs =eb-stack= 0.9.0 or newer.

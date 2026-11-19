@@ -4,6 +4,7 @@
 //! parsed from an easystack), leaving out `success` and `deselected` entries.
 
 use eb_pipeline::easystack;
+use eb_pipeline::exit;
 use eb_pipeline::util::{self, ListLine};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -88,7 +89,7 @@ fn run() -> Result<ExitCode, String> {
         (read_list(list)?, read_recorded()?, list.to_string())
     };
 
-    let mut selected = select_retry_lines(&lines, &recorded, args.statuses.as_ref());
+    let mut selected = select_retry_lines(&lines, &recorded, args.statuses.as_ref())?;
     if args.classify {
         let classes = args.classes.clone().unwrap_or_else(default_classes);
         selected = classify_retry_lines(selected, &classes)?;
@@ -381,14 +382,9 @@ fn check_node(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn read_json(path: &Path) -> Result<Value, String> {
-    let text =
-        fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    serde_json::from_str(&text).map_err(|e| format!("cannot parse {}: {e}", path.display()))
-}
-
 fn read_result(path: &Path) -> Result<RunOutcomes, String> {
-    let v = read_json(path)?;
+    let (_, v) =
+        exit::read_json_output(path, "eb-pipeline run", exit::USAGE).map_err(|error| error.msg)?;
     let obj = v
         .as_object()
         .ok_or_else(|| format!("{} must be a JSON object", path.display()))?;
@@ -438,7 +434,8 @@ fn read_result(path: &Path) -> Result<RunOutcomes, String> {
 }
 
 fn read_summary(path: &Path, target: &str) -> Result<RunOutcomes, String> {
-    let v = read_json(path)?;
+    let (_, v) = exit::read_json_output(path, "eb-pipeline status", exit::USAGE)
+        .map_err(|error| error.msg)?;
     let obj = v
         .as_object()
         .ok_or_else(|| format!("{} must be a JSON object", path.display()))?;
@@ -554,7 +551,7 @@ fn select_retry_lines(
     lines: &[ListLine],
     recorded: &RunOutcomes,
     explicit_statuses: Option<&BTreeSet<String>>,
-) -> Vec<RetryLine> {
+) -> Result<Vec<RetryLine>, String> {
     let mut outcomes = recorded.outcomes.clone();
     let mut deselected = recorded.deselected.clone();
     let mut out = Vec::new();
@@ -596,7 +593,18 @@ fn select_retry_lines(
             }
         }
     }
-    out
+    if let Some((easyconfig, _)) = outcomes.iter().find(|(easyconfig, queue)| {
+        !queue.is_empty()
+            && lines.iter().any(|line| {
+                line.easyconfig.as_str() != easyconfig.as_str()
+                    && basename(&line.easyconfig) == basename(easyconfig)
+            })
+    }) {
+        return Err(format!(
+            "recorded `easyconfig` `{easyconfig}` has no matching build-list line"
+        ));
+    }
+    Ok(out)
 }
 
 fn default_classes() -> BTreeSet<String> {
@@ -951,6 +959,7 @@ mod tests {
         ];
         assert_eq!(
             select_retry_lines(&lines, &rec, None)
+                .unwrap()
                 .into_iter()
                 .map(|line| line.raw)
                 .collect::<Vec<_>>(),
@@ -973,6 +982,7 @@ mod tests {
         let only_failed = BTreeSet::from(["failed".into()]);
         assert_eq!(
             select_retry_lines(&lines, &rec, Some(&only_failed))
+                .unwrap()
                 .into_iter()
                 .map(|line| line.raw)
                 .collect::<Vec<_>>(),

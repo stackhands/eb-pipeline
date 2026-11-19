@@ -2,10 +2,32 @@
 
 use crate::exit::Fail;
 use std::fs::OpenOptions;
-use std::io::Write;
-use std::os::unix::fs::MetadataExt;
-use std::os::unix::fs::PermissionsExt;
+use std::io::{Read, Write};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+
+/// Open a regular input file without waiting on a special file.
+pub fn open_regular_file(path: &Path) -> std::io::Result<std::fs::File> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ));
+    }
+    Ok(file)
+}
+
+/// Read a regular input file as UTF-8 without waiting on a special file.
+pub fn read_text_file(path: &Path) -> std::io::Result<String> {
+    let mut file = open_regular_file(path)?;
+    let mut text = String::new();
+    file.read_to_string(&mut text)?;
+    Ok(text)
+}
 
 /// Write all bytes to standard output, treating a closed pipeline consumer as
 /// successful completion.
@@ -90,23 +112,20 @@ pub fn refuse_output_alias(
     Ok(())
 }
 
-/// Atomically replace `path` through a fully written temporary sibling.
+/// Atomically replace a non-symlink `path` through a fully written temporary
+/// sibling.
 ///
 /// An existing regular file's permission bits are applied to the temporary
 /// file before the rename. Ownership follows the account creating the
 /// temporary file.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let destination = if path.is_symlink() {
-        let target = std::fs::read_link(path)?;
-        let target = if target.is_absolute() {
-            target
-        } else {
-            path.parent().unwrap_or_else(|| Path::new(".")).join(target)
-        };
-        resolved_path(&target)
-    } else {
-        path.to_path_buf()
-    };
+    if path.is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "output path is a symbolic link",
+        ));
+    }
+    let destination = path.to_path_buf();
     let parent = destination.parent().unwrap_or_else(|| Path::new("."));
     let existing_mode = match std::fs::metadata(&destination) {
         Ok(metadata) if metadata.is_file() => Some(metadata.permissions().mode() & 0o7777),
@@ -326,6 +345,7 @@ pub struct ListLine {
 /// Read build list lines: blank lines and `#` comments are skipped.
 pub fn parse_list(text: &str) -> Result<Vec<ListLine>, Fail> {
     let mut out = Vec::new();
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     for l in text.lines() {
         let t = l.trim();
         if t.is_empty() || t.starts_with('#') {
@@ -362,6 +382,44 @@ pub fn package_of(easyconfig: &str) -> (String, Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    #[test]
+    fn regular_text_reader_rejects_hostile_inputs_promptly() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let fifo = dir.path().join("input.fifo");
+        let raw = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+        let (send, receive) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            send.send(read_text_file(&fifo)).unwrap();
+        });
+        let error = receive
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("FIFO reader blocked")
+            .unwrap_err();
+        reader.join().unwrap();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+
+        let error = read_text_file(dir.path()).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+
+        let dangling = dir.path().join("dangling");
+        std::os::unix::fs::symlink("gone", &dangling).unwrap();
+        let error = read_text_file(&dangling).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+
+        let invalid = dir.path().join("invalid");
+        std::fs::write(&invalid, [0xff]).unwrap();
+        let error = read_text_file(&invalid).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+
+        let bom = dir.path().join("bom");
+        std::fs::write(&bom, "\u{feff}text").unwrap();
+        assert_eq!(read_text_file(&bom).unwrap(), "\u{feff}text");
+    }
 
     #[test]
     fn atomic_write_replaces_only_after_the_new_file_is_complete() {
@@ -404,19 +462,25 @@ mod tests {
     }
 
     #[test]
-    fn atomic_write_preserves_an_output_symlink() {
+    fn atomic_write_refuses_output_symlinks() {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("result.json");
         let link = dir.path().join("latest.json");
         std::fs::write(&target, b"old bytes\n").unwrap();
         std::os::unix::fs::symlink("result.json", &link).unwrap();
-        let old_inode = std::fs::metadata(&target).unwrap().ino();
 
-        write_atomic(&link, b"new bytes\n").unwrap();
-
+        let error = write_atomic(&link, b"new bytes\n").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(std::fs::read(&target).unwrap(), b"old bytes\n");
         assert!(link.is_symlink());
-        assert_eq!(std::fs::read(&link).unwrap(), b"new bytes\n");
-        assert_ne!(std::fs::metadata(&target).unwrap().ino(), old_inode);
+
+        let missing = dir.path().join("missing.json");
+        let dangling = dir.path().join("dangling.json");
+        std::os::unix::fs::symlink("missing.json", &dangling).unwrap();
+        let error = write_atomic(&dangling, b"new bytes\n").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(!missing.exists());
+        assert!(dangling.is_symlink());
     }
 
     #[test]
@@ -522,6 +586,14 @@ mod tests {
         let l = parse_list("# c\n\nFoo-1.0-foss-2025a.eb --rebuild\n").unwrap();
         assert_eq!(l.len(), 1);
         assert_eq!(l[0].args, vec!["--rebuild"]);
+    }
+
+    #[test]
+    fn parse_list_strips_one_initial_utf8_bom() {
+        let lines = parse_list("\u{feff}Foo-1.0.eb --rebuild\nBar-2.0.eb\n").unwrap();
+        assert_eq!(lines[0].easyconfig, "Foo-1.0.eb");
+        assert_eq!(lines[0].raw, "Foo-1.0.eb --rebuild");
+        assert_eq!(lines[1].easyconfig, "Bar-2.0.eb");
     }
 
     #[test]

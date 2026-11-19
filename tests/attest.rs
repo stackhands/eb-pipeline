@@ -487,6 +487,49 @@ fn an_enabled_plan_appends_a_record_and_verify_recomputes_it() {
 }
 
 #[test]
+fn malformed_verify_input_names_the_producer_and_path() {
+    let tree = Tree::new();
+    let root = tree.path();
+    let mut site = bare_site(root);
+    site.push_str(&format!(
+        "\n[attest]\nenabled = true\nlog_dir = \"{r}/log\"\nkey = \"{r}/key.pem\"\norigin = \"example.org/inputs\"\ntrusted = [\"example.org/inputs+abcd+AAAA\"]\neasyconfigs = [\"{r}/easyconfigs\"]\n",
+        r = root.display()
+    ));
+    std::fs::create_dir_all(root.join("easyconfigs")).unwrap();
+    std::fs::write(root.join("key.pem"), "k\n").unwrap();
+    std::fs::write(root.join("site.toml"), site).unwrap();
+    std::fs::write(root.join("list.txt"), "Foo-1.0.eb\n").unwrap();
+    let from = root.join("plan.json");
+    std::fs::write(&from, "{").unwrap();
+
+    let output = tree.run(
+        &[
+            "verify",
+            "--site",
+            root.join("site.toml").to_str().unwrap(),
+            "--list",
+            root.join("list.txt").to_str().unwrap(),
+            "--target",
+            "cpu",
+            "--build-type",
+            "production",
+            "--from",
+            from.to_str().unwrap(),
+        ],
+        &[],
+    );
+
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        format!(
+            "ERROR [main] -: eb-pipeline plan wrote invalid JSON to {}: EOF while parsing an object at line 1 column 1\n",
+            from.display()
+        )
+    );
+}
+
+#[test]
 fn a_stale_record_temporary_does_not_block_attestation() {
     let tree = Tree::new();
     let root = tree.path();

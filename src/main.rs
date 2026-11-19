@@ -541,6 +541,7 @@ fn cmd_explain(
     build_type: Option<&str>,
     format: Format,
 ) -> Result<i32, Fail> {
+    validate_option_values(&[("--build-type", build_type)])?;
     let s = load_valid(site_path, None)?;
     let v = explain(&s, site_file(site_path).as_deref(), target, build_type)?;
     match format {
@@ -614,10 +615,7 @@ fn cmd_status(
 }
 
 fn cmd_metrics(path: &Path, format: StatusFormat) -> Result<i32, Fail> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| Fail::usage(format!("cannot read {}: {e}", path.display())))?;
-    let value: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| Fail::usage(format!("cannot parse {}: {e}", path.display())))?;
+    let (_, value) = exit::read_json_output(path, "eb-pipeline run", exit::USAGE)?;
     let status = metrics::from_result(&value)?;
     match format {
         StatusFormat::Prometheus => write_stdout_text(&metrics::prometheus(&status))?,
@@ -634,6 +632,9 @@ fn cmd_audit(
     strict: bool,
     out_dir: &Path,
 ) -> Result<i32, Fail> {
+    for cve in cves {
+        validate_option_values(&[("--cve", Some(cve))])?;
+    }
     let s = load_valid(site_path, None)?;
     let target = s.target(target_name)?;
     audit::run(audit::Args {
@@ -695,9 +696,15 @@ fn cmd_init(
                         Fail::new(exit::FAILED, message)
                     }
                 })?;
-            f.write_all(t.text.as_bytes()).map_err(|e| {
-                Fail::new(exit::FAILED, format!("cannot write {}: {e}", p.display()))
-            })?;
+            let written = f.write_all(t.text.as_bytes()).and_then(|()| f.sync_all());
+            drop(f);
+            if let Err(e) = written {
+                let _ = std::fs::remove_file(p);
+                return Err(Fail::new(
+                    exit::FAILED,
+                    format!("cannot write {}: {e}", p.display()),
+                ));
+            }
             log(
                 "INFO",
                 "init",
@@ -807,6 +814,20 @@ struct Mode<'a> {
     resume_result: Option<&'a Path>,
 }
 
+fn validate_option_values(values: &[(&str, Option<&str>)]) -> Result<(), Fail> {
+    for &(option, value) in values {
+        let Some(value) = value else {
+            continue;
+        };
+        if value.trim().is_empty() || value.chars().any(char::is_control) {
+            return Err(Fail::usage(format!(
+                "{option} must be non-empty and contain no control characters"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
     let Mode {
         out,
@@ -819,6 +840,10 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         oom_node,
         resume_result,
     } = m;
+    validate_option_values(&[
+        ("--build-type", Some(c.build_type.as_str())),
+        ("--run-id", c.run_id.as_deref()),
+    ])?;
     let source_inputs = [
         ("--site", Some(c.site.as_path())),
         ("--list", c.list.as_deref()),
@@ -1148,6 +1173,7 @@ struct WatchArgs<'a> {
 }
 
 fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
+    validate_option_values(&[("--build-type", Some(w.build_type)), ("--run-id", w.run_id)])?;
     if let Some(stamp) = w.log_stamp.filter(|s| !util::is_log_stamp(s)) {
         return Err(Fail::usage(format!(
             "--log-stamp `{stamp}` is not a UTC time as YYYYMMDD_HHMMSS"
@@ -1561,10 +1587,7 @@ fn cmd_verify(
     let Some(conf) = s.attest_on() else {
         return Err(Fail::usage("verify needs [attest] enabled = true"));
     };
-    let text = std::fs::read_to_string(from)
-        .map_err(|e| Fail::usage(format!("cannot read {}: {e}", from.display())))?;
-    let doc: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| Fail::usage(format!("{} is not JSON: {e}", from.display())))?;
+    let (_, doc) = exit::read_json_output(from, "eb-pipeline plan", exit::USAGE)?;
     let stored = match doc.get("input_attestation") {
         Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
             Fail::usage(format!(

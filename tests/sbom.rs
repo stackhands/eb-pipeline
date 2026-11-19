@@ -11,6 +11,13 @@ while [ "$#" -gt 0 ]; do
 done
 : > "$out"
 "#;
+const TRUNCATED_SBOM: &str = r#"#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--out" ]; then out=$2; shift; fi
+  shift
+done
+printf '{' > "$out"
+"#;
 
 #[test]
 fn a_clean_build_stores_the_cyclonedx_file_beside_the_summary() {
@@ -95,6 +102,23 @@ fn a_success_with_an_empty_document_fails_the_run() {
     assert_eq!(code(&output), 1, "{}", stderr(&output));
     assert!(
         stderr(&output).contains("wrote no non-empty"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!document.exists());
+    assert_eq!(t.summary(STAMP)["exit_code"], 1);
+}
+
+#[test]
+fn a_success_with_truncated_json_fails_the_run() {
+    let t = setup("[sbom]\nlock = \"@ROOT@/stack.lock.json\"\n");
+    write_exec(&t.stubs.join("eb-stack"), TRUNCATED_SBOM);
+    let output = run(&t, "cpu", STAMP, LIST, &[]);
+    let document = t.run_dir(STAMP).join("sbom.cdx.json");
+
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("wrote invalid JSON"),
         "{}",
         stderr(&output)
     );

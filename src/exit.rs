@@ -1,5 +1,7 @@
 //! Exit-code contract.
 
+use std::path::Path;
+
 /// All work succeeded.
 pub const OK: i32 = 0;
 /// Work was attempted and failed.
@@ -73,3 +75,37 @@ impl std::fmt::Display for Fail {
 }
 
 impl std::error::Error for Fail {}
+
+/// Parse JSON output written by a subprocess.
+pub fn parse_json_output(
+    bytes: &[u8],
+    path: &Path,
+    producer: &str,
+    error_code: i32,
+) -> Result<serde_json::Value, Fail> {
+    serde_json::from_slice(bytes).map_err(|error| {
+        Fail::new(
+            error_code,
+            format!(
+                "{producer} wrote invalid JSON to {}: {error}",
+                path.display()
+            ),
+        )
+    })
+}
+
+/// Read and parse a JSON file written by a subprocess.
+pub fn read_json_output(
+    path: &Path,
+    producer: &str,
+    error_code: i32,
+) -> Result<(Vec<u8>, serde_json::Value), Fail> {
+    let bytes = std::fs::read(path).map_err(|error| {
+        Fail::new(
+            error_code,
+            format!("cannot read {}: {error}", path.display()),
+        )
+    })?;
+    let value = parse_json_output(&bytes, path, producer, error_code)?;
+    Ok((bytes, value))
+}

@@ -18,16 +18,23 @@ on the tag and:
 
 Publishing the draft stays manual.
 
-## Checklist
+`cog bump` does the mechanical part. `cog.toml` runs `tools/release-prepare`
+before the bump commit; the script's header lists what it sets and what it
+leaves to a person.
 
-1. Set `version` in `Cargo.toml` to the new version and refresh the lock
-   file (`cargo update -p eb-pipeline`, on the build host).
-2. Run `towncrier build --version X.Y.Z`. It writes the fragments in
-   `changelog.d/` into `CHANGELOG.md` under `## X.Y.Z (YYYY-MM-DD)` and
-   removes them. The text under that heading becomes the release notes.
-3. CI on `main` is green.
-4. Commit: `git commit -am "chore: release X.Y.Z"`.
-5. Tag and push: `git tag -s vX.Y.Z -m vX.Y.Z && git push origin main vX.Y.Z`.
+## Steps
+
+1. Branch from `main`: `git switch -c chore/release-X.Y.Z origin/main`.
+2. Edit, in a commit of its own, the paragraph of
+   `docs/orgmode/howto/install.org` that says what the previous release
+   lacks.
+3. `cog bump --minor` (or `--patch`, `--major`, `--version X.Y.Z`). It runs
+   the hook, commits `chore(version): X.Y.Z` and creates the tag on that
+   commit. `cog bump --minor --dry-run` prints the version only.
+4. Push the branch, open the pull request, and merge it with a merge commit
+   once its checks pass, so the tagged commit is on `main`.
+5. Sign the tag and push it:
+   `git tag -s -f vX.Y.Z -m "eb-pipeline X.Y.Z" 'vX.Y.Z^{}' && git push origin vX.Y.Z`.
 6. Check the draft release: two archives, their `.sha256` files,
    `sha256.sum`, the notes, and the attestations
    (`gh attestation verify FILE --repo stackhands/eb-pipeline`).

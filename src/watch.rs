@@ -232,7 +232,7 @@ pub fn probe(p: &Planner, work: &Path) -> Result<(Probe, BTreeMap<String, String
         .collect();
     let cmd = p.plan_role_cmd("watch", inner)?;
     let log_path = work.join("eessi-probe.log");
-    let code = exec_logged(&cmd, &p.scope.env(), &log_path)?;
+    let code = exec_logged(&cmd, &p.scope.env(), &p.scope.eessi_unset_env(), &log_path)?;
     let bytes = std::fs::read(&out).unwrap_or_default();
     // The dump holds the whole environment, a webhook's URL among it, and
     // the work directory can outlive the run.
@@ -402,7 +402,7 @@ pub fn rebuild_set(
     ];
     let cmd = p.plan_role_cmd("watch", argv)?;
     let log_path = work.join(format!("{name}.log"));
-    let code = exec_logged(&cmd, &p.scope.env(), &log_path)?;
+    let code = exec_logged(&cmd, &p.scope.env(), &p.scope.eessi_unset_env(), &log_path)?;
     if code != 0 {
         return Err(Fail::new(
             exit::FAILED,
@@ -418,8 +418,7 @@ pub fn rebuild_set(
 
 fn read_rows(path: &Path) -> Result<Vec<Row>, Fail> {
     let bad = |why: String| Fail::new(exit::FAILED, format!("{}: {why}", path.display()));
-    let text = std::fs::read_to_string(path).map_err(|e| bad(e.to_string()))?;
-    let mut v: serde_json::Value = serde_json::from_str(&text).map_err(|e| bad(e.to_string()))?;
+    let (_, mut v) = exit::read_json_output(path, "eb-stack rebuild-set", exit::FAILED)?;
     let schema = v["schema_version"].as_u64();
     if schema != Some(REBUILD_SET_SCHEMA) {
         return Err(bad(format!(
@@ -765,16 +764,19 @@ pub fn other_eessi<'a>(state: &'a State, probe: &Probe) -> Vec<(&'a String, &'a 
 }
 
 /// Whether every install was last found at the repository's revision now,
-/// over the same module trees, all inside the repository: then no module
-/// can have changed under them.
+/// over the same module trees, each resolving inside the repository: then
+/// no module can have changed under them.
 pub fn unchanged_at(state: &State, probe: &Probe, revision: Option<u64>) -> bool {
     let (Some(rev), Some(repo)) = (revision, &probe.repository) else {
+        return false;
+    };
+    let Ok(repo) = std::fs::canonicalize(repo) else {
         return false;
     };
     probe
         .modules_dirs
         .iter()
-        .all(|d| Path::new(d).starts_with(repo))
+        .all(|d| std::fs::canonicalize(d).is_ok_and(|d| d.starts_with(&repo)))
         && state.installs.values().all(|i| {
             i.revision == Some(rev) && i.modules_dirs == probe.modules_dirs && i.pending.is_empty()
         })
@@ -961,7 +963,7 @@ pub fn abi_baseline(p: &Planner, work: &Path, conf: &AbiDrift) -> Result<AbiBase
         ];
         let cmd = p.plan_role_cmd("watch", argv)?;
         let log_path = work.join(format!("abi-{field}.log"));
-        let code = exec_logged(&cmd, &p.scope.env(), &log_path)?;
+        let code = exec_logged(&cmd, &p.scope.env(), &p.scope.eessi_unset_env(), &log_path)?;
         if code != 0 {
             return Err(Fail::new(
                 exit::TEMPFAIL,
@@ -1158,7 +1160,7 @@ pub fn order(
     ]);
     let cmd = p.plan_role_cmd("watch", argv)?;
     let log_path = work.join("order.log");
-    let code = exec_logged(&cmd, &p.scope.env(), &log_path)?;
+    let code = exec_logged(&cmd, &p.scope.env(), &p.scope.eessi_unset_env(), &log_path)?;
     if code != 0 {
         return Err(Fail::new(
             exit::FAILED,
@@ -1170,15 +1172,13 @@ pub fn order(
         ));
     }
     let plan_path = out.join("plan.json");
-    let plan: ShardPlan = std::fs::read_to_string(&plan_path)
-        .map_err(|e| e.to_string())
-        .and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))
-        .map_err(|e| {
-            Fail::new(
-                exit::FAILED,
-                format!("cannot read {}: {e}", plan_path.display()),
-            )
-        })?;
+    let (_, plan_value) = exit::read_json_output(&plan_path, "eb-stack stack shard", exit::FAILED)?;
+    let plan: ShardPlan = serde_json::from_value(plan_value).map_err(|error| {
+        Fail::new(
+            exit::FAILED,
+            format!("cannot read {}: {error}", plan_path.display()),
+        )
+    })?;
     let listed: Vec<&str> = plan.lines.iter().map(|l| l.module.as_str()).collect();
     let closure_of: BTreeMap<&str, &[String]> = plan
         .lines
@@ -1575,6 +1575,31 @@ mod tests {
         )
         .unwrap();
         assert!(load(&dir, "cpu").unwrap_err().contains("schema_version 2"));
+    }
+
+    #[test]
+    fn an_external_module_tree_reached_through_the_repository_is_not_unchanged() {
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path().join("repository");
+        let outside = root.path().join("outside");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let linked = repo.join("overlay");
+        std::os::unix::fs::symlink(&outside, &linked).unwrap();
+        let module_dir = linked.display().to_string();
+        let mut state = State::new("cpu");
+        let mut install = recorded("2026.06", "x86_64/generic");
+        install.revision = Some(42);
+        install.modules_dirs = vec![module_dir.clone()];
+        state.installs.insert("Foo/1.0".into(), install);
+        let probe = Probe {
+            version: "2026.06".into(),
+            software_subdir: "x86_64/generic".into(),
+            repository: Some(repo.display().to_string()),
+            modules_dirs: vec![module_dir],
+        };
+
+        assert!(!unchanged_at(&state, &probe, Some(42)));
     }
 
     #[test]
