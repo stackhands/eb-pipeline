@@ -218,6 +218,9 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 if path.is_empty() {
                     return Err("--metrics-file PATH must not be empty".into());
                 }
+                if path == "--" {
+                    return Err("--metrics-file requires PATH".into());
+                }
                 metrics_file = Some(PathBuf::from(path));
             }
             _ if word.starts_with("--archive-manifest=") => {
