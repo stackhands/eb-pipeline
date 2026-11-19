@@ -810,8 +810,8 @@ struct Mode<'a> {
     resume_result: Option<&'a Path>,
 }
 
-fn validate_run_labels(build_type: &str, run_id: Option<&str>) -> Result<(), Fail> {
-    for (option, value) in [("--build-type", Some(build_type)), ("--run-id", run_id)] {
+fn validate_option_values(values: &[(&str, Option<&str>)]) -> Result<(), Fail> {
+    for &(option, value) in values {
         let Some(value) = value else {
             continue;
         };
@@ -836,7 +836,10 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         oom_node,
         resume_result,
     } = m;
-    validate_run_labels(&c.build_type, c.run_id.as_deref())?;
+    validate_option_values(&[
+        ("--build-type", Some(c.build_type.as_str())),
+        ("--run-id", c.run_id.as_deref()),
+    ])?;
     let source_inputs = [
         ("--site", Some(c.site.as_path())),
         ("--list", c.list.as_deref()),
@@ -1166,7 +1169,7 @@ struct WatchArgs<'a> {
 }
 
 fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
-    validate_run_labels(w.build_type, w.run_id)?;
+    validate_option_values(&[("--build-type", Some(w.build_type)), ("--run-id", w.run_id)])?;
     if let Some(stamp) = w.log_stamp.filter(|s| !util::is_log_stamp(s)) {
         return Err(Fail::usage(format!(
             "--log-stamp `{stamp}` is not a UTC time as YYYYMMDD_HHMMSS"
