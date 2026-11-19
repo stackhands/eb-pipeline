@@ -326,6 +326,7 @@ pub struct ListLine {
 /// Read build list lines: blank lines and `#` comments are skipped.
 pub fn parse_list(text: &str) -> Result<Vec<ListLine>, Fail> {
     let mut out = Vec::new();
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     for l in text.lines() {
         let t = l.trim();
         if t.is_empty() || t.starts_with('#') {
@@ -522,6 +523,14 @@ mod tests {
         let l = parse_list("# c\n\nFoo-1.0-foss-2025a.eb --rebuild\n").unwrap();
         assert_eq!(l.len(), 1);
         assert_eq!(l[0].args, vec!["--rebuild"]);
+    }
+
+    #[test]
+    fn parse_list_strips_one_initial_utf8_bom() {
+        let lines = parse_list("\u{feff}Foo-1.0.eb --rebuild\nBar-2.0.eb\n").unwrap();
+        assert_eq!(lines[0].easyconfig, "Foo-1.0.eb");
+        assert_eq!(lines[0].raw, "Foo-1.0.eb --rebuild");
+        assert_eq!(lines[1].easyconfig, "Bar-2.0.eb");
     }
 
     #[test]
