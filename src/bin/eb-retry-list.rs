@@ -785,20 +785,34 @@ fn easystack_entry(name: &str, args: &[String]) -> Result<serde_yaml::Value, Str
     let mut index = 0;
     while index < args.len() {
         let argument = &args[index];
-        let Some(long) = argument.strip_prefix("--") else {
+        let option = if let Some(long) = argument.strip_prefix("--") {
+            long
+        } else if let Some(short) = argument.strip_prefix('-') {
+            let key = short.split_once('=').map_or(short, |(key, _)| key);
+            if key.chars().count() != 1 {
+                return Err(format!(
+                    "cannot represent eb option `{argument}` in the generated easystack"
+                ));
+            }
+            short
+        } else {
             return Err(format!(
                 "cannot represent eb option `{argument}` in the generated easystack"
             ));
         };
-        let (key, value, consumed) = if let Some((key, value)) = long.split_once('=') {
+        let (key, value, consumed) = if let Some((key, value)) = option.split_once('=') {
             (key, serde_yaml::Value::String(value.to_string()), 1)
         } else if args
             .get(index + 1)
             .is_some_and(|value| !value.starts_with('-'))
         {
-            (long, serde_yaml::Value::String(args[index + 1].clone()), 2)
+            (
+                option,
+                serde_yaml::Value::String(args[index + 1].clone()),
+                2,
+            )
         } else {
-            (long, serde_yaml::Value::Bool(true), 1)
+            (option, serde_yaml::Value::Bool(true), 1)
         };
         if key.is_empty() {
             return Err("cannot represent an empty eb option in the generated easystack".into());
@@ -992,6 +1006,18 @@ oom=2 fits=1 builds=3 nodes=1
         assert!(check_node("0:65536").is_err());
         assert!(check_node("32:65536:").is_err());
         assert!(check_node("32").is_err());
+    }
+
+    #[test]
+    fn generated_easystacks_keep_short_easybuild_options() {
+        let entry = easystack_entry("Big-1.0.eb", &["-f".into()]).unwrap();
+        let document = serde_yaml::Value::Mapping(serde_yaml::Mapping::from_iter([(
+            serde_yaml::Value::String("easyconfigs".into()),
+            serde_yaml::Value::Sequence(vec![entry]),
+        )]));
+        let text = serde_yaml::to_string(&document).unwrap();
+        let lines = easystack::parse(&text).unwrap();
+        assert_eq!(lines[0].args, ["-f"]);
     }
 
     fn outcome(status: &str) -> Outcome {
