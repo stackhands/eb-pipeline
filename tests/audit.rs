@@ -41,7 +41,11 @@ case "$cmd" in
     ;;
   component-reach)
     mkdir -p "$out"
-    printf '{"kind":"ok"}\n' > "$out/component-reach.json"
+    if [ -n "${STUB_AUDIT_TRUNCATED_COMPONENT:-}" ]; then
+      printf '{' > "$out/component-reach.json"
+    else
+      printf '{"kind":"ok"}\n' > "$out/component-reach.json"
+    fi
     echo "cve=CVE-2026-0001 packages=1 generation=2026.06 carriers=1 changed=1 must-rebuild=1 review=0 no-rebuild=0 out=$out"
     ;;
 esac
@@ -213,6 +217,44 @@ fn audit_refuses_truncated_sbom_json() {
         stderr(&output)
     );
     assert!(!t.calls("ebstack").contains("component-reach"));
+}
+
+#[test]
+fn audit_refuses_truncated_component_json() {
+    let t = setup("[sbom]\nenabled = true\nlock = \"@ROOT@/stack.lock.json\"");
+    write_exec(&t.stubs.join("eb-stack"), EB_STACK_AUDIT);
+    t.eessi_module("Foo", "1.0-GCCcore-13.2.0");
+    std::fs::write(t.root().join("stack.lock.json"), "{\"packages\":[]}").unwrap();
+    let out_dir = t.root().join("audit");
+    let mut vars: Vec<(&str, &str)> = eessi_vars(&t, "2026.06")
+        .into_iter()
+        .map(|(key, value)| (key, Box::leak(value.into_boxed_str()) as &str))
+        .collect();
+    vars.push(("STUB_AUDIT_TRUNCATED_COMPONENT", "1"));
+
+    let output = eb_pipeline(
+        &t,
+        &[
+            "audit",
+            "--site",
+            &t.site.display().to_string(),
+            "--target",
+            "cpu",
+            "--cve",
+            "CVE-2026-0001",
+            "--out-dir",
+            &out_dir.display().to_string(),
+        ],
+        &vars,
+    );
+
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("component-reach.json")
+            && stderr(&output).contains("wrote invalid JSON"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]
