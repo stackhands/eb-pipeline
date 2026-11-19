@@ -2,10 +2,32 @@
 
 use crate::exit::Fail;
 use std::fs::OpenOptions;
-use std::io::Write;
-use std::os::unix::fs::MetadataExt;
-use std::os::unix::fs::PermissionsExt;
+use std::io::{Read, Write};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+
+/// Open a regular input file without waiting on a special file.
+pub fn open_regular_file(path: &Path) -> std::io::Result<std::fs::File> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ));
+    }
+    Ok(file)
+}
+
+/// Read a regular input file as UTF-8 without waiting on a special file.
+pub fn read_text_file(path: &Path) -> std::io::Result<String> {
+    let mut file = open_regular_file(path)?;
+    let mut text = String::new();
+    file.read_to_string(&mut text)?;
+    Ok(text)
+}
 
 /// Write all bytes to standard output, treating a closed pipeline consumer as
 /// successful completion.
@@ -362,6 +384,44 @@ pub fn package_of(easyconfig: &str) -> (String, Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    #[test]
+    fn regular_text_reader_rejects_hostile_inputs_promptly() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let fifo = dir.path().join("input.fifo");
+        let raw = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+        let (send, receive) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            send.send(read_text_file(&fifo)).unwrap();
+        });
+        let error = receive
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("FIFO reader blocked")
+            .unwrap_err();
+        reader.join().unwrap();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+
+        let error = read_text_file(dir.path()).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+
+        let dangling = dir.path().join("dangling");
+        std::os::unix::fs::symlink("gone", &dangling).unwrap();
+        let error = read_text_file(&dangling).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+
+        let invalid = dir.path().join("invalid");
+        std::fs::write(&invalid, [0xff]).unwrap();
+        let error = read_text_file(&invalid).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+
+        let bom = dir.path().join("bom");
+        std::fs::write(&bom, "\u{feff}text").unwrap();
+        assert_eq!(read_text_file(&bom).unwrap(), "\u{feff}text");
+    }
 
     #[test]
     fn atomic_write_replaces_only_after_the_new_file_is_complete() {
