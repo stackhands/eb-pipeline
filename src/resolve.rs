@@ -493,6 +493,9 @@ impl<'a> Scope<'a> {
             }
             if let Some(a) = &self.target.accel_target {
                 put(&es.accel_override_var, a.clone());
+                if !a.is_empty() {
+                    put("EESSI_ACCELERATOR_INSTALL", "1".into());
+                }
             }
             // The same prefix EasyBuild installs into. An explicit
             // `site_prefix` wins; otherwise this is `filesystems.install_root`,
@@ -797,6 +800,24 @@ Foo = "2"
         assert_eq!(
             scope.route_dirs("build"),
             [format!("{}/build", scope.log_dir())]
+        );
+    }
+
+    #[test]
+    fn accelerator_targets_enable_eessi_accelerator_installation() {
+        let site = crate::site::parse(include_str!("../templates/eessi-site.toml")).unwrap();
+        let scope = Scope {
+            site: &site,
+            site_file: None,
+            target: site.target("gpu-a").unwrap(),
+            build_type: None,
+            run_id: "run".into(),
+            log_stamp: "20261119_124800".into(),
+        };
+
+        assert_eq!(
+            scope.env().get("EESSI_ACCELERATOR_INSTALL"),
+            Some(&"1".to_string())
         );
     }
 
