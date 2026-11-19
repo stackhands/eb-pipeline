@@ -232,7 +232,7 @@ pub fn probe(p: &Planner, work: &Path) -> Result<(Probe, BTreeMap<String, String
         .collect();
     let cmd = p.plan_role_cmd("watch", inner)?;
     let log_path = work.join("eessi-probe.log");
-    let code = exec_logged(&cmd, &p.scope.env(), &log_path)?;
+    let code = exec_logged(&cmd, &p.scope.env(), &p.scope.eessi_unset_env(), &log_path)?;
     let bytes = std::fs::read(&out).unwrap_or_default();
     // The dump holds the whole environment, a webhook's URL among it, and
     // the work directory can outlive the run.
@@ -402,7 +402,7 @@ pub fn rebuild_set(
     ];
     let cmd = p.plan_role_cmd("watch", argv)?;
     let log_path = work.join(format!("{name}.log"));
-    let code = exec_logged(&cmd, &p.scope.env(), &log_path)?;
+    let code = exec_logged(&cmd, &p.scope.env(), &p.scope.eessi_unset_env(), &log_path)?;
     if code != 0 {
         return Err(Fail::new(
             exit::FAILED,
@@ -963,7 +963,7 @@ pub fn abi_baseline(p: &Planner, work: &Path, conf: &AbiDrift) -> Result<AbiBase
         ];
         let cmd = p.plan_role_cmd("watch", argv)?;
         let log_path = work.join(format!("abi-{field}.log"));
-        let code = exec_logged(&cmd, &p.scope.env(), &log_path)?;
+        let code = exec_logged(&cmd, &p.scope.env(), &p.scope.eessi_unset_env(), &log_path)?;
         if code != 0 {
             return Err(Fail::new(
                 exit::TEMPFAIL,
@@ -1160,7 +1160,7 @@ pub fn order(
     ]);
     let cmd = p.plan_role_cmd("watch", argv)?;
     let log_path = work.join("order.log");
-    let code = exec_logged(&cmd, &p.scope.env(), &log_path)?;
+    let code = exec_logged(&cmd, &p.scope.env(), &p.scope.eessi_unset_env(), &log_path)?;
     if code != 0 {
         return Err(Fail::new(
             exit::FAILED,

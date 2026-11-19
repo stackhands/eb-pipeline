@@ -897,6 +897,35 @@ fn eessi_commands_do_not_inherit_another_install_mode_or_cpu_override() {
 }
 
 #[test]
+fn eessi_commands_do_not_inherit_default_or_custom_target_overrides() {
+    let env = setup(
+        "\n[modules.eessi]\nsite_install = true\ncpu_override_var = \"SITE_CPU_OVERRIDE\"\naccel_override_var = \"SITE_ACCEL_OVERRIDE\"\n",
+    );
+    let init = format!(
+        r#"
+[ -z "${{EESSI_SOFTWARE_SUBDIR_OVERRIDE+x}}" ] || exit 17
+[ -z "${{EESSI_ACCELERATOR_TARGET_OVERRIDE+x}}" ] || exit 18
+[ -z "${{SITE_CPU_OVERRIDE+x}}" ] || exit 19
+[ -z "${{SITE_ACCEL_OVERRIDE+x}}" ] || exit 20
+{MODULE_FN}"#
+    );
+    with_modules(&env, &init, &["EESSI/2026.06"]);
+
+    let o = go(
+        &env,
+        "Foo-1.0-foss-2025a.eb\n",
+        &[
+            ("EESSI_SOFTWARE_SUBDIR_OVERRIDE", "x86_64/amd/zen4"),
+            ("EESSI_ACCELERATOR_TARGET_OVERRIDE", "accel/nvidia/cc90"),
+            ("SITE_CPU_OVERRIDE", "x86_64/amd/zen4"),
+            ("SITE_ACCEL_OVERRIDE", "accel/nvidia/cc90"),
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(calls(&env, "eb.calls").len(), 1);
+}
+
+#[test]
 fn the_module_wrapper_sources_an_init_whose_last_test_is_false() {
     let env = setup("");
     let init = format!("{MODULE_FN}[ -n \"${{EESSI_MODULE_DEBUG_INIT:-}}\" ] && echo debug\n");

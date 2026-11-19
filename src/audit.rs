@@ -183,7 +183,12 @@ fn probe_target_env(
         .collect();
     let cmd = planner.plan_role_cmd(PHASE, inner)?;
     let log_path = work.join("probe.log");
-    let code = exec_logged(&cmd, &planner.scope.env(), &log_path)?;
+    let code = exec_logged(
+        &cmd,
+        &planner.scope.env(),
+        &planner.scope.eessi_unset_env(),
+        &log_path,
+    )?;
     let bytes = std::fs::read(&out).unwrap_or_default();
     let _ = std::fs::remove_file(&out);
     if code != 0 || bytes.is_empty() {
@@ -245,7 +250,12 @@ fn run_eb_stack(planner: &Planner<'_>, tail: &[String], log_path: &Path) -> Resu
     let mut argv = vec![Tool::EbStack.bin(planner.scope.site)];
     argv.extend(tail.iter().cloned());
     let cmd = planner.plan_role_cmd(PHASE, argv)?;
-    let code = exec_logged(&cmd, &planner.scope.env(), log_path)?;
+    let code = exec_logged(
+        &cmd,
+        &planner.scope.env(),
+        &planner.scope.eessi_unset_env(),
+        log_path,
+    )?;
     if code != 0 {
         let exit_code = match code {
             exit::USAGE => exit::USAGE,
