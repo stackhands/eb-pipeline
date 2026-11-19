@@ -1,1 +1,0 @@
-Add opt-in checksum-indexed offline bundles for prefetched EasyBuild files and configured test or runtime assets, with eb-stack planner artifacts and a site-provided network-isolation wrapper for later phases.

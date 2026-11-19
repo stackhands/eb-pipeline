@@ -288,6 +288,37 @@ fn plan_refuses_empty_or_control_run_labels() {
 }
 
 #[test]
+fn run_refuses_empty_or_control_oom_nodes_before_input_loading() {
+    for node in ["   ", "8:65536\n16:131072"] {
+        let output = bin()
+            .args([
+                "run",
+                "--site",
+                "not-read.toml",
+                "--list",
+                "not-read.list",
+                "--target",
+                "cpu",
+                "--build-type",
+                "production",
+                "--oom-preflight",
+                "--node",
+                node,
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("--node must be non-empty and contain no control characters"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
+    }
+}
+
+#[test]
 fn plan_and_run_outputs_refuse_input_aliases_before_writing() {
     let dir = tempfile::tempdir().unwrap();
     let site = dir.path().join("site.toml");
@@ -480,6 +511,26 @@ fn explain_prints_toml_and_json() {
         assert_eq!(o.status.code(), Some(0));
         let t = String::from_utf8(o.stdout).unwrap();
         assert!(t.contains("EESSI_ACCELERATOR_TARGET_OVERRIDE"), "{fmt}");
+    }
+}
+
+#[test]
+fn explain_refuses_empty_or_control_build_type() {
+    for build_type in ["   ", "production\nother"] {
+        let output = bin()
+            .args(["explain", "--site"])
+            .arg(example("eessi-site.toml"))
+            .args(["--build-type", build_type])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("--build-type must be non-empty and contain no control characters"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
     }
 }
 

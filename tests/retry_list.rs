@@ -403,6 +403,160 @@ fn require_lines_keeps_a_nonempty_retry_list_successful() {
 }
 
 #[test]
+fn non_integer_exit_code_is_ignored_without_the_systemic_guard() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = dir.path().join("build.list");
+    let result = dir.path().join("result.json");
+    std::fs::write(&list, "Retry-1.0.eb\n").unwrap();
+    std::fs::write(
+        &result,
+        r#"{
+  "kind":"result",
+  "exit_code":1,
+  "lines":[{"easyconfig":"Retry-1.0.eb","status":"failed","exit_code":"oops"}]
+}"#,
+    )
+    .unwrap();
+    let o = bin()
+        .args(["--result"])
+        .arg(&result)
+        .args(["--list"])
+        .arg(&list)
+        .sync_output();
+    assert_eq!(o.status.code(), Some(0));
+    assert_eq!(o.stdout, b"Retry-1.0.eb\n");
+    assert_eq!(o.stderr, b"");
+}
+
+#[test]
+fn systemic_guard_allows_real_build_failures_even_when_the_run_exit_is_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = dir.path().join("build.list");
+    let result = dir.path().join("result.json");
+    let missing = dir.path().join("missing.log");
+    let checksum = dir.path().join("checksum.log");
+    let bin_dir = dir.path().join("bin");
+    std::fs::create_dir(&bin_dir).unwrap();
+    std::fs::write(&list, "MissingSource-1.0.eb\nBadChecksum-1.0.eb\n").unwrap();
+    // Snippets from real EESSI 2026.06 logs in /tmp/ebp-real-failures.
+    std::fs::write(
+        &missing,
+        "== FAILED: Installation ended unsuccessfully: Couldn't find file MissingSource-1.0.tar.gz\nERROR: Installation of MissingSource-1.0.eb failed: Couldn't find file MissingSource-1.0.tar.gz anywhere, and downloading it didn't work either...\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &checksum,
+        "== FAILED: Installation ended unsuccessfully: Checksum verification for /tmp/ebp-real-failures/sources/GoodPayload-1.0.tar.gz using aaaaaaaaaa failed.\nERROR: Installation of BadChecksum-1.0.eb failed: Checksum verification for /tmp/ebp-real-failures/sources/GoodPayload-1.0.tar.gz failed.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &result,
+        format!(
+            r#"{{
+  "kind":"result",
+  "exit_code":1,
+  "lines":[
+    {{"easyconfig":"MissingSource-1.0.eb","status":"failed","exit_code":1,"log":"{}"}},
+    {{"easyconfig":"BadChecksum-1.0.eb","status":"failed","exit_code":1,"log":"{}"}}
+  ]
+}}"#,
+            missing.display(),
+            checksum.display()
+        ),
+    )
+    .unwrap();
+    write_exec(
+        &bin_dir.join("eb-stack"),
+        r#"#!/bin/sh
+if [ "$2" != bot-classify ]; then
+  echo "unexpected $*" >&2
+  exit 9
+fi
+if rg -q "Checksum verification" "$4"; then
+  printf '{"jobs":[{"class":"real-failure","sub_class":"checksum"}]}\n'
+else
+  printf '{"jobs":[{"class":"real-failure","sub_class":"source"}]}\n'
+fi
+"#,
+    );
+    let path = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let o = bin()
+        .args(["--result"])
+        .arg(&result)
+        .args(["--list"])
+        .arg(&list)
+        .arg("--refuse-systemic-failure")
+        .env("PATH", path)
+        .sync_output();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(o.stdout, b"MissingSource-1.0.eb\nBadChecksum-1.0.eb\n");
+    assert_eq!(o.stderr, b"");
+}
+
+#[test]
+fn systemic_guard_refuses_shared_infrastructure_failures() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = dir.path().join("build.list");
+    let result = dir.path().join("result.json");
+    let one = dir.path().join("one.log");
+    let two = dir.path().join("two.log");
+    let bin_dir = dir.path().join("bin");
+    std::fs::create_dir(&bin_dir).unwrap();
+    std::fs::write(&list, "A.eb\nB.eb\n").unwrap();
+    std::fs::write(&one, "eb-pipeline: line 8: exec: eb: command not found\n").unwrap();
+    std::fs::write(&two, "eb-pipeline: line 8: exec: eb: command not found\n").unwrap();
+    std::fs::write(
+        &result,
+        format!(
+            r#"{{
+  "kind":"result",
+  "exit_code":1,
+  "lines":[
+    {{"easyconfig":"A.eb","status":"failed","log":"{}"}},
+    {{"easyconfig":"B.eb","status":"failed","log":"{}"}}
+  ]
+}}"#,
+            one.display(),
+            two.display()
+        ),
+    )
+    .unwrap();
+    write_exec(
+        &bin_dir.join("eb-stack"),
+        "#!/bin/sh\nprintf '{\"jobs\":[{\"class\":\"infra\",\"sub_class\":\"scheduler\"}]}\\n'\n",
+    );
+    let path = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let o = bin()
+        .args(["--result"])
+        .arg(&result)
+        .args(["--list"])
+        .arg(&list)
+        .arg("--refuse-systemic-failure")
+        .env("PATH", path)
+        .sync_output();
+    assert_eq!(o.status.code(), Some(2));
+    assert_eq!(o.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains("infrastructure class `command-path`"),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+}
+
+#[test]
 fn recorded_list_reads_the_path_from_a_result_or_summary_target() {
     let dir = tempfile::tempdir().unwrap();
     let list = dir.path().join("build list.txt");
@@ -1364,6 +1518,7 @@ fn help_names_class_and_node() {
     assert!(stdout.contains("--node"));
     assert!(stdout.contains("--drop-oom"));
     assert!(stdout.contains("--recorded-list"));
+    assert!(stdout.contains("--refuse-systemic-failure"));
     assert!(stdout.contains("does not classify"));
 }
 

@@ -306,7 +306,9 @@ fn canonical(req: &Request<'_>) -> Result<(String, Vec<u8>), Fail> {
             None => recipe_easyblock(req, path)?,
         };
         classes.entry(class).or_insert(None);
-        for name in patch_literals(text) {
+        for name in patch_literals(text)
+            .map_err(|error| Fail::new(exit::REFUSED, format!("{}: {error}", path.display())))?
+        {
             patch_names.insert(name, ());
         }
     }
@@ -524,7 +526,7 @@ fn route_receipt(req: &Request<'_>) -> Value {
 }
 
 /// A quoted literal that ends in `.patch`.
-fn patch_literals(text: &str) -> Vec<String> {
+fn patch_literals(text: &str) -> Result<Vec<String>, &'static str> {
     let mut out = Vec::new();
     for statement in python_statements(text) {
         let Some(rest) = statement.trim().strip_prefix("patches") else {
@@ -541,16 +543,16 @@ fn patch_literals(text: &str) -> Vec<String> {
         if !append {
             out.clear();
         }
-        for literal in python_string_literals(rhs) {
+        for literal in python_string_literals(rhs)? {
             if literal.ends_with(".patch") && literal != ".patch" {
                 out.push(literal);
             }
         }
     }
-    out
+    Ok(out)
 }
 
-fn python_string_literals(text: &str) -> Vec<String> {
+fn python_string_literals(text: &str) -> Result<Vec<String>, &'static str> {
     let characters: Vec<char> = text.chars().collect();
     let mut literals = Vec::new();
     let mut index = 0;
@@ -591,7 +593,7 @@ fn python_string_literals(text: &str) -> Vec<String> {
                 }
             }
             if !closed {
-                return literals;
+                return Err("unclosed quoted string in `patches`");
             }
             while index < characters.len() && characters[index].is_whitespace() {
                 index += 1;
@@ -603,7 +605,7 @@ fn python_string_literals(text: &str) -> Vec<String> {
         }
         literals.push(literal);
     }
-    literals
+    Ok(literals)
 }
 
 fn python_statements(text: &str) -> Vec<String> {
@@ -690,7 +692,7 @@ fn easyblock_literal(text: &str) -> Option<String> {
             continue;
         };
         let name = &body[..end];
-        if is_ident(name) {
+        if body[end + quote.len_utf8()..].trim().is_empty() && is_ident(name) {
             literal = Some(name.to_string());
         }
     }
@@ -761,7 +763,12 @@ fn find_easyblock(class: &str, index: &Index) -> Result<Option<ResolvedFile>, Fa
     let mut found = Vec::new();
     for paths in index.by_name.values() {
         for path in paths {
-            let text = fs::read_to_string(path).unwrap_or_default();
+            let text = fs::read_to_string(path).map_err(|e| {
+                Fail::new(
+                    exit::REFUSED,
+                    format!("cannot read {}: {e}", path.display()),
+                )
+            })?;
             if defines_class(&text, class) {
                 found.push(path.clone());
             }
@@ -931,14 +938,14 @@ impl Drop for RemoveDir {
 
 #[cfg(test)]
 mod tests {
-    use super::{easyblock_literal, patch_literals, run};
+    use super::{easyblock_literal, find_easyblock, index_files, patch_literals, run};
     use crate::exit;
 
     #[test]
     fn a_quoted_patch_and_an_easyblock_literal_are_read() {
         let text = "easyblock = 'EB_Foo'  # local\npatches = ['a.patch', \"dir/b.patch\"]\n";
         assert_eq!(easyblock_literal(text).as_deref(), Some("EB_Foo"));
-        assert_eq!(patch_literals(text), ["a.patch", "dir/b.patch"]);
+        assert_eq!(patch_literals(text).unwrap(), ["a.patch", "dir/b.patch"]);
     }
 
     #[test]
@@ -954,6 +961,15 @@ mod tests {
     }
 
     #[test]
+    fn an_easyblock_expression_is_not_a_string_literal() {
+        assert_eq!(easyblock_literal("easyblock = 'EB_Base' + '_Tool'\n"), None);
+        assert_eq!(
+            easyblock_literal("easyblock = 'ConfigureMake', 'autoconf'\n"),
+            None
+        );
+    }
+
+    #[test]
     fn only_patch_assignments_contribute_uncommented_literals() {
         let text = "\
 patches_extra = ['prefix.patch']
@@ -963,7 +979,7 @@ patches = [
     # 'comment.patch'
 ]
 ";
-        assert_eq!(patch_literals(text), ["real.patch"]);
+        assert_eq!(patch_literals(text).unwrap(), ["real.patch"]);
     }
 
     #[test]
@@ -973,19 +989,47 @@ patches = ['old.patch']
 patches = ['new.patch']
 patches += ['extra.patch']
 ";
-        assert_eq!(patch_literals(text), ["new.patch", "extra.patch"]);
+        assert_eq!(patch_literals(text).unwrap(), ["new.patch", "extra.patch"]);
     }
 
     #[test]
     fn adjacent_patch_string_literals_are_concatenated() {
         let text = "patches = ['a' '.patch', 'dir/' \"b.patch\"]\n";
-        assert_eq!(patch_literals(text), ["a.patch", "dir/b.patch"]);
+        assert_eq!(patch_literals(text).unwrap(), ["a.patch", "dir/b.patch"]);
+    }
+
+    #[test]
+    fn an_unclosed_patch_string_does_not_return_a_partial_list() {
+        let text = "patches = ['first.patch', 'second.patch\n";
+        assert_eq!(
+            patch_literals(text).unwrap_err(),
+            "unclosed quoted string in `patches`"
+        );
     }
 
     #[test]
     fn a_commented_easyblock_is_not_a_literal() {
         let text = "# easyblock = 'No'\nname = 'Foo'\n";
         assert_eq!(easyblock_literal(text), None);
+    }
+
+    #[test]
+    fn an_unreadable_easyblock_file_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("eb_foo.py");
+        std::fs::write(&path, [0xff]).unwrap();
+        let index = index_files(&[root.path().to_path_buf()], ".py").unwrap();
+        let failure = match find_easyblock("EB_Foo", &index) {
+            Err(failure) => failure,
+            Ok(_) => panic!("an unreadable easyblock was ignored"),
+        };
+        assert_eq!(failure.code, exit::REFUSED);
+        assert!(failure.msg.contains("cannot read"), "{}", failure.msg);
+        assert!(
+            failure.msg.contains(&path.display().to_string()),
+            "{}",
+            failure.msg
+        );
     }
 
     #[test]

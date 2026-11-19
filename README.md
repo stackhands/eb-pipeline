@@ -23,6 +23,18 @@ and never links them in. Nothing about a site lives in this repository: the
 templates carry placeholders only, and a test rejects any template value that
 looks site-specific.
 
+## When EasyBuild or the EESSI bot is enough
+
+You do not need eb-pipeline to build a list on one kind of node.
+`eb --easystack LIST --robot --job` hands each easyconfig to the scheduler as a job of its own, in dependency order, and `--job-backend=Slurm` names Slurm.
+
+You do not need it to build for EESSI either.
+The [EESSI build-and-deploy bot](https://github.com/EESSI/eessi-bot-software-layer) builds a pull request's easystack for each CPU target in the build container and stages the tarballs for CernVM-FS, where a publish is a transaction.
+
+eb-pipeline is for the stack a site installs itself, on a shared file system that jobs read during the build.
+There the same list builds on several node types, some lines on some of them only; scratch has an inode quota that a build can exhaust; a failed build's logs live in a directory the job loses; and a rebuild must not empty an installation in use.
+Each of those is a phase the site file turns on, and `plan` prints every command of a run before one starts.
+
 ## Documentation
 
 <https://stackhands.github.io/eb-pipeline/>, built from the Org pages in

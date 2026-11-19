@@ -50,7 +50,8 @@ arch\t'`stack arch`, with each selected target\'s `cpu_target` as `--arch`'
 cuda-cc\t'`stack cuda-cc`, with the robot trees. `eb-stack` checks its accelerator targets'
 generation\t'`stack generation` on the easystack'
 provided\t'`stack provided` on a plain build list, with `[sbom].lock` as `--baseline-lock`'
-known-failures\t'`stack known-failures`, with robot trees and each selected `cpu_target`'"
+known-failures\t'`stack known-failures`, with robot trees and each selected `cpu_target`'
+buildenv\t'`stack buildenv` on a plain build list, failing while a toolchain of the list has no `buildenv` line'"
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand check" -l easyconfigs-repo -d 'easybuild-easyconfigs checkout for `from-commit` pins' -r -F
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand check" -l easyblocks-repo -d 'easybuild-easyblocks checkout for `include-easyblocks-from-commit`' -r -F
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand check" -l easybuild-version -d 'EasyBuild release `X.Y.Z`. Overrides `eb-X.Y.Z` in the list file name' -r

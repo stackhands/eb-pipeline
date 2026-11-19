@@ -2,7 +2,9 @@
 //! module environment loads, the CVMFS revision of its repository, and an
 //! identity for each module in its module trees.
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -19,6 +21,12 @@ pub struct Probe {
     pub repository: Option<String>,
     /// The EESSI module trees, in order.
     pub modules_dirs: Vec<String>,
+    /// The loaded module names, when Lmod exported them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loaded_modules: Option<String>,
+    /// SHA-256 of Lmod's decoded module table, when it exported one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub module_table_sha256: Option<String>,
 }
 
 impl Probe {
@@ -51,8 +59,34 @@ impl Probe {
                 .or_else(|| get("EESSI_CVMFS_REPO"))
                 .map(str::to_string),
             modules_dirs,
+            loaded_modules: get("LOADEDMODULES").map(str::to_string),
+            module_table_sha256: module_table_sha256(env),
         })
     }
+}
+
+/// Lmod splits the base64 text of its module table into `_ModuleTable%03d_`
+/// pieces counted by `_ModuleTable_Sz_`, using the URL-safe alphabet.
+fn module_table_sha256(env: &BTreeMap<String, String>) -> Option<String> {
+    let encoded = match env.get("_ModuleTable_Sz_") {
+        Some(size) => {
+            let size: usize = size.parse().ok()?;
+            let mut joined = String::new();
+            for index in 1..=size {
+                joined.push_str(env.get(&format!("_ModuleTable{index:03}_"))?);
+            }
+            joined
+        }
+        None => {
+            return env
+                .get("_ModuleTable_")
+                .map(|table| format!("{:x}", Sha256::digest(table)))
+        }
+    };
+    let bytes = base64::engine::general_purpose::URL_SAFE
+        .decode(encoded)
+        .ok()?;
+    Some(format!("{:x}", Sha256::digest(bytes)))
 }
 
 /// The variables `env -0` printed.
@@ -362,18 +396,35 @@ mod tests {
 
     #[test]
     fn the_environment_names_the_version_and_the_module_trees() {
-        let env = parse_env0(b"EESSI_VERSION=2023.06\0EESSI_SOFTWARE_SUBDIR=x86_64/generic\0EESSI_MODULEPATH=/e/modules/all\0EESSI_CVMFS_REPO=/e\0A=b=c\0");
+        let env = parse_env0(b"EESSI_VERSION=2023.06\0EESSI_SOFTWARE_SUBDIR=x86_64/generic\0EESSI_MODULEPATH=/e/modules/all\0EESSI_CVMFS_REPO=/e\0LOADEDMODULES=EESSI/2023.06:EasyBuild\0_ModuleTable_Sz_=2\0_ModuleTable001_=YWJj\0_ModuleTable002_=-_-_\0A=b=c\0");
         assert_eq!(env["A"], "b=c");
         let p = Probe::from_env(&env, None, &[]).unwrap();
         assert_eq!(p.version, "2023.06");
         assert_eq!(p.modules_dirs, ["/e/modules/all"]);
         assert_eq!(p.repository.as_deref(), Some("/e"));
+        let recorded = serde_json::to_value(&p).unwrap();
+        assert_eq!(recorded["loaded_modules"], "EESSI/2023.06:EasyBuild");
+        assert_eq!(
+            recorded["module_table_sha256"],
+            format!("{:x}", Sha256::digest(b"abc\xfb\xff\xbf"))
+        );
         let fixture = Probe::from_env(&env, Some("/f"), &["/f/all".into()]).unwrap();
         assert_eq!(fixture.modules_dirs, ["/f/all"]);
         assert_eq!(fixture.repository.as_deref(), Some("/f"));
         assert_eq!(
             Probe::from_env(&BTreeMap::new(), None, &[]).unwrap_err(),
             "EESSI_VERSION is unset"
+        );
+    }
+
+    #[test]
+    fn a_missing_module_table_chunk_is_not_recorded() {
+        let env = parse_env0(b"EESSI_VERSION=2023.06\0EESSI_SOFTWARE_SUBDIR=x86_64/generic\0EESSI_MODULEPATH=/e/modules/all\0_ModuleTable_Sz_=2\0_ModuleTable001_=YWJj\0");
+        assert_eq!(
+            Probe::from_env(&env, None, &[])
+                .unwrap()
+                .module_table_sha256,
+            None
         );
     }
 

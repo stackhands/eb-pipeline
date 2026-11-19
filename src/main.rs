@@ -468,6 +468,10 @@ fn cmd_check(
     stack_checks: &[stack_checks::StackCheck],
     opt_in: OptInChecks<'_>,
 ) -> Result<i32, Fail> {
+    validate_option_values(&[("--generation", opt_in.gap.generation.as_deref())])?;
+    if let Some((_, opts)) = &opt_in.from_commit {
+        validate_option_values(&[("--easybuild-version", opts.easybuild_version)])?;
+    }
     let site = match site_path {
         Some(path) => Some(load_valid(path, lists_dir)?),
         None if opt_in.from_commit.is_none() || !stack_checks.is_empty() => {
@@ -541,6 +545,7 @@ fn cmd_explain(
     build_type: Option<&str>,
     format: Format,
 ) -> Result<i32, Fail> {
+    validate_option_values(&[("--build-type", build_type)])?;
     let s = load_valid(site_path, None)?;
     let v = explain(&s, site_file(site_path).as_deref(), target, build_type)?;
     match format {
@@ -631,6 +636,9 @@ fn cmd_audit(
     strict: bool,
     out_dir: &Path,
 ) -> Result<i32, Fail> {
+    for cve in cves {
+        validate_option_values(&[("--cve", Some(cve))])?;
+    }
     let s = load_valid(site_path, None)?;
     let target = s.target(target_name)?;
     audit::run(audit::Args {
@@ -839,6 +847,7 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
     validate_option_values(&[
         ("--build-type", Some(c.build_type.as_str())),
         ("--run-id", c.run_id.as_deref()),
+        ("--node", oom_node),
     ])?;
     let source_inputs = [
         ("--site", Some(c.site.as_path())),

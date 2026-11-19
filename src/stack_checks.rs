@@ -26,6 +26,8 @@ pub enum StackCheck {
     Provided,
     /// `stack known-failures`, with robot trees and each selected `cpu_target`.
     KnownFailures,
+    /// `stack buildenv` on a plain build list, failing while a toolchain of the list has no `buildenv` line.
+    Buildenv,
 }
 
 impl StackCheck {
@@ -37,7 +39,13 @@ impl StackCheck {
             Self::Generation => "generation",
             Self::Provided => "provided",
             Self::KnownFailures => "known-failures",
+            Self::Buildenv => "buildenv",
         }
+    }
+
+    /// Whether the check reads a plain build list. The others read an easystack.
+    fn reads_plain_list(self) -> bool {
+        matches!(self, Self::Provided | Self::Buildenv)
     }
 }
 
@@ -82,13 +90,19 @@ fn source_paths(site: &Site, targets: &[&Target]) -> Vec<String> {
 }
 
 fn validate_list_path(list: &Path, checks: &[StackCheck]) -> Result<(), Fail> {
-    let provided = checks.contains(&StackCheck::Provided);
-    if provided && checks.iter().any(|check| *check != StackCheck::Provided) {
-        return Err(Fail::usage(
-            "--stack-checks cannot combine provided with easystack checks because they require different input formats",
-        ));
+    let mut plain: Vec<&str> = Vec::new();
+    for check in checks.iter().filter(|check| check.reads_plain_list()) {
+        if !plain.contains(&check.subcommand()) {
+            plain.push(check.subcommand());
+        }
     }
-    if provided {
+    if !plain.is_empty() && checks.iter().any(|check| !check.reads_plain_list()) {
+        return Err(Fail::usage(format!(
+            "--stack-checks cannot combine {} with easystack checks because they require different input formats",
+            plain.join(" and ")
+        )));
+    }
+    if !plain.is_empty() {
         return Ok(());
     }
     match list
@@ -149,6 +163,9 @@ pub fn argv(site: &Site, list: &Path, targets: &[&Target], check: StackCheck) ->
             argv.extend(["--easystack".into(), list]);
             push_pairs(&mut argv, "--easyconfigs", easyconfig_paths(site));
             argv.push("--strict".into());
+        }
+        StackCheck::Buildenv => {
+            argv.extend(["--build-list".into(), list, "--strict".into()]);
         }
     }
     argv

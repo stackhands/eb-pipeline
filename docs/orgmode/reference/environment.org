@@ -75,6 +75,8 @@ With =[watch]= on, a run that records its installs, and =watch=, run =env -0= in
 | =EESSI_CVMFS_REPO=       | The repository whose revision is read, unless =watch.repository= is set.                                         |
 | =EESSI_MODULEPATH=       | The EESSI module tree, unless =watch.modules_dirs= is set.                                                       |
 | =EESSI_MODULEPATH_ACCEL= | The EESSI module tree for the accelerator, after the other, unless =watch.modules_dirs= is set.                  |
+| =LOADEDMODULES=          | The loaded module names, recorded in the watch plan's =eessi= object.                                             |
+| =_ModuleTable_Sz_= and =_ModuleTable001_= onward | The Lmod module table, whose decoded bytes are recorded as =module_table_sha256= in the watch plan's =eessi= object. |
 | =EBROOTEASYBUILD=        | For =watch=, the install of EasyBuild, whose =easybuild/easyconfigs= tree is the default of =watch.easyconfigs=. |
 
 Without =watch.modules_dirs=, =EESSI_MODULEPATH= or =EESSI_MODULEPATH_ACCEL= is required.
@@ -117,12 +119,18 @@ The keys of =[scheduler.env]= come first, and a variable of the table below with
 | =EESSI_SITE_BOOTSTRAP_MODULEPATH=                                                                   | =modules.eessi.bootstrap_modulepath=                                                                    | =[modules.eessi]= is on and it is set                |
 | the one named by =modules.eessi.cpu_override_var=, =EESSI_SOFTWARE_SUBDIR_OVERRIDE= by default      | the target's =cpu_target=                                                                               | =[modules.eessi]= is on and =cpu_target= is set      |
 | the one named by =modules.eessi.accel_override_var=, =EESSI_ACCELERATOR_TARGET_OVERRIDE= by default | the target's =accel_target=                                                                             | =[modules.eessi]= is on and =accel_target= is set    |
+| =EESSI_ACCELERATOR_INSTALL=                                                                         | =1=                                                                                                     | =[modules.eessi]= is on and =accel_target= is nonempty |
 | =EESSI_SITE_SOFTWARE_PREFIX=                                                                        | the target's =site_prefix=, else =filesystems.install_root=                                             | =[modules.eessi]= is on                              |
 
 =EB_PIPELINE_SITE=, =EB_PIPELINE_TARGET=, =EB_PIPELINE_BUILD_TYPE=, =EB_PIPELINE_RUN_ID= and =EB_PIPELINE_LOG_STAMP= are also the variables of the options above, so a command that runs =eb-pipeline= without those options gets the site file, target, build type, run id and log stamp of the run.
 =eb-pipeline= does not read =EB_PIPELINE_SITE_NAME=; =EB_PIPELINE__SITE__NAME=, with two underscores, is the variable that sets =name= in the site file.
 
 =[modules.eessi]= is on when the site file has the table and its =enabled= is not =false=.
+For an EESSI command, =eb-pipeline= removes inherited EESSI installation-mode
+variables and target overrides before setting the values in this table. An
+unset =cpu_target= or =accel_target= therefore uses EESSI detection instead
+of a value left by the calling shell. This clears the default EESSI override
+names and a custom =cpu_override_var= or =accel_override_var=.
 =[licences]= is on when its =enabled= and =enforce= are not =false=.
 =EESSI= stands for the European Environment for Scientific Software Installations.
 
