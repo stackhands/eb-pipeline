@@ -154,6 +154,24 @@ fn plan_builds_declared_recipes_and_records_the_manifest_digest() {
 }
 
 #[test]
+fn truncated_package_plan_reports_the_producer_and_path() {
+    let fixture = fixture("pypi", "demo", "demo-1.0-GCCcore-15.2.0.eb");
+    let manifest = fixture.bundle.join("package.plan.json");
+    std::fs::write(&manifest, "{").unwrap();
+
+    let output = command(&fixture, "plan").sync_output();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        format!(
+            "ERROR [main] -: eb-stack package plan wrote invalid JSON to {}: EOF while parsing an object at line 1 column 1\n",
+            manifest.display()
+        )
+    );
+}
+
+#[test]
 fn verification_is_opt_in_and_runs_pip_check_with_the_product_module() {
     let fixture = fixture("pypi", "demo", "demo-1.0-GCCcore-15.2.0.eb");
     let result = fixture.root.path().join("result.json");
