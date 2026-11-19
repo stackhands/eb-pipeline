@@ -1580,10 +1580,7 @@ fn cmd_verify(
     let Some(conf) = s.attest_on() else {
         return Err(Fail::usage("verify needs [attest] enabled = true"));
     };
-    let text = std::fs::read_to_string(from)
-        .map_err(|e| Fail::usage(format!("cannot read {}: {e}", from.display())))?;
-    let doc: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| Fail::usage(format!("{} is not JSON: {e}", from.display())))?;
+    let (_, doc) = exit::read_json_output(from, "eb-pipeline plan", exit::USAGE)?;
     let stored = match doc.get("input_attestation") {
         Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
             Fail::usage(format!(
