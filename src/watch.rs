@@ -418,8 +418,7 @@ pub fn rebuild_set(
 
 fn read_rows(path: &Path) -> Result<Vec<Row>, Fail> {
     let bad = |why: String| Fail::new(exit::FAILED, format!("{}: {why}", path.display()));
-    let text = std::fs::read_to_string(path).map_err(|e| bad(e.to_string()))?;
-    let mut v: serde_json::Value = serde_json::from_str(&text).map_err(|e| bad(e.to_string()))?;
+    let (_, mut v) = exit::read_json_output(path, "eb-stack rebuild-set", exit::FAILED)?;
     let schema = v["schema_version"].as_u64();
     if schema != Some(REBUILD_SET_SCHEMA) {
         return Err(bad(format!(
