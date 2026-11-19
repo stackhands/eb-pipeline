@@ -541,6 +541,7 @@ fn cmd_explain(
     build_type: Option<&str>,
     format: Format,
 ) -> Result<i32, Fail> {
+    validate_option_values(&[("--build-type", build_type)])?;
     let s = load_valid(site_path, None)?;
     let v = explain(&s, site_file(site_path).as_deref(), target, build_type)?;
     match format {
