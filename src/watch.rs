@@ -13,8 +13,10 @@ use crate::schema::{AbiDrift, Site, Watch};
 use crate::tools::{self, Tool};
 use crate::util::{cmp_version, list_word, parse_version, ListLine};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// The `schema_version` of the state file.
@@ -38,6 +40,9 @@ pub struct State {
     /// against, when `[watch.abi_drift]` is enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub abi_baseline: Option<AbiBaseline>,
+    /// The site file and easyconfig trees that supplied this record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inputs: Option<Inputs>,
 }
 
 /// The host ABI fields a watch run measured.
@@ -45,6 +50,27 @@ pub struct State {
 pub struct AbiBaseline {
     /// Field name to measured value.
     pub fields: BTreeMap<String, String>,
+}
+
+/// A content-addressed input to the watch record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Input {
+    /// Absolute path of the file or tree.
+    pub path: String,
+    /// Total bytes of regular files in the input.
+    pub size: u64,
+    /// SHA-256 of the input's content.
+    pub sha256: String,
+}
+
+/// Inputs whose content determined the watch record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Inputs {
+    /// The site file passed to eb-pipeline.
+    pub site_file: Input,
+    /// The configured easyconfig trees, in site-file order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub easyconfig_trees: Vec<Input>,
 }
 
 /// One local install and the EESSI it was built against.
@@ -103,6 +129,7 @@ impl State {
             target: target.into(),
             installs: BTreeMap::new(),
             abi_baseline: None,
+            inputs: None,
         }
     }
 }
@@ -168,6 +195,163 @@ pub fn update(dir: &str, target: &str, f: impl FnOnce(&mut State)) -> Result<Sta
 /// `<modules_root>/all`, the target's module tree.
 pub fn local_modules_dir(p: &Planner) -> String {
     format!("{}/all", p.scope.modules_root().trim_end_matches('/'))
+}
+
+fn unreadable(path: &Path, error: impl std::fmt::Display) -> Fail {
+    Fail::new(
+        exit::FAILED,
+        format!("cannot read {}: {error}", path.display()),
+    )
+}
+
+fn modified(path: &Path) -> Result<std::time::SystemTime, Fail> {
+    std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .map_err(|error| {
+            Fail::new(
+                exit::FAILED,
+                format!("cannot stat {}: {error}", path.display()),
+            )
+        })
+}
+
+/// Hash the content of one file in blocks, after its name and length.
+fn file_content(path: &Path, name: &str, hash: &mut Sha256, size: &mut u64) -> Result<(), Fail> {
+    let mut file = crate::util::open_regular_file(path).map_err(|error| unreadable(path, error))?;
+    let length = file
+        .metadata()
+        .map_err(|error| unreadable(path, error))?
+        .len();
+    hash.update(b"file\0");
+    hash.update(name.as_bytes());
+    hash.update(b"\0");
+    hash.update(length.to_le_bytes());
+    let mut block = [0u8; 65536];
+    let mut seen = 0u64;
+    loop {
+        let n = file
+            .read(&mut block)
+            .map_err(|error| unreadable(path, error))?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&block[..n]);
+        seen += n as u64;
+    }
+    if seen != length {
+        return Err(Fail::new(
+            exit::FAILED,
+            format!("{} changed while it was read", path.display()),
+        ));
+    }
+    *size += length;
+    Ok(())
+}
+
+fn tree_content(path: &Path, hash: &mut Sha256, size: &mut u64) -> Result<(), Fail> {
+    let mut entries: Vec<_> = std::fs::read_dir(path)
+        .map_err(|error| unreadable(path, error))?
+        .collect::<Result<_, _>>()
+        .map_err(|error| unreadable(path, error))?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let kind = entry
+            .file_type()
+            .map_err(|error| unreadable(&path, error))?;
+        if kind.is_dir() {
+            hash.update(b"directory\0");
+            hash.update(name.as_bytes());
+            hash.update(b"\0");
+            tree_content(&path, hash, size)?;
+        } else if kind.is_symlink() {
+            let target = std::fs::metadata(&path).map_err(|error| unreadable(&path, error))?;
+            if target.is_dir() {
+                let link = std::fs::read_link(&path).map_err(|error| unreadable(&path, error))?;
+                hash.update(b"link\0");
+                hash.update(name.as_bytes());
+                hash.update(b"\0");
+                hash.update(link.to_string_lossy().as_bytes());
+                hash.update(b"\0");
+            } else {
+                file_content(&path, &name, hash, size)?;
+            }
+        } else if kind.is_file() {
+            file_content(&path, &name, hash, size)?;
+        } else {
+            return Err(Fail::new(
+                exit::FAILED,
+                format!(
+                    "{} is neither a file, a directory nor a link",
+                    path.display()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Content identity of a file or easyconfig tree, named by its canonical
+/// path as `watch` names module trees.
+///
+/// Files are read in blocks, so the memory used does not grow with the
+/// input. A modification time that moves while the input is read means a
+/// concurrent writer, so the read is repeated, three times at most. The
+/// modification time is not stored or used to decide identity: the SHA-256
+/// is the decision. A missing or unreadable input is an error.
+pub fn input(path: &Path) -> Result<Input, Fail> {
+    let path = std::fs::canonicalize(path).map_err(|error| {
+        Fail::new(
+            exit::FAILED,
+            format!("cannot resolve {}: {error}", path.display()),
+        )
+    })?;
+    for _ in 0..3 {
+        let before = modified(&path)?;
+        let mut hash = Sha256::new();
+        let mut size = 0;
+        if path.is_dir() {
+            hash.update(b"tree\0");
+            tree_content(&path, &mut hash, &mut size)?;
+        } else {
+            file_content(&path, "", &mut hash, &mut size)?;
+        }
+        if modified(&path)? == before {
+            return Ok(Input {
+                path: path.display().to_string(),
+                size,
+                sha256: format!("{:x}", hash.finalize()),
+            });
+        }
+    }
+    Err(Fail::new(
+        exit::FAILED,
+        format!("{} kept changing while it was read", path.display()),
+    ))
+}
+
+/// The site file and configured easyconfig trees that a record uses.
+pub fn inputs(planner: &Planner) -> Result<Inputs, Fail> {
+    let site_file = planner.scope.site_file.as_deref().ok_or_else(|| {
+        Fail::new(
+            exit::FAILED,
+            "cannot identify the site file of the watch record",
+        )
+    })?;
+    let easyconfig_trees = planner
+        .scope
+        .site
+        .watch_on()
+        .expect("[watch] is on")
+        .easyconfigs
+        .iter()
+        .map(|tree| input(Path::new(tree)))
+        .collect::<Result<_, _>>()?;
+    Ok(Inputs {
+        site_file: input(Path::new(site_file))?,
+        easyconfig_trees,
+    })
 }
 
 /// `<scratch>/eb-pipeline-watch/<target>/<log stamp>/<what>`, emptied.
@@ -494,6 +678,7 @@ pub fn record(
     installs: &[ToRecord],
     replace: bool,
 ) -> Result<Vec<String>, Fail> {
+    let inputs = inputs(p)?;
     let eessi = eessi::scan(&probe.modules_dirs);
     let local = eessi::scan(&[local_modules_dir(p)]);
     let u = stage(work, &eessi, &local)?;
@@ -528,6 +713,7 @@ pub fn record(
     let names: Vec<String> = entries.iter().map(|(m, _)| m.clone()).collect();
     let dir = p.scope.watch_state_dir().expect("[watch] is on");
     update(&dir, &p.scope.target.name, |s| {
+        s.inputs = Some(inputs);
         if replace {
             s.installs.clear();
         }
@@ -1388,6 +1574,7 @@ pub fn settle(
         None => Vec::new(),
     };
     let mut recorded = Vec::new();
+    let inputs = inputs(p)?;
     if !rebuilt.is_empty() {
         let work = work_dir(p, "record")?;
         recorded = record(p, &work, probe, revision, &rebuilt, false)?;
@@ -1395,6 +1582,7 @@ pub fn settle(
     }
     let local = vec![local_modules_dir(p)];
     update(&dir, target, |s| {
+        s.inputs = Some(inputs);
         if let Some(a) = abi {
             s.abi_baseline = Some(a.clone());
         }
@@ -1606,6 +1794,38 @@ mod tests {
         };
 
         assert!(!unchanged_at(&state, &probe, Some(42)));
+    }
+
+    #[test]
+    fn input_digest_uses_content_not_size_or_mtime() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("input");
+        std::fs::write(&path, "one\n").unwrap();
+        let first = input(&path).unwrap();
+        let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::fs::write(&path, "two\n").unwrap();
+        File::open(&path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(mtime))
+            .unwrap();
+        let second = input(&path).unwrap();
+        assert_eq!(first.path, second.path);
+        assert_eq!(first.size, second.size);
+        assert_ne!(first.sha256, second.sha256);
+    }
+
+    #[test]
+    fn a_missing_input_is_an_error_and_a_tree_is_hashed_by_content() {
+        let d = tempfile::tempdir().unwrap();
+        let gone = input(&d.path().join("gone")).unwrap_err();
+        assert!(gone.msg.contains("cannot resolve"), "{}", gone.msg);
+        std::fs::create_dir(d.path().join("tree")).unwrap();
+        std::fs::write(d.path().join("tree/a.eb"), "one\n").unwrap();
+        let before = input(&d.path().join("tree")).unwrap();
+        std::fs::write(d.path().join("tree/a.eb"), "two\n").unwrap();
+        let after = input(&d.path().join("tree")).unwrap();
+        assert_eq!(before.size, after.size);
+        assert_ne!(before.sha256, after.sha256);
     }
 
     #[test]
