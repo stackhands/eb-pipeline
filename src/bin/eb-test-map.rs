@@ -11,7 +11,6 @@
 use eb_pipeline::util;
 use std::collections::BTreeSet;
 use std::env;
-use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -324,7 +323,8 @@ fn package_names_from_result(path: &str, include_resumed: bool) -> Result<Vec<St
 }
 
 fn easyconfigs_from_result(path: &str, include_resumed: bool) -> Result<Vec<String>, String> {
-    let text = fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+    let text =
+        util::read_text_file(Path::new(path)).map_err(|e| format!("cannot read {path}: {e}"))?;
     let value: Value =
         serde_json::from_str(&text).map_err(|e| format!("cannot parse {path}: {e}"))?;
     let obj = object(&value, "result")?;
@@ -542,6 +542,25 @@ mod tests {
         let error = receive
             .recv_timeout(std::time::Duration::from_secs(1))
             .expect("list reader blocked")
+            .unwrap_err();
+        assert!(error.contains("not a regular file"), "{error}");
+        reader.join().unwrap();
+    }
+
+    #[test]
+    fn result_reader_refuses_a_fifo_promptly() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("result.json");
+        let raw = CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+        let shown = path.display().to_string();
+        let (send, receive) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            send.send(easyconfigs_from_result(&shown, false)).unwrap();
+        });
+        let error = receive
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("result reader blocked")
             .unwrap_err();
         assert!(error.contains("not a regular file"), "{error}");
         reader.join().unwrap();
