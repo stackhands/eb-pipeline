@@ -82,7 +82,11 @@ case "$cmd" in
   rebuild-set)
     rows=$(awk -F'\t' 'NR == FNR { c[$1] = 1; next }
       ($2 in c) { printf "%s{\"changed\":\"%s\",\"dependent\":\"%s\",\"class\":\"%s\",\"edge_kind\":\"%s\",\"reason\":\"stub\"}", (n++ ? "," : ""), $2, $1, $3, $4 }' "$changed" "$D/deps.tsv")
-    printf '{"schema_version":5,"rows":[%s]}\n' "$rows" > "$out/rebuild-set.json";;
+    if [ -n "${STUB_REBUILD_SET_JSON+x}" ]; then
+      printf '%s' "$STUB_REBUILD_SET_JSON" > "$out/rebuild-set.json"
+    else
+      printf '{"schema_version":5,"rows":[%s]}\n' "$rows" > "$out/rebuild-set.json"
+    fi;;
   stack-sbom)
     printf '%s\n' '{"bomFormat":"CycloneDX","specVersion":"1.5"}' > "$outfile";;
   stack-shard)
