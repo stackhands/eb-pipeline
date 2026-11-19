@@ -1,1 +1,0 @@
-=eb-pipeline run --metrics-file= and =eb-cvmfs --metrics-file= atomically publish their final Prometheus metrics for a node exporter textfile collector while preserving an existing file's permission bits. Pipeline metrics remain independent of =--result= and refuse its destination; CVMFS metrics preserve the last successful publish and serialize invocations that share a file.

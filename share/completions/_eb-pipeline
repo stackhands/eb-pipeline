@@ -39,7 +39,8 @@ arch\:"\`stack arch\`, with each selected target'\''s \`cpu_target\` as \`--arch
 cuda-cc\:"\`stack cuda-cc\`, with the robot trees. \`eb-stack\` checks its accelerator targets"
 generation\:"\`stack generation\` on the easystack"
 provided\:"\`stack provided\` on a plain build list, with \`\[sbom\].lock\` as \`--baseline-lock\`"
-known-failures\:"\`stack known-failures\`, with robot trees and each selected \`cpu_target\`"))' \
+known-failures\:"\`stack known-failures\`, with robot trees and each selected \`cpu_target\`"
+buildenv\:"\`stack buildenv\` on a plain build list, failing while a toolchain of the list has no \`buildenv\` line"))' \
 '--easyconfigs-repo=[easybuild-easyconfigs checkout for \`from-commit\` pins]:EASYCONFIGS_REPO:_files' \
 '--easyblocks-repo=[easybuild-easyblocks checkout for \`include-easyblocks-from-commit\`]:EASYBLOCKS_REPO:_files' \
 '--easybuild-version=[EasyBuild release \`X.Y.Z\`. Overrides \`eb-X.Y.Z\` in the list file name]:EASYBUILD_VERSION:_default' \

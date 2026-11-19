@@ -1,1 +1,0 @@
-Add an opt-in `[watch.abi_drift]` table that lets `watch` run host ABI probe commands, map changed fields to provider easyconfigs, and feed that provider set into `eb-stack rebuild-set` for selective rebuild planning.

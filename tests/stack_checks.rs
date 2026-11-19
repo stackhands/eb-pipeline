@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{code, eb_pipeline, setup, stderr};
+use common::{code, eb_pipeline, setup, stderr, write_exec};
 
 fn configured() -> common::T {
     let t = setup(
@@ -225,6 +225,144 @@ fn provided_cannot_share_an_input_with_easystack_checks() {
     assert!(t.calls("ebstack").is_empty());
     assert!(
         stderr(&output).contains("cannot combine provided with easystack checks"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn check_from_commit_refuses_invalid_json_from_a_successful_eb_stack() {
+    let t = setup("");
+    write_exec(
+        &t.stubs.join("eb-stack"),
+        "#!/bin/sh\necho \"$*\" >> \"$STUB_DIR/ebstack.calls\"\nprintf '{'\n",
+    );
+    let list = t.root().join("stack.yml");
+    std::fs::write(&list, "easyconfigs: []\n").unwrap();
+    let list = list.display().to_string();
+
+    let output = eb_pipeline(&t, &["check", "--list", &list, "--check-from-commit"], &[]);
+
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("eb-stack stack from-commit wrote invalid JSON"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(
+        t.calls("ebstack"),
+        format!("stack from-commit --easystack {list} --json\n")
+    );
+}
+
+#[test]
+fn shadow_refuses_invalid_json_from_a_successful_eb_stack() {
+    let t = setup(
+        r#"
+[shards]
+enabled = false
+easyconfigs = ["/recipes/local"]
+installed_modules_dirs = ["/base/cpu"]
+"#,
+    );
+    write_exec(
+        &t.stubs.join("eb-stack"),
+        r#"#!/bin/sh
+echo "$*" >> "$STUB_DIR/gap.calls"
+case "$1 $2" in
+  "stack gap")
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "--out-dir" ]; then out=$2; shift; fi
+      shift
+    done
+    mkdir -p "$out"
+    exit 0;;
+  "stack shadow")
+    printf '{'
+    exit 0;;
+esac
+exit 2
+"#,
+    );
+    let out_dir = t.root().join("gap-report");
+    let output = eb_pipeline(
+        &t,
+        &[
+            "check",
+            "--site",
+            &t.site.display().to_string(),
+            "--gap-out",
+            &out_dir.display().to_string(),
+            "--generation",
+            "2026.1",
+            "--shadow",
+        ],
+        &[],
+    );
+
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("eb-stack stack shadow wrote invalid JSON"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!out_dir.join("shadow.json").exists());
+    assert!(t
+        .calls("gap")
+        .contains("stack shadow --easyconfigs /recipes/local --base /base/cpu --json\n"));
+}
+
+#[test]
+fn plain_list_checks_run_together_on_one_build_list() {
+    let t = configured();
+    let list = t.root().join("build.list");
+    std::fs::write(&list, "Pkg-1.0-foss-2026.1.eb\n").unwrap();
+    let list = list.display().to_string();
+    let out = eb_pipeline(
+        &t,
+        &[
+            "check",
+            "--site",
+            &t.site.display().to_string(),
+            "--list",
+            &list,
+            "--stack-checks",
+            "provided,buildenv",
+        ],
+        &[],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let expected = [
+        format!("stack provided --build-list {list} --baseline-lock /locks/baseline.json --strict"),
+        format!("stack buildenv --build-list {list} --strict"),
+    ]
+    .join("\n")
+        + "\n";
+    assert_eq!(t.calls("ebstack"), expected);
+}
+
+#[test]
+fn buildenv_cannot_share_an_input_with_easystack_checks() {
+    let t = configured();
+    let list = t.root().join("stack.yml");
+    std::fs::write(&list, "easyconfigs: []\n").unwrap();
+    let output = eb_pipeline(
+        &t,
+        &[
+            "check",
+            "--site",
+            &t.site.display().to_string(),
+            "--list",
+            &list.display().to_string(),
+            "--stack-checks",
+            "generation,buildenv,provided",
+        ],
+        &[],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(t.calls("ebstack").is_empty());
+    assert!(
+        stderr(&output).contains("cannot combine buildenv and provided with easystack checks"),
         "{}",
         stderr(&output)
     );
