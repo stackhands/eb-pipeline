@@ -6,7 +6,7 @@
 
 use eb_pipeline::plan::module_rel;
 use eb_pipeline::summary::{self, Summary};
-use eb_pipeline::util;
+use eb_pipeline::{exit, util};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::env;
@@ -391,10 +391,8 @@ fn collect_result(
     out: &mut Vec<Observation>,
     seq: &mut usize,
 ) -> Result<bool, String> {
-    let text =
-        fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    let v: Value =
-        serde_json::from_str(&text).map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
+    let (_, v) =
+        exit::read_json_output(path, "eb-pipeline run", exit::USAGE).map_err(|error| error.msg)?;
     let obj = v
         .as_object()
         .ok_or_else(|| format!("{} must be a JSON object", path.display()))?;
