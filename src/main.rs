@@ -695,9 +695,15 @@ fn cmd_init(
                         Fail::new(exit::FAILED, message)
                     }
                 })?;
-            f.write_all(t.text.as_bytes()).map_err(|e| {
-                Fail::new(exit::FAILED, format!("cannot write {}: {e}", p.display()))
-            })?;
+            let written = f.write_all(t.text.as_bytes()).and_then(|()| f.sync_all());
+            drop(f);
+            if let Err(e) = written {
+                let _ = std::fs::remove_file(p);
+                return Err(Fail::new(
+                    exit::FAILED,
+                    format!("cannot write {}: {e}", p.display()),
+                ));
+            }
             log(
                 "INFO",
                 "init",
