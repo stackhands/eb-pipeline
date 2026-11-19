@@ -15,7 +15,7 @@ pub fn parse(text: &str) -> Result<Site, Fail> {
 /// Read and parse a site file, then apply the `EB_PIPELINE__*` overrides
 /// from the environment (see [`parse_with_overrides`]).
 pub fn load(path: &Path) -> Result<Site, Fail> {
-    let text = std::fs::read_to_string(path)
+    let text = crate::util::read_text_file(path)
         .map_err(|e| Fail::usage(format!("cannot read {}: {e}", path.display())))?;
     let mut vars = Vec::new();
     for (name, value) in std::env::vars_os() {
@@ -1107,7 +1107,8 @@ impl Site {
 #[cfg(test)]
 mod override_tests {
     use super::*;
-    use std::os::unix::ffi::OsStringExt;
+    use std::ffi::CString;
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
     const BASE: &str = include_str!("../templates/small-cluster.toml");
 
@@ -1127,6 +1128,24 @@ mod override_tests {
             serde_json::to_string(&a).unwrap(),
             serde_json::to_string(&b).unwrap()
         );
+    }
+
+    #[test]
+    fn site_reader_refuses_a_fifo_promptly() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("site.toml");
+        let raw = CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+        let (send, receive) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            send.send(load(&path)).unwrap();
+        });
+        let error = receive
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("site reader blocked")
+            .unwrap_err();
+        assert!(error.msg.contains("not a regular file"), "{error:?}");
+        reader.join().unwrap();
     }
 
     #[test]
