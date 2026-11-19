@@ -154,6 +154,17 @@ fn help_names_the_eb_stack_stack_subcommands() {
 }
 
 #[test]
+fn help_explains_every_eb_stack_shard_exit_mapping() {
+    let o = bin().arg("--help").output().unwrap();
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    let help = String::from_utf8_lossy(&o.stdout);
+    assert!(
+        help.contains("2 usage, any other non-zero failed"),
+        "{help}"
+    );
+}
+
+#[test]
 fn flags_fall_back_to_the_environment() {
     let o = bin()
         .arg("check")
