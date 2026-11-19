@@ -77,6 +77,41 @@ jobs:
       - name: Examples hold placeholders only
         run: cargo test --locked --test examples
 
+  real-eb-stack:
+    # The tests that read EB_STACK_REAL skip without it, and every other job
+    # runs without it. This one gives them the released eb-stack.
+    name: tests against eb-stack 0.8.0
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install eb-stack 0.8.0
+        run: |
+          set -euo pipefail
+          archive=eb_stack-x86_64-unknown-linux-musl.tar.xz
+          curl --proto '=https' --tlsv1.2 -fsSLO "https://github.com/stackhands/eb-stack/releases/download/v0.8.0/$archive"
+          printf '%s  %s\n' 0df22a1371be00294ab9e0fa50b5966dda4b39a2d9bd77c9c31cff0627208555 "$archive" | sha256sum --check -
+          tar -xJf "$archive"
+          echo "EB_STACK_REAL=$PWD/eb_stack-x86_64-unknown-linux-musl/eb-stack" >> "$GITHUB_ENV"
+      - name: The binary is the release
+        run: '"$EB_STACK_REAL" --version | grep -Fx "eb-stack 0.8.0"'
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Tests that call eb-stack
+        run: |
+          cargo test --locked \
+            --test audit \
+            --test from_commit_real \
+            --test gap_real \
+            --test oom_preflight_real \
+            --test real_eb_stack_run \
+            --test retry_list \
+            --test stack_checks_real
+
   msrv:
     name: Rust 1.90 minimum
     runs-on: ubuntu-latest
