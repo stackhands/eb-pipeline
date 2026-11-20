@@ -112,6 +112,7 @@ An attestation helper killed by a signal reports and returns =128 + signal=.
 ** When several apply
 
 A signal ends a run with 130 or 143, and a usage error with 2, whatever else happened before.
+This holds for a result file or a metrics file that cannot be written after the signal: the run reports the error and still exits 130 or 143.
 Otherwise the first of these that applies is the status of the run:
 
 1. a line or a phase failed: 1;

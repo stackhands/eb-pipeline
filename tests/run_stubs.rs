@@ -1607,6 +1607,35 @@ fn sigterm_is_forwarded_and_exit_is_143() {
 }
 
 #[test]
+fn a_result_that_cannot_be_written_does_not_replace_the_signal_exit() {
+    let env = setup("");
+    std::fs::create_dir(env.dir.path().join("result.json")).unwrap();
+    let child = driver(&env, LIST, &[("STUB_EB_SLEEP", "1")], &[]);
+    let started = env.dir.path().join("started");
+    let t0 = Instant::now();
+    while !started.exists() {
+        assert!(t0.elapsed() < Duration::from_secs(20), "stub never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // SAFETY: the pid is the driver child this test started.
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+    }
+    let out = finish(&env, child);
+    assert_eq!(out.code, 143, "{}", out.stderr);
+    assert!(out.stderr.contains("result.json"), "{}", out.stderr);
+}
+
+#[test]
+fn a_result_that_cannot_be_written_fails_a_run_that_no_signal_ended() {
+    let env = setup("");
+    std::fs::create_dir(env.dir.path().join("result.json")).unwrap();
+    let out = go(&env, LIST, &[]);
+    assert_eq!(out.code, 1, "{}", out.stderr);
+    assert!(out.stderr.contains("result.json"), "{}", out.stderr);
+}
+
+#[test]
 fn sigterm_during_source_prefetch_records_every_line() {
     let env = setup("[sources]\n");
     let mut child = driver(&env, LIST, &[("STUB_EB_SLEEP", "1")], &[]);

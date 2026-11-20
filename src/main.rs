@@ -1117,10 +1117,22 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
             }
         }
         if !output_errors.is_empty() {
-            return Err(Fail::new(exit::FAILED, output_errors.join("; ")));
+            return Err(signal_outranks(
+                res.exit_code,
+                Fail::new(exit::FAILED, output_errors.join("; ")),
+            ));
         }
     }
     Ok(res.exit_code)
+}
+
+/// A signal ends a run with 130 or 143 whatever else went wrong, an output
+/// file that could not be written included; the message is still printed.
+fn signal_outranks(run_code: i32, failure: Fail) -> Fail {
+    match run_code {
+        exit::SIGINT | exit::SIGTERM => Fail::new(run_code, failure.msg),
+        _ => failure,
+    }
 }
 
 /// Merge a target's run into its run directory's summary; a problem is a
@@ -1563,7 +1575,7 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     }
     write_summary(&s, &res, "watch", w.result, Some(to_sorted(&doc)), &[]);
     if let Some(p) = w.result {
-        write_json(&to_sorted(&res), Some(p))?;
+        write_json(&to_sorted(&res), Some(p)).map_err(|f| signal_outranks(res.exit_code, f))?;
     }
     Ok(res.exit_code)
 }
