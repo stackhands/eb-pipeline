@@ -3,7 +3,10 @@
 
 mod common;
 use common::{code, run, setup, stderr, STAMP};
+use eb_pipeline::summary::{record, TargetSummary, JSON};
 use serde_json::Value;
+use std::collections::BTreeMap;
+use std::os::unix::fs::symlink;
 
 const LIST: &str = "Foo-1.0-foss-2025a.eb\nBar-2.0-foss-2025a.eb\n";
 
@@ -191,4 +194,41 @@ fn a_summary_that_cannot_be_written_leaves_the_exit_code() {
         "{}",
         stderr(&o)
     );
+}
+
+fn target(name: &str, code: i32) -> TargetSummary {
+    TargetSummary {
+        name: name.into(),
+        command: "run".into(),
+        build_type: "production".into(),
+        run_id: "r".into(),
+        list: "/srv/list.txt".into(),
+        log_dir: format!("/srv/logs/20260101_000000/{name}"),
+        result: None,
+        started_at: "2026-01-01T00:00:00+00:00".into(),
+        ended_at: "2026-01-01T00:00:01+00:00".into(),
+        duration_seconds: 1.0,
+        exit_code: code,
+        status: "failed".into(),
+        message: None,
+        interrupted_by: None,
+        counts: BTreeMap::new(),
+        phases: vec![],
+        packages: vec![],
+        deselected: vec![],
+        watch: None,
+    }
+}
+
+#[test]
+fn summary_record_refuses_a_symbolic_link_output_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let run_dir = dir.path().join("20260101_000000");
+    std::fs::create_dir_all(&run_dir).unwrap();
+    let dangling = dir.path().join("outside-summary.json");
+    symlink(&dangling, run_dir.join(JSON)).unwrap();
+
+    let error = record("t", target("cpu", 1), &run_dir).unwrap_err();
+    assert!(error.contains("output path is a symbolic link"), "{error}");
+    assert!(run_dir.join(JSON).is_symlink());
 }
