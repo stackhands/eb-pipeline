@@ -1733,7 +1733,12 @@ fn main() {
             clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => {
                 let text = error.to_string();
                 if let Err(write_error) = util::write_stdout(text.as_bytes()) {
-                    eprintln!("ERROR [main] -: cannot write stdout: {write_error}");
+                    log(
+                        "ERROR",
+                        "main",
+                        "-",
+                        &format!("cannot write stdout: {write_error}"),
+                    );
                     std::process::exit(exit::FAILED);
                 }
                 std::process::exit(exit::OK);
