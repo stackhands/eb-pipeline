@@ -11,7 +11,7 @@ use crate::resolve::job_dir_refusal;
 use crate::run::{exec_logged, log, RunResult};
 use crate::schema::{AbiDrift, Site, Watch};
 use crate::tools::{self, Tool};
-use crate::util::{cmp_version, list_word, parse_version, ListLine};
+use crate::util::{cmp_version, list_word, parse_version, write_atomic, ListLine};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -158,10 +158,7 @@ pub fn update(dir: &str, target: &str, f: impl FnOnce(&mut State)) -> Result<Sta
         .expect("serializable")
         + "\n";
     let p = state_path(dir, target);
-    let tmp = Path::new(dir).join(format!(".{target}.json.tmp"));
-    std::fs::write(&tmp, text)
-        .and_then(|_| std::fs::rename(&tmp, &p))
-        .map_err(|e| format!("cannot write {}: {e}", p.display()))?;
+    write_atomic(&p, text.as_bytes()).map_err(|e| format!("cannot write {}: {e}", p.display()))?;
     Ok(s)
 }
 
@@ -1579,6 +1576,20 @@ mod tests {
         )
         .unwrap();
         assert!(load(&dir, "cpu").unwrap_err().contains("schema_version 2"));
+    }
+
+    #[test]
+    fn update_does_not_follow_a_preexisting_temporary_symlink() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().display().to_string();
+        let victim = d.path().join("victim.txt");
+        std::fs::write(&victim, "sentinel\n").unwrap();
+        let temporary = d.path().join(".cpu.json.tmp");
+        std::os::unix::fs::symlink(&victim, &temporary).unwrap();
+
+        update(&dir, "cpu", |_| {}).unwrap();
+
+        assert_eq!(std::fs::read_to_string(victim).unwrap(), "sentinel\n");
     }
 
     #[test]
