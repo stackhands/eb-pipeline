@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitCode, ExitStatus};
 use std::time::{Duration, Instant};
 
+use eb_pipeline::exit;
+
 const TIMEOUT_EXIT: u8 = 124;
 const MAX_TIMEOUT_SECONDS: u64 = i32::MAX as u64;
 const TERMINATION_GRACE: Duration = Duration::from_secs(1);
@@ -68,7 +70,7 @@ fn main() -> ExitCode {
                 "eb-cvmfs: cannot prepare metrics {}: {error}",
                 args.metrics_file.as_deref().unwrap().display()
             );
-            return ExitCode::from(1);
+            return ExitCode::from(exit::USAGE as u8);
         }
     };
     let mut facts = Facts::default();
