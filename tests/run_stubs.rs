@@ -2384,12 +2384,13 @@ fn a_signal_while_waiting_for_the_summary_lock_preserves_signal_exit() {
         let wchan = std::fs::read_to_string(format!("/proc/{child_pid}/wchan"));
         let stack = std::fs::read_to_string(format!("/proc/{child_pid}/stack"));
         let wchan_text = wchan.as_deref().map(str::trim).unwrap_or_default();
-        if wchan_text.contains("lock")
-            || wchan_text.contains("flock")
-            || stack
-                .as_deref()
-                .is_ok_and(|text| text.contains("lock") || text.contains("flock"))
-        {
+        let shows_lock_wait = |text: &str| {
+            text.contains("flock")
+                || text.contains("lock_inode")
+                || text.contains("locks_lock")
+                || text.contains("posix_lock")
+        };
+        if shows_lock_wait(wchan_text) || stack.as_deref().is_ok_and(shows_lock_wait) {
             return LockWaitProbe::WaitingOnLock;
         }
         let wchan_observable =
@@ -2404,11 +2405,22 @@ fn a_signal_while_waiting_for_the_summary_lock_preserves_signal_exit() {
     };
     let t0 = Instant::now();
     let mut unobservable_since = None;
+    let mut waiting_since = None;
     loop {
         match waiting_on_summary_lock() {
-            LockWaitProbe::WaitingOnLock => break,
-            LockWaitProbe::NotYet => unobservable_since = None,
+            LockWaitProbe::WaitingOnLock => {
+                let since = *waiting_since.get_or_insert_with(Instant::now);
+                if since.elapsed() >= Duration::from_millis(200) {
+                    break;
+                }
+                unobservable_since = None;
+            }
+            LockWaitProbe::NotYet => {
+                unobservable_since = None;
+                waiting_since = None;
+            }
             LockWaitProbe::Unobservable(reason) => {
+                waiting_since = None;
                 let since = *unobservable_since.get_or_insert_with(Instant::now);
                 if since.elapsed() >= Duration::from_secs(2) {
                     // SAFETY: the pid is the driver child this test started.
@@ -2441,6 +2453,24 @@ fn a_signal_while_waiting_for_the_summary_lock_preserves_signal_exit() {
     let r = o.result.unwrap();
     assert_eq!(r["interrupted_by"], "SIGTERM", "{r}");
     assert_eq!(r["exit_code"], 143, "{r}");
+    let summary_path = env.dir.path().join("logs/20260101_000000/summary.json");
+    let start = Instant::now();
+    while !summary_path.is_file() {
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "{} was not written",
+            summary_path.display()
+        );
+        std::thread::yield_now();
+    }
+    let summary: Value = serde_json::from_str(&std::fs::read_to_string(&summary_path).unwrap())
+        .unwrap_or_else(|e| panic!("{}: {e}", summary_path.display()));
+    let target = summary["targets"]
+        .as_array()
+        .and_then(|targets| targets.iter().find(|target| target["name"] == "cpu"))
+        .unwrap_or_else(|| panic!("no cpu target in {summary_path:?}"));
+    assert_eq!(target["interrupted_by"], "SIGTERM", "{target}");
+    assert_eq!(target["exit_code"], 143, "{target}");
 }
 
 /// eb-keep-logs rewrites a `.licensed-logs` from what it read before, so
