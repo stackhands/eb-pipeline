@@ -92,6 +92,55 @@ fn a_run_records_what_each_install_it_built_depends_on_in_eessi() {
 }
 
 #[test]
+fn a_record_keeps_content_digests_of_its_site_file_and_easyconfig_trees() {
+    let t = setup("[watch]\neasyconfigs = [\"@ROOT@/robot\"]\n");
+    eessi(&t);
+    let tree = t.root().join("robot");
+    std::fs::create_dir_all(tree.join("f/Foo")).unwrap();
+    let recipe = tree.join("f/Foo/Foo-1.0.eb");
+    std::fs::write(&recipe, "name = 'Foo'\n").unwrap();
+    let vars = eessi_vars(&t, "2023.06");
+
+    let o = run(
+        &t,
+        "cpu",
+        STAMP,
+        "Foo-1.0-GCCcore-13.2.0.eb\n",
+        &with(&vars),
+    );
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+
+    let inputs = &t.watch_state("cpu")["inputs"];
+    assert_eq!(
+        inputs["site_file"]["path"],
+        std::fs::canonicalize(&t.site)
+            .unwrap()
+            .display()
+            .to_string()
+    );
+    assert_eq!(
+        inputs["site_file"]["size"],
+        std::fs::metadata(&t.site).unwrap().len()
+    );
+    assert_eq!(
+        inputs["easyconfig_trees"][0]["path"],
+        std::fs::canonicalize(&tree).unwrap().display().to_string()
+    );
+    assert_eq!(
+        inputs["easyconfig_trees"][0]["size"],
+        std::fs::metadata(&recipe).unwrap().len()
+    );
+    assert_eq!(inputs["site_file"]["sha256"].as_str().unwrap().len(), 64);
+    assert_eq!(
+        inputs["easyconfig_trees"][0]["sha256"]
+            .as_str()
+            .unwrap()
+            .len(),
+        64
+    );
+}
+
+#[test]
 fn a_run_records_the_cvmfs_revision_of_the_repository_and_names_it() {
     let t = setup(WATCH);
     eessi(&t);
