@@ -8,26 +8,18 @@ mod archive_manifest;
 
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
-use std::io::{self, Write};
+use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitCode, ExitStatus};
 use std::time::{Duration, Instant};
 
-use eb_pipeline::exit;
+use eb_pipeline::{exit, util};
 
 const TIMEOUT_EXIT: u8 = 124;
 const MAX_TIMEOUT_SECONDS: u64 = i32::MAX as u64;
 const TERMINATION_GRACE: Duration = Duration::from_secs(1);
-
-fn write_stdout(bytes: &[u8]) -> Result<(), String> {
-    match io::stdout().lock().write_all(bytes) {
-        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
-        Err(e) => Err(format!("cannot write stdout: {e}")),
-        Ok(()) => Ok(()),
-    }
-}
 
 struct Args {
     check: bool,
@@ -218,11 +210,13 @@ fn parse(words: impl Iterator<Item = std::ffi::OsString>) -> Result<Args, String
         let word = eb_pipeline::util::os_to_string(word)?;
         match word.as_str() {
             "-h" | "--help" => {
-                write_stdout(include_str!("eb-cvmfs-help.txt").as_bytes())?;
+                util::write_stdout_checked(include_str!("eb-cvmfs-help.txt").as_bytes())?;
                 std::process::exit(0);
             }
             "-V" | "--version" => {
-                write_stdout(format!("eb-cvmfs {}\n", env!("CARGO_PKG_VERSION")).as_bytes())?;
+                util::write_stdout_checked(
+                    format!("eb-cvmfs {}\n", env!("CARGO_PKG_VERSION")).as_bytes(),
+                )?;
                 std::process::exit(0);
             }
             "--check" => check = true,
@@ -608,7 +602,7 @@ fn run(args: &Args, facts: &mut Facts) -> Result<u8, String> {
             "# on {failure}: {}\n",
             display_command(&["cvmfs_server", "abort", "-f", &args.repository])
         ));
-        write_stdout(plan.as_bytes())?;
+        util::write_stdout_checked(plan.as_bytes())?;
         return Ok(0);
     }
 
