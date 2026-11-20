@@ -182,7 +182,7 @@ fn read_list(path: &str) -> Result<Vec<ListLine>, String> {
         easystack::read(list_path)?
     } else {
         let list_text =
-            fs::read_to_string(list_path).map_err(|e| format!("cannot read list {path}: {e}"))?;
+            util::read_text_file(list_path).map_err(|e| format!("cannot read list {path}: {e}"))?;
         util::parse_list(&list_text).map_err(|f| f.msg)?
     };
     if lines.is_empty() {

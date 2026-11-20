@@ -10,7 +10,6 @@ use eb_pipeline::{exit, util};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::env;
-use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -340,7 +339,7 @@ fn assign_flag(
 
 fn read_existing(path: &Path) -> Result<BTreeMap<String, u64>, String> {
     let text =
-        fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        util::read_text_file(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let mut out = BTreeMap::new();
     let mut first_lines = BTreeMap::new();
     for (i, raw) in text.lines().enumerate() {

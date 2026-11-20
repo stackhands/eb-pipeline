@@ -396,7 +396,7 @@ impl MetricsGuard {
 }
 
 fn previous_publish(path: &Path, repository: &str) -> Option<f64> {
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = eb_pipeline::util::read_text_file(path).ok()?;
     let prefix = format!(
         "eb_cvmfs_last_publish_timestamp_seconds{{repository=\"{}\"}} ",
         escape_label(repository)

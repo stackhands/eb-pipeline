@@ -3,7 +3,7 @@
 use crate::exit::Fail;
 use crate::resolve::{Scope, MODULE_SHELLS};
 use crate::schema::*;
-use crate::util::{parse_version, split_args};
+use crate::util::{parse_version, read_text_file, split_args};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -15,7 +15,7 @@ pub fn parse(text: &str) -> Result<Site, Fail> {
 /// Read and parse a site file, then apply the `EB_PIPELINE__*` overrides
 /// from the environment (see [`parse_with_overrides`]).
 pub fn load(path: &Path) -> Result<Site, Fail> {
-    let text = std::fs::read_to_string(path)
+    let text = read_text_file(path)
         .map_err(|e| Fail::usage(format!("cannot read {}: {e}", path.display())))?;
     let mut vars = Vec::new();
     for (name, value) in std::env::vars_os() {
