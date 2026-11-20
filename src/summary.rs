@@ -6,6 +6,7 @@
 use crate::exit;
 use crate::plan::{module_rel, PHASES};
 use crate::run::RunResult;
+use crate::util;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -337,11 +338,7 @@ pub fn record(site: &str, entry: TargetSummary, run_dir: &Path) -> Result<Summar
 
 /// Write through a temporary file and a rename, so a reader never sees half.
 fn write_new(path: &Path, text: &str) -> Result<(), String> {
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let tmp = path.with_file_name(format!(".{name}.tmp"));
-    std::fs::write(&tmp, text)
-        .and_then(|()| std::fs::rename(&tmp, path))
-        .map_err(|e| format!("{}: {e}", path.display()))
+    util::write_atomic(path, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// Read a run directory's summary.
