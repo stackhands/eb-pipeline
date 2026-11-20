@@ -4,7 +4,7 @@ use eb_pipeline::exit::{self, Fail};
 use eb_pipeline::package_plan;
 use eb_pipeline::plan::{build_plan, read_units, Planner};
 use eb_pipeline::resolve::{explain, Scope};
-use eb_pipeline::run::{install_handlers, log, run, Options, RunResult};
+use eb_pipeline::run::{install_handlers, log, run, signal_exit, Options, RunResult};
 use eb_pipeline::{
     audit, easystack, eessi, from_commit, metrics, notify, sbom, schema, site, stack_checks,
     summary, templates, tools, util, watch,
@@ -1105,7 +1105,9 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         if let Some(before) = &before {
             watch::record_run(&planner, &lines, &res, before);
         }
+        apply_pending_signal(&mut res);
         write_summary(&s, &res, "run", result, None, &planner.offline_wrapper);
+        apply_pending_signal(&mut res);
         let value = to_sorted(&res);
         let mut output_errors = Vec::new();
         if let Some(p) = result {
@@ -1140,6 +1142,21 @@ fn signal_outranks(run_code: i32, failure: Fail) -> Fail {
         exit::SIGINT | exit::SIGTERM => Fail::new(run_code, failure.msg),
         _ => failure,
     }
+}
+
+fn apply_pending_signal(res: &mut RunResult) {
+    let Some(code) = signal_exit() else {
+        return;
+    };
+    if res.interrupted_by.is_none() {
+        let name = if code == exit::SIGINT {
+            "SIGINT"
+        } else {
+            "SIGTERM"
+        };
+        res.interrupted_by = Some(name.into());
+    }
+    res.exit_code = code;
 }
 
 /// Merge a target's run into its run directory's summary; a problem is a
