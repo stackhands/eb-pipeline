@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::CommandSyncExt;
+use common::{hold_lock, CommandSyncExt};
 use serde_json::Value;
 use std::io::Write;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -1080,32 +1080,6 @@ fn a_reservation_another_writer_rewrote_is_kept() {
             o.stderr
         );
     }
-}
-
-/// Take the admission lock in this process, as another controller would.
-fn hold_lock(path: &Path, posix: bool) -> std::fs::File {
-    use std::os::fd::AsRawFd;
-    let f = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(path)
-        .unwrap();
-    // SAFETY: the descriptor is open, and a zeroed `libc::flock` is a valid
-    // value of that plain C struct.
-    let rc = unsafe {
-        if posix {
-            let mut l: libc::flock = std::mem::zeroed();
-            l.l_type = libc::F_WRLCK as _;
-            l.l_whence = libc::SEEK_SET as _;
-            libc::fcntl(f.as_raw_fd(), libc::F_SETLK, &raw const l)
-        } else {
-            libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB)
-        }
-    };
-    assert_eq!(rc, 0, "{}", std::io::Error::last_os_error());
-    f
 }
 
 #[test]
