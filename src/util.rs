@@ -43,6 +43,29 @@ pub fn env_value(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
+/// Why a duration in seconds is invalid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DurationError {
+    /// Not finite or negative.
+    Invalid,
+    /// Larger than a consumer's explicit upper bound.
+    TooLarge,
+}
+
+/// Validate a duration value in seconds, with an optional upper bound.
+pub fn checked_duration_seconds(
+    seconds: f64,
+    max_seconds: Option<f64>,
+) -> Result<f64, DurationError> {
+    if !seconds.is_finite() || seconds < 0.0 {
+        return Err(DurationError::Invalid);
+    }
+    if max_seconds.is_some_and(|max| seconds > max) {
+        return Err(DurationError::TooLarge);
+    }
+    Ok(seconds)
+}
+
 /// The next non-empty command-line value, without consuming another long
 /// option as that value.
 pub fn separate_value(
@@ -490,6 +513,24 @@ mod tests {
             vec!["-p", "batch", "--comment", "a b", ""]
         );
         assert!(split_args("'open").is_err());
+    }
+
+    #[test]
+    fn checked_duration_seconds_rejects_invalid_and_too_large_values() {
+        assert_eq!(
+            checked_duration_seconds(f64::NAN, None),
+            Err(DurationError::Invalid)
+        );
+        assert_eq!(
+            checked_duration_seconds(-0.1, Some(10.0)),
+            Err(DurationError::Invalid)
+        );
+        assert_eq!(
+            checked_duration_seconds(11.0, Some(10.0)),
+            Err(DurationError::TooLarge)
+        );
+        assert_eq!(checked_duration_seconds(10.0, Some(10.0)), Ok(10.0));
+        assert_eq!(checked_duration_seconds(1.25, None), Ok(1.25));
     }
 
     #[test]

@@ -73,10 +73,11 @@ pub fn from_result(v: &Value) -> Result<Status, Fail> {
     let duration_seconds = obj
         .get("duration_seconds")
         .and_then(Value::as_f64)
-        .filter(|n| n.is_finite() && *n >= 0.0)
         .ok_or_else(|| {
             Fail::usage("result.duration_seconds must be a finite non-negative number")
         })?;
+    util::checked_duration_seconds(duration_seconds, None)
+        .map_err(|_| Fail::usage("result.duration_seconds must be a finite non-negative number"))?;
 
     let mut counts = BTreeMap::new();
     for name in LINE_STATUSES {

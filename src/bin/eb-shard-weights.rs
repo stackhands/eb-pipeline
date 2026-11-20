@@ -366,7 +366,7 @@ fn read_existing(path: &Path) -> Result<BTreeMap<String, u64>, String> {
                 value.trim()
             )
         })?;
-        if !secs.is_finite() || secs < 0.0 {
+        if util::checked_duration_seconds(secs, None).is_err() {
             return Err(format!(
                 "{} line {}: `{}` is not a number of seconds",
                 path.display(),
@@ -444,7 +444,7 @@ fn collect_result(
                     path.display()
                 )
             })?;
-        if !secs.is_finite() || secs < 0.0 {
+        if util::checked_duration_seconds(secs, None).is_err() {
             return Err(format!(
                 "{}: lines[{i}].duration_seconds must be a non-negative number",
                 path.display()
@@ -505,7 +505,7 @@ fn collect_summary(
                     path.display()
                 )
             })?;
-            if !secs.is_finite() || secs < 0.0 {
+            if util::checked_duration_seconds(secs, None).is_err() {
                 return Err(format!(
                     "{}: targets[{target_index}].packages[{package_index}].duration_seconds must be a non-negative number",
                     path.display()
