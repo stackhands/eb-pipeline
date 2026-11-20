@@ -2,6 +2,7 @@
 //! `eb-stack` binaries, and a fake EESSI tree, for the tests of the run
 //! summary, `watch` and what reads them. Each test file uses a part of it.
 #![allow(dead_code)]
+#![allow(clippy::disallowed_methods)]
 #[path = "exec_stub.rs"]
 mod exec_stub_shared;
 

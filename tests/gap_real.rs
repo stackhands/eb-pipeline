@@ -1,4 +1,5 @@
 //! Real `check --gap-out` run against an unmodified eb-stack binary.
+#![allow(clippy::disallowed_methods)]
 
 use std::path::Path;
 use std::process::Command;

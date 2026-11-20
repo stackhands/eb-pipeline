@@ -2,6 +2,7 @@
 //! the schema: one table per section of `schema::SECTIONS`, with a row per
 //! key in declaration order, and the type and default `eb-pipeline schema`
 //! prints.
+#![allow(clippy::disallowed_methods)]
 
 use eb_pipeline::schema::SECTIONS;
 use std::path::PathBuf;

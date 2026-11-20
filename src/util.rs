@@ -1119,6 +1119,10 @@ pub(crate) mod atomic_test_support {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the write_atomic tests seed fixture files directly before exercising atomic replacement"
+)]
 mod tests {
     use super::atomic_test_support::{
         guard as atomic_test_guard, install_identity_override, reap_safe_test_identity,

@@ -4,6 +4,7 @@
 //! A forked child keeps every descriptor open at the fork until it execs, and
 //! a `flock(2)` lock lives as long as any copy of its descriptor. The tests
 //! stand in for that fork with a child that is held between fork and exec.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 

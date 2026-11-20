@@ -2,6 +2,7 @@
 //! output of the driver before the feature. With it enabled, `plan` and
 //! `run` append a record through `eb-stack` and `rfc9162-sidecar`, and
 //! `verify` recomputes that record.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 

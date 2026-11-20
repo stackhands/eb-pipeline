@@ -1,4 +1,5 @@
 //! `eb-cvmfs` brackets one configured synchronization in a CVMFS transaction.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 

@@ -1,4 +1,5 @@
 //! Opt-in `check --gap-out` delegation to `eb-stack`.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 

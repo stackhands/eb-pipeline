@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use eb_pipeline::{plan, resolve, schema::Site, site, util};

@@ -1,4 +1,5 @@
 //! After a clean build, `eb-stack stack sbom --lock` writes CycloneDX beside the summary.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 use common::{code, run, run_extra, setup, stderr, write_exec, STAMP};

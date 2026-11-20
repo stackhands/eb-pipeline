@@ -373,6 +373,7 @@ fn family(out: &mut String, name: &str, help: &str, samples: &[String]) {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 

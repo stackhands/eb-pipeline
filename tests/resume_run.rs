@@ -1,4 +1,5 @@
 //! `run --resume-result` against stub `eb` and `eb-stack` programs.
+#![allow(clippy::disallowed_methods)]
 
 #[path = "common/exec_stub.rs"]
 mod exec_stub;

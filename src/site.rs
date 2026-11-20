@@ -1136,6 +1136,7 @@ impl Site {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod override_tests {
     use super::*;
     use std::os::unix::ffi::OsStringExt;

@@ -266,12 +266,17 @@ fn exec(
             )
         })?;
     }
-    let out = File::create(log).map_err(|e| {
-        Fail::new(
-            exit::FAILED,
-            format!("cannot create {}: {e}", log.display()),
-        )
-    })?;
+    let out = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(log)
+        .map_err(|e| {
+            Fail::new(
+                exit::FAILED,
+                format!("cannot create {}: {e}", log.display()),
+            )
+        })?;
     let err = out
         .try_clone()
         .map_err(|e| Fail::new(exit::FAILED, format!("cannot duplicate log handle: {e}")))?;
@@ -299,7 +304,8 @@ fn exec(
     let mut child = match c.spawn() {
         Ok(ch) => ch,
         Err(e) => {
-            let _ = std::fs::write(log, format!("cannot start {}: {e}\n", cmd.argv[0]));
+            let start_error = format!("cannot start {}: {e}\n", cmd.argv[0]);
+            let _ = crate::util::write_atomic(log, start_error.as_bytes());
             return Ok(Exec {
                 code: 127,
                 log: log.to_path_buf(),
@@ -623,7 +629,7 @@ fn oom_preflight(p: &Planner, units: &[Unit], node: &str, log_dir: &Path) -> Res
         )
     })?;
     let plan = log_dir.join("oom-preflight.yml");
-    std::fs::write(&plan, text).map_err(|e| {
+    crate::util::write_atomic(&plan, text.as_bytes()).map_err(|e| {
         Fail::new(
             exit::FAILED,
             format!("cannot write {}: {e}", plan.display()),
@@ -638,7 +644,7 @@ fn oom_preflight(p: &Planner, units: &[Unit], node: &str, log_dir: &Path) -> Res
         .output()
         .map_err(|e| Fail::new(exit::FAILED, format!("cannot run `{bin} stack oom`: {e}")))?;
     let stdout = String::from_utf8_lossy(&out.stdout);
-    std::fs::write(log_dir.join("oom-preflight.log"), &out.stdout).map_err(|e| {
+    crate::util::write_atomic(&log_dir.join("oom-preflight.log"), &out.stdout).map_err(|e| {
         Fail::new(
             exit::FAILED,
             format!(

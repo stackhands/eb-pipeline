@@ -722,6 +722,7 @@ fn fail(detail: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use std::ffi::CString;

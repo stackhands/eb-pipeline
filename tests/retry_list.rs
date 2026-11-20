@@ -1,4 +1,5 @@
 //! `eb-retry-list` turns a run result or summary and its build list into the lines to retry.
+#![allow(clippy::disallowed_methods)]
 
 #[path = "common/exec_stub.rs"]
 mod exec_stub;

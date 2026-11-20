@@ -1,4 +1,5 @@
 //! `eb-test-map` turns a build list into the tests that cover it.
+#![allow(clippy::disallowed_methods)]
 
 use std::process::Command;
 

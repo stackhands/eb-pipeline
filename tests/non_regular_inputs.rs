@@ -1,4 +1,5 @@
 //! Non-regular input paths are refused promptly across sibling binaries.
+#![allow(clippy::disallowed_methods)]
 
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;

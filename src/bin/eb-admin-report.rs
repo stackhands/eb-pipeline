@@ -561,6 +561,7 @@ fn as_u64(value: &Value, what: &str) -> Result<u64, String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 

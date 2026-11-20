@@ -1,4 +1,5 @@
 //! Observable behavior of opt-in offline bundles.
+#![allow(clippy::disallowed_methods)]
 
 #[path = "common/exec_stub.rs"]
 mod exec_stub;

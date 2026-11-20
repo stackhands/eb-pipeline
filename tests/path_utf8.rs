@@ -1,5 +1,6 @@
 //! Non-UTF-8 path-like arguments should be accepted as byte paths and fail
 //! normally, not panic.
+#![allow(clippy::disallowed_methods)]
 
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
