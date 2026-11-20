@@ -1465,6 +1465,22 @@ fn metrics_file_equals_separator_is_a_usage_error() {
 }
 
 #[test]
+fn metrics_file_prep_failure_is_a_usage_error() {
+    let fixture = Fixture::new();
+    let metrics = fixture.dir.path().join("missing").join("cvmfs.prom");
+    let output = fixture.command_with_metrics(Some(&metrics)).sync_output();
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("cannot prepare metrics"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(output.stdout.is_empty());
+    assert!(fixture.calls().is_empty());
+    assert!(!metrics.exists());
+}
+
+#[test]
 fn value_options_do_not_consume_the_next_long_option() {
     let fixture = Fixture::new();
     let cases = [
