@@ -738,14 +738,12 @@ fn first_seconds(
 }
 
 fn to_millis(v: f64, what: &str) -> Result<u64, String> {
-    if !v.is_finite() || v < 0.0 {
-        return Err(format!("{what} must be a finite number of seconds >= 0"));
-    }
-    let ms = (v * 1000.0).round();
-    if ms > u64::MAX as f64 {
-        return Err(format!("{what} is too large"));
-    }
-    Ok(ms as u64)
+    let max_seconds = (u64::MAX as f64 + 0.5) / 1000.0;
+    let v = util::checked_duration_seconds(v, Some(max_seconds)).map_err(|error| match error {
+        util::DurationError::Invalid => format!("{what} must be a finite number of seconds >= 0"),
+        util::DurationError::TooLarge => format!("{what} is too large"),
+    })?;
+    Ok((v * 1000.0).round() as u64)
 }
 
 fn fmt_ms(ms: u64) -> String {
