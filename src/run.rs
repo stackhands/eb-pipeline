@@ -1813,6 +1813,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                     &unset_env,
                     &log_dir.join("checks.log"),
                 ) {
+                    Ok(_) if interrupted().is_some() => {}
                     Ok(ex) => {
                         if ex.code == 0 {
                             st.phase("checks", "ok", Some(0), None);
@@ -1865,6 +1866,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                         &unset_env,
                         &log_dir.join(format!("verification-{}.log", index + 1)),
                     ) {
+                        Ok(_) if interrupted().is_some() => {}
                         Ok(ex) if ex.code == 0 => {
                             log(
                                 "INFO",
@@ -1920,6 +1922,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                     &unset_env,
                     &log_dir.join("caches.log"),
                 ) {
+                    Ok(_) if interrupted().is_some() => {}
                     Ok(ex) => {
                         if ex.code == 0 {
                             st.phase("caches", "ok", Some(0), None);
@@ -1994,6 +1997,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                     }
                 };
                 match st.exec("logs", &cmd, &env, &unset_env, &log_dir.join("rotate.log")) {
+                    Ok(_) if interrupted().is_some() => {}
                     Ok(ex) => match map_rotate(ex.code) {
                         RotateOutcome::Ok => st.phase("logs", "ok", Some(0), note),
                         RotateOutcome::Locked => {

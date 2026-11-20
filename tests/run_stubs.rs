@@ -3232,6 +3232,10 @@ const CHECK: &str = r#"#!/bin/sh
 D="${STUB_DIR:?}"
 echo "$*" >> "$D/check.calls"
 env | grep '^EB_PIPELINE_CHECK_' | sort > "$D/check.env"
+if [ -n "${STUB_CHECK_SLEEP:-}" ]; then
+  echo started > "$D/check.started"
+  sleep 30
+fi
 exit "${STUB_CHECK_CODE:-0}"
 "#;
 
@@ -3317,6 +3321,40 @@ fn a_failed_check_fails_the_run_and_skips_caches() {
         7
     );
     assert_eq!(phase_status(&r, "caches"), "skipped");
+}
+
+#[test]
+fn sigterm_during_the_check_command_records_the_phase_once() {
+    let env = with_check("[checks]\ncommand = \"CHECKBIN\"\n");
+    let mut child = driver(&env, LIST, &[("STUB_CHECK_SLEEP", "1")], &[]);
+    let started = env.dir.path().join("check.started");
+    let t0 = Instant::now();
+    while !started.exists() {
+        assert!(
+            t0.elapsed() < Duration::from_secs(20),
+            "check never started"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // SAFETY: the pid is the driver child this test started.
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+    }
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(143));
+    let r: Value =
+        serde_json::from_str(&std::fs::read_to_string(env.dir.path().join("result.json")).unwrap())
+            .unwrap();
+    assert_eq!(r["exit_code"], 143);
+    assert_eq!(r["interrupted_by"], "SIGTERM");
+    let checks: Vec<&Value> = r["phases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["name"] == "checks")
+        .collect();
+    assert_eq!(checks.len(), 1, "{checks:?}");
+    assert_eq!(checks[0]["status"], "interrupted");
 }
 
 #[test]
