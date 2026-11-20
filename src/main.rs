@@ -1,4 +1,5 @@
-use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::parser::ValueSource;
+use clap::{ArgMatches, Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use clap_complete::{generate_to, shells};
 use eb_pipeline::exit::{self, Fail};
 use eb_pipeline::package_plan;
@@ -105,7 +106,7 @@ enum Cmd {
         #[arg(long, env = "EB_PIPELINE_LIST")]
         list: Option<PathBuf>,
         /// Limit target-dependent settings to this target.
-        #[arg(long, env = "EB_PIPELINE_TARGET", requires = "stack_checks")]
+        #[arg(long, env = "EB_PIPELINE_TARGET")]
         target: Option<String>,
         /// Comma-separated eb-stack checks to run before any allocation.
         #[arg(long, value_delimiter = ',', requires = "list", value_enum)]
@@ -1651,8 +1652,42 @@ fn cmd_verify(
     Ok(exit::OK)
 }
 
+/// Whether the value of `arg` of subcommand `sub` was typed on the command
+/// line. Clap also counts a value read from an environment variable as
+/// present, so a declared requirement or conflict cannot tell the two apart.
+fn typed_on_command_line(matches: &ArgMatches, sub: &str, arg: &str) -> bool {
+    matches
+        .subcommand_matches(sub)
+        .and_then(|m| m.value_source(arg))
+        == Some(ValueSource::CommandLine)
+}
+
+/// `check --target` selects what the stack checks read, so on the command
+/// line it needs `--stack-checks`. The variable `EB_PIPELINE_TARGET` is set
+/// for every command of a run, `check` included, and is not an error there.
+fn refuse_target_without_checks(cli: &Cli, matches: &ArgMatches) {
+    let Cmd::Check {
+        target: Some(_),
+        stack_checks,
+        ..
+    } = &cli.command
+    else {
+        return;
+    };
+    if typed_on_command_line(matches, "check", "target") && stack_checks.is_empty() {
+        Cli::command()
+            .error(
+                clap::error::ErrorKind::MissingRequiredArgument,
+                "the argument '--target <TARGET>' requires '--stack-checks <STACK_CHECKS>'",
+            )
+            .exit();
+    }
+}
+
 fn main() {
-    let cli = Cli::parse();
+    let matches = Cli::command().get_matches();
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    refuse_target_without_checks(&cli, &matches);
     let r = match &cli.command {
         Cmd::Check {
             site,
