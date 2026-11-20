@@ -187,6 +187,22 @@ fn help_and_version_report_stdout_write_failures() {
 }
 
 #[test]
+fn help_and_version_stdout_failures_do_not_panic_when_stderr_is_unwritable() {
+    for option in ["--help", "--version"] {
+        let full = OpenOptions::new().write(true).open("/dev/full").unwrap();
+        let full_err = OpenOptions::new().write(true).open("/dev/full").unwrap();
+        let output = bin()
+            .arg(option)
+            .stdout(Stdio::from(full))
+            .stderr(Stdio::from(full_err))
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{option}: {}", text(&output));
+        assert!(output.stderr.is_empty(), "{option}: {}", text(&output));
+    }
+}
+
+#[test]
 fn help_names_the_eb_stack_stack_subcommands() {
     let o = bin().arg("--help").output().unwrap();
     assert_eq!(o.status.code(), Some(0), "{}", text(&o));
