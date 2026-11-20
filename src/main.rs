@@ -1105,9 +1105,14 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         if let Some(before) = &before {
             watch::record_run(&planner, &lines, &res, before);
         }
-        apply_pending_signal(&mut res.exit_code, &mut res.interrupted_by);
-        write_summary(&s, &res, "run", result, None, &planner.offline_wrapper);
-        apply_pending_signal(&mut res.exit_code, &mut res.interrupted_by);
+        write_summary_with_pending_signal(
+            &s,
+            &mut res,
+            "run",
+            result,
+            None,
+            &planner.offline_wrapper,
+        );
         let value = to_sorted(&res);
         let mut output_errors = Vec::new();
         if let Some(p) = result {
@@ -1142,6 +1147,19 @@ fn signal_outranks(run_code: i32, failure: Fail) -> Fail {
         exit::SIGINT | exit::SIGTERM => Fail::new(run_code, failure.msg),
         _ => failure,
     }
+}
+
+fn write_summary_with_pending_signal(
+    s: &schema::Site,
+    res: &mut RunResult,
+    command: &str,
+    result: Option<&Path>,
+    watch: Option<serde_json::Value>,
+    offline_wrapper: &[String],
+) {
+    apply_pending_signal(&mut res.exit_code, &mut res.interrupted_by);
+    write_summary(s, res, command, result, watch, offline_wrapper);
+    apply_pending_signal(&mut res.exit_code, &mut res.interrupted_by);
 }
 
 /// Merge a target's run into its run directory's summary; a problem is a
@@ -1578,7 +1596,7 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     let lines = util::parse_list(&(doc.rebuild.join("\n") + "\n"))?;
     tools::check_versions(&s, false)?;
     let before = watch::listings(&planner, &lines);
-    let res = run(
+    let mut res = run(
         &planner,
         &lines,
         &Options {
@@ -1622,7 +1640,7 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             ),
         }
     }
-    write_summary(&s, &res, "watch", w.result, Some(to_sorted(&doc)), &[]);
+    write_summary_with_pending_signal(&s, &mut res, "watch", w.result, Some(to_sorted(&doc)), &[]);
     if let Some(p) = w.result {
         write_json(&to_sorted(&res), Some(p)).map_err(|f| signal_outranks(res.exit_code, f))?;
     }
