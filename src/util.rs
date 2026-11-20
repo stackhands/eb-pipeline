@@ -52,7 +52,8 @@ pub enum DurationError {
     TooLarge,
 }
 
-/// Validate a duration value in seconds, with an optional upper bound.
+/// Validate a duration value in seconds, with an optional exclusive upper
+/// bound.
 pub fn checked_duration_seconds(
     seconds: f64,
     max_seconds: Option<f64>,
@@ -60,7 +61,7 @@ pub fn checked_duration_seconds(
     if !seconds.is_finite() || seconds < 0.0 {
         return Err(DurationError::Invalid);
     }
-    if max_seconds.is_some_and(|max| seconds > max) {
+    if max_seconds.is_some_and(|max| seconds >= max) {
         return Err(DurationError::TooLarge);
     }
     Ok(seconds)
@@ -529,8 +530,15 @@ mod tests {
             checked_duration_seconds(11.0, Some(10.0)),
             Err(DurationError::TooLarge)
         );
-        assert_eq!(checked_duration_seconds(10.0, Some(10.0)), Ok(10.0));
+        assert_eq!(
+            checked_duration_seconds(10.0, Some(10.0)),
+            Err(DurationError::TooLarge)
+        );
         assert_eq!(checked_duration_seconds(1.25, None), Ok(1.25));
+        assert_eq!(
+            checked_duration_seconds(18446744073709551616.0, Some(18446744073709551616.0)),
+            Err(DurationError::TooLarge)
+        );
     }
 
     #[test]

@@ -393,6 +393,7 @@ fn collect_result(
     out: &mut Vec<Observation>,
     seq: &mut usize,
 ) -> Result<bool, String> {
+    let max_weight_seconds = u64::MAX as f64;
     let (_, v) =
         exit::read_json_output(path, "eb-pipeline run", exit::USAGE).map_err(|error| error.msg)?;
     let obj = v
@@ -444,11 +445,21 @@ fn collect_result(
                     path.display()
                 )
             })?;
-        if util::checked_duration_seconds(secs, None).is_err() {
-            return Err(format!(
-                "{}: lines[{i}].duration_seconds must be a non-negative number",
-                path.display()
-            ));
+        match util::checked_duration_seconds(secs, Some(max_weight_seconds)) {
+            Ok(_) => {}
+            Err(util::DurationError::Invalid) => {
+                return Err(format!(
+                    "{}: lines[{i}].duration_seconds must be a non-negative number",
+                    path.display()
+                ));
+            }
+            Err(util::DurationError::TooLarge) => {
+                return Err(format!(
+                    "{}: lines[{i}].duration_seconds exceeds {} seconds",
+                    path.display(),
+                    u64::MAX
+                ));
+            }
         }
         let ec = line
             .get("easyconfig")
@@ -487,6 +498,7 @@ fn collect_summary(
     out: &mut Vec<Observation>,
     seq: &mut usize,
 ) -> Result<bool, String> {
+    let max_weight_seconds = u64::MAX as f64;
     let mut matched = target_filter.is_none();
     for (target_index, t) in s.targets.iter().enumerate() {
         if let Some(want) = target_filter {
@@ -505,11 +517,21 @@ fn collect_summary(
                     path.display()
                 )
             })?;
-            if util::checked_duration_seconds(secs, None).is_err() {
-                return Err(format!(
-                    "{}: targets[{target_index}].packages[{package_index}].duration_seconds must be a non-negative number",
-                    path.display()
-                ));
+            match util::checked_duration_seconds(secs, Some(max_weight_seconds)) {
+                Ok(_) => {}
+                Err(util::DurationError::Invalid) => {
+                    return Err(format!(
+                        "{}: targets[{target_index}].packages[{package_index}].duration_seconds must be a non-negative number",
+                        path.display()
+                    ));
+                }
+                Err(util::DurationError::TooLarge) => {
+                    return Err(format!(
+                        "{}: targets[{target_index}].packages[{package_index}].duration_seconds exceeds {} seconds",
+                        path.display(),
+                        u64::MAX
+                    ));
+                }
             }
             let module = module_key(p.module.as_deref(), &p.easyconfig);
             *seq += 1;
