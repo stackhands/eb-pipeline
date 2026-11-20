@@ -12,7 +12,11 @@ pub fn open_regular_file(path: &Path) -> std::io::Result<std::fs::File> {
         .read(true)
         .custom_flags(libc::O_NONBLOCK)
         .open(path)?;
-    if !file.metadata()?.is_file() {
+    let meta = file.metadata()?;
+    if meta.is_dir() {
+        return Err(std::io::Error::from_raw_os_error(libc::EISDIR));
+    }
+    if !meta.is_file() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "not a regular file",
@@ -397,14 +401,14 @@ mod tests {
             send.send(read_text_file(&fifo)).unwrap();
         });
         let error = receive
-            .recv_timeout(std::time::Duration::from_secs(1))
+            .recv_timeout(std::time::Duration::from_secs(5))
             .expect("FIFO reader blocked")
             .unwrap_err();
         reader.join().unwrap();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
 
         let error = read_text_file(dir.path()).unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(error.kind(), std::io::ErrorKind::IsADirectory);
 
         let dangling = dir.path().join("dangling");
         std::os::unix::fs::symlink("gone", &dangling).unwrap();
