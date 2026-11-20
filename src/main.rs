@@ -421,6 +421,14 @@ fn write_stdout_text(text: &str) -> Result<(), Fail> {
         .map_err(|e| Fail::new(exit::FAILED, format!("cannot write stdout: {e}")))
 }
 
+fn write_stderr_text(text: &str) -> Result<(), Fail> {
+    use std::io::Write;
+    std::io::stderr()
+        .lock()
+        .write_all(text.as_bytes())
+        .map_err(|e| Fail::new(exit::FAILED, format!("cannot write stderr: {e}")))
+}
+
 fn write_json(v: &serde_json::Value, path: Option<&Path>) -> Result<(), Fail> {
     let text = serde_json::to_string_pretty(v).expect("serializable") + "\n";
     match path {
@@ -709,34 +717,33 @@ fn cmd_init(
                     format!("cannot write {}: {e}", p.display()),
                 ));
             }
-            log(
-                "INFO",
-                "init",
-                "-",
-                &format!("wrote template {} to {}", t.name, p.display()),
-            );
+            write_stderr_text(&format!(
+                "INFO [init] -: wrote template {} to {}\n",
+                t.name,
+                p.display()
+            ))?;
             Some(p)
         }
     };
     if hints {
         if let Some(p) = wrote_path {
-            eprintln!(
-                "INFO [init] hint: check the site file with `eb-pipeline check --site {}`",
+            write_stderr_text(&format!(
+                "INFO [init] hint: check the site file with `eb-pipeline check --site {}`\n",
                 p.display()
-            );
+            ))?;
             if t.name == "eessi-site" || t.name == "small-cluster" {
-                eprintln!(
-                    "INFO [init] hint: list target names with `eb-pipeline targets --site {}` (needs a build from the main branch; release 0.3.0 has no targets command)",
+                write_stderr_text(&format!(
+                    "INFO [init] hint: list target names with `eb-pipeline targets --site {}` (needs a build from the main branch; release 0.3.0 has no targets command)\n",
                     p.display()
-                );
-                eprintln!(
-                    "INFO [init] hint: see docs/orgmode/howto/install.org to install from source"
-                );
+                ))?;
+                write_stderr_text(
+                    "INFO [init] hint: see docs/orgmode/howto/install.org to install from source\n",
+                )?;
             }
         } else {
-            eprintln!(
-                "INFO [init] hint: write the template with --out site.toml to print next steps"
-            );
+            write_stderr_text(
+                "INFO [init] hint: write the template with --out site.toml to print next steps\n",
+            )?;
         }
     }
     Ok(exit::OK)

@@ -1,7 +1,7 @@
 //! `init` templates and configuration from the environment.
 
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 fn bin() -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"));
@@ -76,6 +76,29 @@ fn init_reports_an_output_filesystem_error_as_a_runtime_failure() {
     let error = String::from_utf8(output.stderr).unwrap();
     assert!(error.contains("cannot create"), "{error}");
     assert!(error.contains(path.to_str().unwrap()), "{error}");
+}
+
+#[test]
+fn init_stderr_write_failure_is_reported_without_a_panic() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("site.toml");
+    let stderr_full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let output = bin()
+        .args(["init", "--template", "small-cluster", "--out"])
+        .arg(&path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::from(stderr_full))
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected a controlled runtime failure, got {:?}",
+        output.status.code()
+    );
 }
 
 #[test]
