@@ -418,8 +418,7 @@ fn to_sorted<T: Serialize>(v: &T) -> serde_json::Value {
 }
 
 fn write_stdout_text(text: &str) -> Result<(), Fail> {
-    util::write_stdout(text.as_bytes())
-        .map_err(|e| Fail::new(exit::FAILED, format!("cannot write stdout: {e}")))
+    util::write_stdout_checked(text.as_bytes()).map_err(|e| Fail::new(exit::FAILED, e))
 }
 
 fn write_stderr_text(text: &str) -> Result<(), Fail> {
