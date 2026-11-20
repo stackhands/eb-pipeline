@@ -5,6 +5,7 @@ use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// Open a regular input file without waiting on a special file.
 pub fn open_regular_file(path: &Path) -> std::io::Result<std::fs::File> {
@@ -165,8 +166,15 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("output");
+    let local_identity = local_writer_identity();
+    remove_stale_atomic_temporary_files(parent, name, &local_identity);
     for attempt in 0..1000u32 {
-        let temporary = parent.join(format!(".{name}.{}.{}.tmp", std::process::id(), attempt));
+        let temporary = parent.join(atomic_temp_file_name(
+            name,
+            &local_identity,
+            std::process::id() as libc::pid_t,
+            attempt,
+        ));
         let mut file = match OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -176,6 +184,8 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error),
         };
+        #[cfg(test)]
+        maybe_kill_atomic_writer("after-temp-created");
         if let Some(mode) = existing_mode {
             if let Err(error) =
                 std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(mode))
@@ -185,22 +195,248 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
                 return Err(error);
             }
         }
-        let written = file.write_all(bytes).and_then(|()| file.sync_all());
+        let written = write_atomic_bytes(&mut file, bytes).and_then(|()| file.sync_all());
         drop(file);
         if let Err(error) = written {
             let _ = std::fs::remove_file(&temporary);
             return Err(error);
         }
+        #[cfg(test)]
+        maybe_kill_atomic_writer("before-rename");
         if let Err(error) = std::fs::rename(&temporary, &destination) {
             let _ = std::fs::remove_file(&temporary);
             return Err(error);
         }
+        #[cfg(test)]
+        maybe_kill_atomic_writer("after-rename-before-dir-sync");
         return Ok(());
     }
     Err(std::io::Error::new(
         std::io::ErrorKind::AlreadyExists,
         "cannot allocate a temporary output file",
     ))
+}
+
+#[cfg(not(test))]
+fn write_atomic_bytes(file: &mut std::fs::File, bytes: &[u8]) -> std::io::Result<()> {
+    file.write_all(bytes)
+}
+
+#[cfg(test)]
+fn write_atomic_bytes(file: &mut std::fs::File, bytes: &[u8]) -> std::io::Result<()> {
+    if kill_stage_matches("mid-write") && !bytes.is_empty() {
+        let split_at = bytes.len().max(2) / 2;
+        file.write_all(&bytes[..split_at])?;
+        maybe_kill_atomic_writer("mid-write");
+        file.write_all(&bytes[split_at..])
+    } else {
+        file.write_all(bytes)
+    }
+}
+
+#[cfg(test)]
+fn maybe_kill_atomic_writer(stage: &str) {
+    if kill_stage_matches(stage) {
+        // SAFETY: test hook only; intentionally terminates the process.
+        unsafe {
+            libc::raise(libc::SIGKILL);
+        }
+    }
+}
+
+#[cfg(test)]
+fn kill_stage_matches(stage: &str) -> bool {
+    std::env::var_os("EB_PIPELINE_TEST_KILL_WRITE_ATOMIC").as_deref() == Some(stage.as_ref())
+}
+
+#[derive(Clone, Debug)]
+struct WriterIdentity {
+    host: String,
+    host_reap_safe: bool,
+    boot_id: Option<String>,
+}
+
+const HOST_UNKNOWN_TAG: &str = "host-unknown";
+const BOOT_UNKNOWN_TAG: &str = "boot-unknown";
+
+struct SanitizedTag {
+    value: String,
+    used_fallback: bool,
+}
+
+#[cfg(test)]
+mod writer_identity_test_hook {
+    use super::WriterIdentity;
+    use std::sync::{Mutex, OnceLock};
+
+    static OVERRIDE: OnceLock<Mutex<Option<WriterIdentity>>> = OnceLock::new();
+
+    pub(super) fn get() -> Option<WriterIdentity> {
+        OVERRIDE
+            .get()
+            .and_then(|slot| slot.lock().ok().and_then(|value| value.clone()))
+    }
+
+    pub(super) fn install(identity: WriterIdentity) {
+        *OVERRIDE
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .expect("writer identity override mutex poisoned") = Some(identity);
+    }
+
+    pub(super) fn clear() {
+        if let Some(slot) = OVERRIDE.get() {
+            *slot
+                .lock()
+                .expect("writer identity override mutex poisoned") = None;
+        }
+    }
+}
+
+fn local_writer_identity() -> WriterIdentity {
+    #[cfg(test)]
+    if let Some(identity) = writer_identity_test_hook::get() {
+        return identity;
+    }
+    static IDENTITY: OnceLock<WriterIdentity> = OnceLock::new();
+    IDENTITY.get_or_init(detect_writer_identity).clone()
+}
+
+fn detect_writer_identity() -> WriterIdentity {
+    // Host from HOSTNAME or /proc hostname; boot id from Linux procfs.
+    let raw_host = std::env::var("HOSTNAME")
+        .ok()
+        .or_else(|| std::fs::read_to_string("/proc/sys/kernel/hostname").ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let (host, host_reap_safe) = host_tag_and_reap_safety(raw_host.as_deref());
+    // /proc/sys/kernel/random/boot_id names one kernel boot instance.
+    let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    WriterIdentity {
+        host,
+        host_reap_safe,
+        boot_id: boot_id.map(|boot| sanitize_tag_component(&boot).value),
+    }
+}
+
+fn host_tag_and_reap_safety(raw_host: Option<&str>) -> (String, bool) {
+    let Some(raw_host) = raw_host else {
+        return (HOST_UNKNOWN_TAG.into(), false);
+    };
+    if raw_host.is_empty() {
+        return (HOST_UNKNOWN_TAG.into(), false);
+    }
+    let sanitized = sanitize_tag_component(raw_host);
+    if raw_host.eq_ignore_ascii_case("localhost")
+        || sanitized.value.eq_ignore_ascii_case("localhost")
+        || sanitized.used_fallback
+    {
+        return (sanitized.value, false);
+    }
+    (sanitized.value, true)
+}
+
+fn atomic_temp_file_name(
+    name: &str,
+    identity: &WriterIdentity,
+    pid: libc::pid_t,
+    attempt: u32,
+) -> String {
+    let boot = identity.boot_id.as_deref().unwrap_or(BOOT_UNKNOWN_TAG);
+    format!(".{name}.{}.{}.{pid}.{attempt}.tmp", identity.host, boot)
+}
+
+fn sanitize_tag_component(text: &str) -> SanitizedTag {
+    let mut out = String::with_capacity(text.len());
+    let mut used_fallback = false;
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+            out.push(ch);
+        } else {
+            out.push('_');
+            used_fallback = true;
+        }
+    }
+    if out.is_empty() {
+        SanitizedTag {
+            value: HOST_UNKNOWN_TAG.into(),
+            used_fallback: true,
+        }
+    } else if used_fallback {
+        // A sanitized host tag is not unique enough to authorize reaping.
+        SanitizedTag {
+            value: HOST_UNKNOWN_TAG.into(),
+            used_fallback: true,
+        }
+    } else {
+        SanitizedTag {
+            value: out,
+            used_fallback: false,
+        }
+    }
+}
+
+fn remove_stale_atomic_temporary_files(parent: &Path, name: &str, local_identity: &WriterIdentity) {
+    if !local_identity.host_reap_safe {
+        return;
+    }
+    // Without a boot id, this process cannot tell current-boot temps from
+    // previous-boot temps on the same host, so it must not reap.
+    let Some(local_boot) = local_identity.boot_id.as_deref() else {
+        return;
+    };
+    let entries = match std::fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let shown = entry.file_name().to_string_lossy().to_string();
+        let Some((host, boot, pid, _attempt)) = parse_atomic_temporary_name(&shown, name) else {
+            continue;
+        };
+        if host != local_identity.host
+            || host == HOST_UNKNOWN_TAG
+            || host.eq_ignore_ascii_case("localhost")
+            || boot == BOOT_UNKNOWN_TAG
+        {
+            continue;
+        }
+        if boot != local_boot || !process_is_alive(pid) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+fn parse_atomic_temporary_name(
+    file_name: &str,
+    output_name: &str,
+) -> Option<(String, String, libc::pid_t, u32)> {
+    let prefix = format!(".{output_name}.");
+    if !file_name.starts_with(&prefix) || !file_name.ends_with(".tmp") {
+        return None;
+    }
+    let middle = &file_name[prefix.len()..file_name.len() - ".tmp".len()];
+    let mut fields = middle.split('.');
+    let host = fields.next()?.to_string();
+    let boot = fields.next()?.to_string();
+    let pid = fields.next()?.parse::<libc::pid_t>().ok()?;
+    let attempt = fields.next()?.parse::<u32>().ok()?;
+    if host.is_empty() || boot.is_empty() || fields.next().is_some() {
+        return None;
+    }
+    Some((host, boot, pid, attempt))
+}
+
+fn process_is_alive(pid: libc::pid_t) -> bool {
+    // SAFETY: signal 0 checks whether a process exists without signalling it.
+    let rc = unsafe { libc::kill(pid, 0) };
+    if rc == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 /// Split a string on whitespace, honouring single and double quotes.
@@ -412,6 +648,30 @@ mod tests {
     use super::*;
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::Command;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    fn atomic_test_guard() -> MutexGuard<'static, ()> {
+        static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+        GUARD
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("atomic test guard mutex poisoned")
+    }
+
+    struct IdentityOverrideGuard;
+
+    impl Drop for IdentityOverrideGuard {
+        fn drop(&mut self) {
+            writer_identity_test_hook::clear();
+        }
+    }
+
+    fn install_identity_override(identity: WriterIdentity) -> IdentityOverrideGuard {
+        writer_identity_test_hook::install(identity);
+        IdentityOverrideGuard
+    }
 
     #[test]
     fn regular_text_reader_rejects_hostile_inputs_promptly() {
@@ -451,6 +711,7 @@ mod tests {
 
     #[test]
     fn atomic_write_replaces_only_after_the_new_file_is_complete() {
+        let _guard = atomic_test_guard();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("result.json");
         std::fs::write(&path, b"old bytes\n").unwrap();
@@ -468,15 +729,18 @@ mod tests {
 
     #[test]
     fn atomic_write_failure_preserves_the_previous_file() {
+        let _guard = atomic_test_guard();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("result.json");
         std::fs::write(&path, b"complete old bytes\n").unwrap();
+        let identity = local_writer_identity();
         for attempt in 0..1000u32 {
             std::fs::write(
-                dir.path().join(format!(
-                    ".result.json.{}.{}.tmp",
-                    std::process::id(),
-                    attempt
+                dir.path().join(atomic_temp_file_name(
+                    "result.json",
+                    &identity,
+                    std::process::id() as libc::pid_t,
+                    attempt,
                 )),
                 b"occupied\n",
             )
@@ -490,7 +754,203 @@ mod tests {
     }
 
     #[test]
+    fn atomic_write_leaves_foreign_host_temps_alone() {
+        let _guard = atomic_test_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("result.json");
+        std::fs::write(&path, b"old bytes\n").unwrap();
+
+        let local = local_writer_identity();
+        let foreign_pid = spawned_and_reaped_pid();
+        let foreign = dir.path().join(format!(
+            ".result.json.{}.{}.{}.{}.tmp",
+            "other-host",
+            local.boot_id.clone().unwrap_or_else(|| "other-boot".into()),
+            foreign_pid,
+            1,
+        ));
+        std::fs::write(&foreign, b"foreign temp\n").unwrap();
+        let status = crash_write_atomic(&path, "after-temp-created", b"new bytes\n");
+        assert_eq!(status.signal(), Some(libc::SIGKILL), "{status:?}");
+        let locals_before = temporary_atomic_siblings(&path)
+            .into_iter()
+            .filter(|candidate| candidate != &foreign)
+            .count();
+        assert!(
+            locals_before >= 1,
+            "no local temp was left by killed writer"
+        );
+
+        write_atomic(&path, b"new bytes\n").unwrap();
+
+        assert!(foreign.exists(), "foreign temp unexpectedly removed");
+        let locals_after = temporary_atomic_siblings(&path)
+            .into_iter()
+            .filter(|candidate| candidate != &foreign)
+            .count();
+        assert_eq!(locals_after, 0, "local stale temp was not removed");
+        assert_eq!(std::fs::read(&path).unwrap(), b"new bytes\n");
+    }
+
+    #[test]
+    fn atomic_write_reaps_same_host_temps_from_earlier_boot() {
+        let _guard = atomic_test_guard();
+        let local = local_writer_identity();
+        if !local.host_reap_safe {
+            return;
+        }
+        let Some(local_boot) = local.boot_id.clone() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("result.json");
+        std::fs::write(&path, b"old bytes\n").unwrap();
+        let earlier_boot = if local_boot == "earlier-boot" {
+            "different-boot".to_string()
+        } else {
+            "earlier-boot".to_string()
+        };
+        let stale = dir.path().join(format!(
+            ".result.json.{}.{}.{}.{}.tmp",
+            local.host,
+            earlier_boot,
+            std::process::id(),
+            1
+        ));
+        std::fs::write(&stale, b"earlier boot temp\n").unwrap();
+
+        write_atomic(&path, b"new bytes\n").unwrap();
+
+        assert!(!stale.exists(), "earlier-boot temp was not removed");
+        assert_eq!(std::fs::read(&path).unwrap(), b"new bytes\n");
+    }
+
+    #[test]
+    fn atomic_write_does_not_reap_when_boot_id_is_unavailable() {
+        let _guard = atomic_test_guard();
+        let local = local_writer_identity();
+        let _override = install_identity_override(WriterIdentity {
+            host: local.host.clone(),
+            host_reap_safe: local.host_reap_safe,
+            boot_id: None,
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("result.json");
+        std::fs::write(&path, b"old bytes\n").unwrap();
+        let stale_pid = spawned_and_reaped_pid();
+        let stale = dir.path().join(format!(
+            ".result.json.{}.earlier-boot.{}.1.tmp",
+            local.host, stale_pid
+        ));
+        std::fs::write(&stale, b"stale temp\n").unwrap();
+
+        write_atomic(&path, b"new bytes\n").unwrap();
+
+        assert!(stale.exists(), "temp was reaped without local boot id");
+        assert_eq!(std::fs::read(&path).unwrap(), b"new bytes\n");
+    }
+
+    #[test]
+    fn atomic_write_does_not_reap_when_host_tag_is_not_unique() {
+        let _guard = atomic_test_guard();
+        let raw_cases = [None, Some(""), Some("localhost"), Some("node.example")];
+        for raw in raw_cases {
+            let (host, host_reap_safe) = host_tag_and_reap_safety(raw);
+            assert!(!host_reap_safe, "{raw:?} unexpectedly reaped");
+            let _override = install_identity_override(WriterIdentity {
+                host: host.clone(),
+                host_reap_safe,
+                boot_id: Some("boot-1".into()),
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("result.json");
+            std::fs::write(&path, b"old bytes\n").unwrap();
+            let stale_pid = spawned_and_reaped_pid();
+            let stale = dir.path().join(format!(
+                ".result.json.{}.earlier-boot.{}.1.tmp",
+                host, stale_pid
+            ));
+            std::fs::write(&stale, b"stale temp\n").unwrap();
+            write_atomic(&path, b"new bytes\n").unwrap();
+            assert!(
+                stale.exists(),
+                "{raw:?}: stale temp was unexpectedly reaped"
+            );
+        }
+    }
+
+    #[test]
+    fn atomic_write_keeps_same_boot_temps_for_live_pids() {
+        let _guard = atomic_test_guard();
+        let local = local_writer_identity();
+        if !local.host_reap_safe {
+            return;
+        }
+        let Some(local_boot) = local.boot_id.clone() else {
+            return;
+        };
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg("sleep 30")
+            .spawn()
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("result.json");
+        std::fs::write(&path, b"old bytes\n").unwrap();
+        let live_temp = dir.path().join(format!(
+            ".result.json.{}.{}.{}.1.tmp",
+            local.host,
+            local_boot,
+            child.id(),
+        ));
+        std::fs::write(&live_temp, b"live temp\n").unwrap();
+
+        write_atomic(&path, b"new bytes\n").unwrap();
+
+        assert!(live_temp.exists(), "temp from a live pid was reaped");
+        assert_eq!(std::fs::read(&path).unwrap(), b"new bytes\n");
+        // SAFETY: this test started the child process.
+        unsafe {
+            libc::kill(child.id() as libc::pid_t, libc::SIGKILL);
+        }
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn atomic_write_recovers_after_kills_at_write_steps() {
+        let _guard = atomic_test_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("result.json");
+        let new_bytes = b"complete new bytes\n";
+        for stage in [
+            "after-temp-created",
+            "mid-write",
+            "before-rename",
+            "after-rename-before-dir-sync",
+        ] {
+            std::fs::write(&path, b"old bytes\n").unwrap();
+            let status = crash_write_atomic(&path, stage, new_bytes);
+            assert_eq!(status.signal(), Some(libc::SIGKILL), "{stage}: {status:?}");
+            let seen = std::fs::read(&path).unwrap();
+            assert!(
+                seen == b"old bytes\n" || seen == new_bytes,
+                "{stage}: saw {:?}",
+                String::from_utf8_lossy(&seen)
+            );
+
+            write_atomic(&path, new_bytes).unwrap();
+            assert_eq!(std::fs::read(&path).unwrap(), new_bytes, "{stage}");
+            assert!(
+                temporary_atomic_siblings(&path).is_empty(),
+                "{stage}: stale local temp files remained: {:?}",
+                temporary_atomic_siblings(&path)
+            );
+        }
+    }
+
+    #[test]
     fn atomic_write_refuses_output_symlinks() {
+        let _guard = atomic_test_guard();
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("result.json");
         let link = dir.path().join("latest.json");
@@ -509,6 +969,61 @@ mod tests {
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
         assert!(!missing.exists());
         assert!(dangling.is_symlink());
+    }
+
+    #[test]
+    fn atomic_write_crash_helper() {
+        if std::env::var_os("EB_PIPELINE_TEST_ATOMIC_HELPER").is_none() {
+            return;
+        }
+        let path = PathBuf::from(std::env::var("EB_PIPELINE_TEST_ATOMIC_PATH").unwrap());
+        let stage = std::env::var("EB_PIPELINE_TEST_ATOMIC_STAGE").unwrap();
+        let bytes = std::env::var("EB_PIPELINE_TEST_ATOMIC_BYTES").unwrap();
+        std::env::set_var("EB_PIPELINE_TEST_KILL_WRITE_ATOMIC", stage);
+        let _ = write_atomic(&path, bytes.as_bytes());
+    }
+
+    fn crash_write_atomic(path: &Path, stage: &str, bytes: &[u8]) -> std::process::ExitStatus {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("util::tests::atomic_write_crash_helper")
+            .env("EB_PIPELINE_TEST_ATOMIC_HELPER", "1")
+            .env("EB_PIPELINE_TEST_ATOMIC_PATH", path)
+            .env(
+                "EB_PIPELINE_TEST_ATOMIC_BYTES",
+                String::from_utf8_lossy(bytes).into_owned(),
+            )
+            .env("EB_PIPELINE_TEST_ATOMIC_STAGE", stage)
+            .output()
+            .unwrap();
+        output.status
+    }
+
+    fn spawned_and_reaped_pid() -> libc::pid_t {
+        let mut child = Command::new("sh").arg("-c").arg("exit 0").spawn().unwrap();
+        let pid = child.id() as libc::pid_t;
+        let _ = child.wait();
+        pid
+    }
+
+    fn temporary_atomic_siblings(path: &Path) -> Vec<PathBuf> {
+        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        let output_name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let mut found = std::fs::read_dir(parent)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|candidate| {
+                candidate
+                    .file_name()
+                    .and_then(|file_name| file_name.to_str())
+                    .is_some_and(|shown| {
+                        shown.starts_with(&format!(".{output_name}.")) && shown.ends_with(".tmp")
+                    })
+            })
+            .collect::<Vec<_>>();
+        found.sort();
+        found
     }
 
     #[test]
