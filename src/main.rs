@@ -1345,7 +1345,7 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                     i.eessi_version, i.software_subdir
                 ));
             }
-            let _ = write_stdout_text(&out);
+            write_stdout_text(&out)?;
         }
         drop_work();
         return Err(Fail::new(
