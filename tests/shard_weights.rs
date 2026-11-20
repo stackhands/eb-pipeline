@@ -68,6 +68,58 @@ fn malformed_result_names_the_producer_and_path() {
 }
 
 #[test]
+fn a_duration_beyond_any_integer_weight_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let result = dir.path().join("result.json");
+    std::fs::write(
+        &result,
+        r#"{"kind":"result","target":"cpu","lines":[{"easyconfig":"Foo-1.0.eb","phase":"build","status":"success","duration_seconds":1e300}]}"#,
+    )
+    .unwrap();
+
+    let output = bin()
+        .args(["--result"])
+        .arg(&result)
+        .args(["--target", "cpu"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stdout, b"");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("lines[0].duration_seconds exceeds"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_duration_at_exactly_two_to_the_sixty_fourth_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let result = dir.path().join("result.json");
+    std::fs::write(
+        &result,
+        r#"{"kind":"result","target":"cpu","lines":[{"easyconfig":"Foo-1.0.eb","phase":"build","status":"success","duration_seconds":18446744073709551616.0}]}"#,
+    )
+    .unwrap();
+
+    let output = bin()
+        .args(["--result"])
+        .arg(&result)
+        .args(["--target", "cpu"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stdout, b"");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("lines[0].duration_seconds exceeds"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn malformed_summary_names_the_producer_and_path() {
     let dir = tempfile::tempdir().unwrap();
     let summary = dir.path().join("summary.json");
