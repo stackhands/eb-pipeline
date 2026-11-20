@@ -348,7 +348,7 @@ The preview does not evaluate a prior result, so =--dry-run= and =--resume-resul
 | Option              | Variable             | Meaning                                                                                              |
 |---------------------+----------------------+------------------------------------------------------------------------------------------------------|
 | =--list FILE=       | =EB_PIPELINE_LIST=   | Recompute from this build list or easystack. Use this or =--recorded-list=.                           |
-| =--recorded-list=   |                      | Recompute from the =list= path in =--from=. Conflicts with =--list=.                                 |
+| =--recorded-list=   |                      | Recompute from the =list= path in =--from=. Conflicts with =--list= as an option; it wins over =EB_PIPELINE_LIST=.                                 |
 | =--from FILE=       |                      | The plan or result JSON that holds =input_attestation=. Required. Needs =[attest] enabled=.           |
 
 =verify= recomputes the input record and checks the inclusion proof in =FILE=.
