@@ -22,33 +22,44 @@ const LOCK: &str = ".summary.lock";
 
 #[cfg(test)]
 mod record_test_hook {
-    use std::sync::{mpsc::Sender, Mutex, OnceLock};
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Barrier, Mutex, OnceLock};
 
-    static LOCK_ACQUIRED_SENDER: OnceLock<Mutex<Option<Sender<()>>>> = OnceLock::new();
+    struct Hook {
+        lock_path: PathBuf,
+        before_lock: Arc<Barrier>,
+    }
 
-    pub(super) fn install(sender: Sender<()>) {
-        *LOCK_ACQUIRED_SENDER
+    static HOOK: OnceLock<Mutex<Option<Hook>>> = OnceLock::new();
+
+    pub(super) fn install(lock_path: PathBuf, before_lock: Arc<Barrier>) {
+        *HOOK
             .get_or_init(|| Mutex::new(None))
             .lock()
-            .expect("lock acquired sender mutex poisoned") = Some(sender);
+            .expect("record test hook mutex poisoned") = Some(Hook {
+            lock_path,
+            before_lock,
+        });
     }
 
     pub(super) fn clear() {
-        if let Some(slot) = LOCK_ACQUIRED_SENDER.get() {
-            *slot.lock().expect("lock acquired sender mutex poisoned") = None;
+        if let Some(slot) = HOOK.get() {
+            *slot.lock().expect("record test hook mutex poisoned") = None;
         }
     }
 
-    pub(super) fn notify_lock_acquired() {
-        let Some(slot) = LOCK_ACQUIRED_SENDER.get() else {
+    pub(super) fn notify_before_lock(lock_path: &Path) {
+        let Some(slot) = HOOK.get() else {
             return;
         };
-        if let Some(sender) = slot
+        let before_lock = slot
             .lock()
-            .expect("lock acquired sender mutex poisoned")
+            .expect("record test hook mutex poisoned")
             .as_ref()
-        {
-            let _ = sender.send(());
+            .filter(|hook| hook.lock_path == lock_path)
+            .map(|hook| Arc::clone(&hook.before_lock));
+        if let Some(before_lock) = before_lock {
+            before_lock.wait();
         }
     }
 }
@@ -294,9 +305,9 @@ pub fn record(site: &str, entry: TargetSummary, run_dir: &Path) -> Result<Summar
         .write(true)
         .open(&lock_path)
         .map_err(|e| shown(&lock_path, e))?;
-    lock.lock().map_err(|e| shown(&lock_path, e))?;
     #[cfg(test)]
-    record_test_hook::notify_lock_acquired();
+    record_test_hook::notify_before_lock(&lock_path);
+    lock.lock().map_err(|e| shown(&lock_path, e))?;
     let path = run_dir.join(JSON);
     let earlier = match std::fs::read_to_string(&path) {
         Ok(t) => match serde_json::from_str::<Summary>(&t) {
@@ -741,8 +752,6 @@ pub fn html(s: &Summary, run_dir: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc;
-    use std::time::Duration;
 
     fn summary(easyconfig: &str, reason: &str) -> Summary {
         Summary {
@@ -827,23 +836,19 @@ mod tests {
             .unwrap();
         held.lock().unwrap();
 
-        let (acquired_tx, acquired_rx) = mpsc::channel();
-        record_test_hook::install(acquired_tx);
+        let before_lock = std::sync::Arc::new(std::sync::Barrier::new(2));
+        record_test_hook::install(lock_path, std::sync::Arc::clone(&before_lock));
         let run_dir_bg = run_dir.clone();
         let writer =
             std::thread::spawn(move || record("t", target("cpu", exit::FAILED), &run_dir_bg));
 
-        assert!(matches!(
-            acquired_rx.recv_timeout(Duration::from_millis(200)),
-            Err(mpsc::RecvTimeoutError::Timeout)
-        ));
+        before_lock.wait();
         assert!(
             !run_dir.join(JSON).exists(),
             "summary appeared while lock was held"
         );
 
         drop(held);
-        acquired_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         let written = writer.join().unwrap().unwrap();
         record_test_hook::clear();
 
