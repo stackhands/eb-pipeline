@@ -4,6 +4,7 @@ mod common;
 
 use common::CommandSyncExt;
 use serde_json::Value;
+use std::io::Write;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -12,6 +13,12 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 static SPAWN: Mutex<()> = Mutex::new(());
+
+fn write_skip_notice(reason: &str) {
+    let mut stderr = std::io::stderr().lock();
+    let _ = stderr.write_all(format!("SKIP: {reason}\n").as_bytes());
+    let _ = stderr.flush();
+}
 
 const EB_STACK: &str = r#"#!/bin/sh
 D="${STUB_DIR:?}"
@@ -2381,26 +2388,68 @@ fn a_signal_while_waiting_for_the_summary_lock_preserves_signal_exit() {
     let mut child = driver(&env, LIST, &[], &[]);
     let child_pid = child.id();
     let fds = format!("/proc/{child_pid}/fd");
-    let waiting_on_summary_lock = || {
-        std::fs::read_dir(&fds)
+    let force_unobservable =
+        std::env::var_os("EB_PIPELINE_TEST_FORCE_SUMMARY_LOCK_UNOBSERVABLE").is_some();
+    enum LockWaitProbe {
+        WaitingOnLock,
+        NotYet,
+        Unobservable(String),
+    }
+    let waiting_on_summary_lock = || -> LockWaitProbe {
+        if force_unobservable {
+            return LockWaitProbe::Unobservable("forced by test hook".into());
+        }
+        let lock_opened = std::fs::read_dir(&fds)
             .into_iter()
             .flatten()
             .flatten()
-            .any(|entry| std::fs::read_link(entry.path()).is_ok_and(|path| path == lock))
-            && {
-                let wchan =
-                    std::fs::read_to_string(format!("/proc/{child_pid}/wchan")).unwrap_or_default();
-                if wchan.contains("lock") || wchan.contains("flock") {
-                    true
-                } else {
-                    let stack =
-                        std::fs::read_to_string(format!("/proc/{child_pid}/stack")).unwrap_or_default();
-                    stack.contains("lock") || stack.contains("flock")
-                }
-            }
+            .any(|entry| std::fs::read_link(entry.path()).is_ok_and(|path| path == lock));
+        if !lock_opened {
+            return LockWaitProbe::NotYet;
+        }
+        let wchan = std::fs::read_to_string(format!("/proc/{child_pid}/wchan"));
+        let stack = std::fs::read_to_string(format!("/proc/{child_pid}/stack"));
+        let wchan_text = wchan.as_deref().map(str::trim).unwrap_or_default();
+        if wchan_text.contains("lock")
+            || wchan_text.contains("flock")
+            || stack
+                .as_deref()
+                .is_ok_and(|text| text.contains("lock") || text.contains("flock"))
+        {
+            return LockWaitProbe::WaitingOnLock;
+        }
+        let wchan_observable =
+            wchan.as_ref().is_ok() && !wchan_text.is_empty() && wchan_text != "?";
+        let stack_observable = stack.is_ok();
+        if wchan_observable || stack_observable {
+            return LockWaitProbe::NotYet;
+        }
+        LockWaitProbe::Unobservable(format!(
+            "cannot inspect lock wait state: wchan={wchan:?}, stack={stack:?}"
+        ))
     };
     let t0 = Instant::now();
-    while !waiting_on_summary_lock() {
+    let mut unobservable_since = None;
+    loop {
+        match waiting_on_summary_lock() {
+            LockWaitProbe::WaitingOnLock => break,
+            LockWaitProbe::NotYet => unobservable_since = None,
+            LockWaitProbe::Unobservable(reason) => {
+                let since = *unobservable_since.get_or_insert_with(Instant::now);
+                if since.elapsed() >= Duration::from_secs(2) {
+                    // SAFETY: the pid is the driver child this test started.
+                    unsafe {
+                        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+                    }
+                    drop(held);
+                    let _ = finish(&env, child);
+                    write_skip_notice(&format!(
+                        "{reason} for at least 2s after opening .summary.lock"
+                    ));
+                    return;
+                }
+            }
+        }
         assert!(child.try_wait().unwrap().is_none(), "the run ended");
         assert!(
             t0.elapsed() < Duration::from_secs(20),
