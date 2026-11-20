@@ -87,7 +87,9 @@ fn sleep_interruptible(secs: u64) -> bool {
 
 /// Print a log line on stderr: `<level> [<phase>] <target>: <msg>`.
 pub fn log(level: &str, phase: &str, target: &str, msg: &str) {
-    eprintln!("{level} [{phase}] {target}: {msg}");
+    use std::io::Write;
+    let mut stderr = std::io::stderr().lock();
+    let _ = writeln!(stderr, "{level} [{phase}] {target}: {msg}");
 }
 
 /// Seconds, to the millisecond.

@@ -80,6 +80,29 @@ fn init_reports_an_output_filesystem_error_as_a_runtime_failure() {
 }
 
 #[test]
+fn init_stderr_write_failure_is_reported_without_a_panic() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("site.toml");
+    let stderr_full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let output = bin()
+        .args(["init", "--template", "small-cluster", "--out"])
+        .arg(&path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::from(stderr_full))
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected a controlled runtime failure, got {:?}",
+        output.status.code()
+    );
+}
+
+#[test]
 fn init_hints_print_next_steps_on_stderr() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("site.toml");
