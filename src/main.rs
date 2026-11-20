@@ -793,7 +793,7 @@ fn cmd_man(out_dir: &Path) -> Result<i32, Fail> {
         )
     })?;
     let path = out_dir.join("eb-pipeline.1");
-    std::fs::write(&path, out).map_err(|e| {
+    util::write_atomic(&path, &out).map_err(|e| {
         Fail::new(
             exit::FAILED,
             format!("cannot write {}: {e}", path.display()),
