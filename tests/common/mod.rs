@@ -7,7 +7,7 @@ mod exec_stub_shared;
 
 use serde_json::Value;
 use std::io::BufRead;
-use std::os::fd::FromRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Output, Stdio};
 use std::time::Duration;
@@ -85,6 +85,31 @@ impl Drop for LockHolder {
     fn drop(&mut self) {
         self.stop();
     }
+}
+
+/// Take an advisory lock in this process, as another writer would.
+pub fn hold_lock(path: &Path, posix: bool) -> std::fs::File {
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    // SAFETY: the descriptor is open, and a zeroed `libc::flock` is a valid
+    // value of that plain C struct.
+    let rc = unsafe {
+        if posix {
+            let mut l: libc::flock = std::mem::zeroed();
+            l.l_type = libc::F_WRLCK as _;
+            l.l_whence = libc::SEEK_SET as _;
+            libc::fcntl(f.as_raw_fd(), libc::F_SETLK, &raw const l)
+        } else {
+            libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB)
+        }
+    };
+    assert_eq!(rc, 0, "{}", std::io::Error::last_os_error());
+    f
 }
 
 /// Fails the easyconfig stems listed in STUB_EB_FAIL. With STUB_EB_INSTALL
