@@ -761,8 +761,8 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                 writeln!(output, "[{}] {}", ph.name, shell_line(c)).expect("writing to a string");
             }
         }
-        if let Err(e) = util::write_stdout(output.as_bytes()) {
-            st.res.message = Some(format!("cannot write stdout: {e}"));
+        if let Err(e) = util::write_stdout_checked(output.as_bytes()) {
+            st.res.message = Some(e);
             return finish(st, Some(exit::FAILED));
         }
         log("INFO", "run", &target, "dry run: nothing executed");
