@@ -2371,6 +2371,55 @@ fn a_signal_stops_a_run_that_waits_for_a_rotation() {
     assert_eq!(result_phase(&r, "logs")["status"], "interrupted");
 }
 
+#[test]
+fn a_signal_while_waiting_for_the_summary_lock_preserves_signal_exit() {
+    let env = setup(ROTATE);
+    let lock = env.dir.path().join("logs/20260101_000000/.summary.lock");
+    std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
+    let held = hold_lock(&lock, false);
+    let lock = std::fs::canonicalize(&lock).unwrap();
+    let mut child = driver(&env, LIST, &[], &[]);
+    let child_pid = child.id();
+    let fds = format!("/proc/{child_pid}/fd");
+    let waiting_on_summary_lock = || {
+        std::fs::read_dir(&fds)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|entry| std::fs::read_link(entry.path()).is_ok_and(|path| path == lock))
+            && {
+                let wchan =
+                    std::fs::read_to_string(format!("/proc/{child_pid}/wchan")).unwrap_or_default();
+                if wchan.contains("lock") || wchan.contains("flock") {
+                    true
+                } else {
+                    let stack =
+                        std::fs::read_to_string(format!("/proc/{child_pid}/stack")).unwrap_or_default();
+                    stack.contains("lock") || stack.contains("flock")
+                }
+            }
+    };
+    let t0 = Instant::now();
+    while !waiting_on_summary_lock() {
+        assert!(child.try_wait().unwrap().is_none(), "the run ended");
+        assert!(
+            t0.elapsed() < Duration::from_secs(20),
+            "the run never reached a flock wait on the summary lock"
+        );
+        std::thread::yield_now();
+    }
+    // SAFETY: the pid is the driver child this test started.
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+    }
+    drop(held);
+    let o = finish(&env, child);
+    assert_eq!(o.code, 143, "{}", o.stderr);
+    let r = o.result.unwrap();
+    assert_eq!(r["interrupted_by"], "SIGTERM", "{r}");
+    assert_eq!(r["exit_code"], 143, "{r}");
+}
+
 /// eb-keep-logs rewrites a `.licensed-logs` from what it read before, so
 /// two rotations at once lose each other's renames.
 #[test]
