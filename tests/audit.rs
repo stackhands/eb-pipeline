@@ -399,6 +399,30 @@ fn generated_cli_assets_include_the_audit_subcommand() {
 }
 
 #[test]
+fn man_refuses_to_follow_a_preexisting_output_symlink() {
+    let dir = tempfile::tempdir().unwrap();
+    let victim = dir.path().join("victim.1");
+    std::fs::write(&victim, "sentinel\n").unwrap();
+    let man = dir.path().join("man");
+    std::fs::create_dir_all(&man).unwrap();
+    std::os::unix::fs::symlink(&victim, man.join("eb-pipeline.1")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"))
+        .args(["man", "--out-dir"])
+        .arg(&man)
+        .output()
+        .unwrap();
+
+    assert_ne!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("cannot write"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(std::fs::read_to_string(victim).unwrap(), "sentinel\n");
+}
+
+#[test]
 fn real_eb_stack_e2e_runs_when_enabled() {
     let Some(eb_stack) = std::env::var_os("EB_STACK_REAL") else {
         return;
