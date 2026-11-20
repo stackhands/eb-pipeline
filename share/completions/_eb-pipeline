@@ -151,7 +151,7 @@ _arguments "${_arguments_options[@]}" : \
 (verify)
 _arguments "${_arguments_options[@]}" : \
 '--site=[Site file]:SITE:_files' \
-'(--recorded-list)--list=[Build list file, or an EasyBuild easystack]:LIST:_files' \
+'--list=[Build list file, or an EasyBuild easystack]:LIST:_files' \
 '--target=[Target name]:TARGET:_default' \
 '--build-type=[Build type name]:BUILD_TYPE:_default' \
 '--from=[Plan or result JSON that holds \`input_attestation\`]:FROM:_files' \
