@@ -428,7 +428,18 @@ fn a_shared_metrics_file_serializes_whole_invocations() {
     );
 
     let mut second = fixture.command_with_metrics(Some(&metrics)).sync_spawn();
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    let lock_path = metrics
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(".cvmfs.prom.lock");
+    assert!(
+        wait_for_fd_target(
+            second.id(),
+            &std::fs::canonicalize(&lock_path).unwrap_or(lock_path),
+            std::time::Duration::from_secs(10),
+        ),
+        "second invocation never reached the metrics lock path"
+    );
     let second_status = second.try_wait();
     let calls_while_locked = fixture.calls();
     std::fs::write(release, b"go\n").unwrap();
@@ -468,6 +479,25 @@ fn wait_for_path(path: &Path, timeout: std::time::Duration) -> bool {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     true
+}
+
+fn wait_for_fd_target(pid: u32, target: &Path, timeout: std::time::Duration) -> bool {
+    let fds = format!("/proc/{pid}/fd");
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let opened = std::fs::read_dir(&fds)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|entry| std::fs::read_link(entry.path()).is_ok_and(|path| path == target));
+        if opened {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 }
 
 #[test]
