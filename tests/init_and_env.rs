@@ -1,7 +1,8 @@
 //! `init` templates and configuration from the environment.
 
+use std::fs::OpenOptions;
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 fn bin() -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"));
@@ -139,6 +140,26 @@ fn help_lists_dry_run_output_among_what_stdout_carries() {
         "watch --dry-run",
     ] {
         assert!(carried.contains(name), "{name} missing from {carried:?}");
+    }
+}
+
+#[test]
+fn help_and_version_report_stdout_write_failures() {
+    for option in ["--help", "--version"] {
+        let full = OpenOptions::new().write(true).open("/dev/full").unwrap();
+        let output = bin()
+            .arg(option)
+            .stdout(Stdio::from(full))
+            .stderr(Stdio::piped())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{option}: {}", text(&output));
+        let err = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(err.lines().count(), 1, "{option}: {err}");
+        assert!(
+            err.contains("ERROR [main] -: cannot write stdout:"),
+            "{option}: {err}"
+        );
     }
 }
 

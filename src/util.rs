@@ -1,8 +1,10 @@
 //! Small helpers.
 
 use crate::exit::Fail;
+use std::ffi::{OsStr, OsString};
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -69,6 +71,42 @@ pub fn checked_duration_seconds(
         return Err(DurationError::TooLarge);
     }
     Ok(seconds)
+}
+
+/// Process arguments after the executable path, preserving byte paths.
+pub fn os_args() -> Vec<OsString> {
+    std::env::args_os().skip(1).collect()
+}
+
+/// Convert one argument that must be text to UTF-8.
+pub fn os_to_string(arg: OsString) -> Result<String, String> {
+    arg.into_string()
+        .map_err(|arg| format!("argument is not valid UTF-8: `{}`", arg.to_string_lossy()))
+}
+
+/// Split `--flag=value` even when `value` is not UTF-8.
+pub fn split_os_flag_value(arg: &OsStr) -> Option<(String, OsString)> {
+    let bytes = arg.as_bytes();
+    let at = bytes.iter().position(|byte| *byte == b'=')?;
+    if at < 2 || !bytes.starts_with(b"--") {
+        return None;
+    }
+    let flag = std::str::from_utf8(&bytes[..at]).ok()?.to_string();
+    Some((flag, OsString::from_vec(bytes[at + 1..].to_vec())))
+}
+
+/// The next non-empty command-line value as bytes, without consuming another
+/// long option as that value.
+pub fn separate_os_value(
+    words: &mut impl Iterator<Item = OsString>,
+    missing: &str,
+) -> Result<OsString, String> {
+    words
+        .next()
+        .filter(|value| {
+            !value.as_os_str().is_empty() && !value.as_os_str().as_bytes().starts_with(b"--")
+        })
+        .ok_or_else(|| missing.to_string())
 }
 
 /// The next non-empty command-line value, without consuming another long
