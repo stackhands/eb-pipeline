@@ -1524,7 +1524,8 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             format!("cannot create {}: {e}", log_dir.display()),
         )
     })?;
-    std::fs::write(&list, doc.rebuild.join("\n") + "\n")
+    let rebuild_list = doc.rebuild.join("\n") + "\n";
+    util::write_atomic(Path::new(&list), rebuild_list.as_bytes())
         .map_err(|e| Fail::new(exit::FAILED, format!("cannot write {list}: {e}")))?;
     write_json(&to_sorted(&doc), Some(&log_dir.join("watch-plan.json")))?;
     let lines = util::parse_list(&(doc.rebuild.join("\n") + "\n"))?;

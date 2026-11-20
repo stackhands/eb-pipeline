@@ -7,7 +7,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// One file in an offline bundle.
@@ -336,21 +336,10 @@ pub fn write(root: &Path, scope: &Scope<'_>, assets: &[OfflineAsset]) -> Result<
         kind: "offline-bundle",
         files: entries.into_iter().collect(),
     };
-    let text = serde_json::to_vec_pretty(&manifest)
-        .map_err(|e| Fail::new(exit::FAILED, format!("cannot render offline manifest: {e}")))?;
-    let tmp = root.join(format!(".manifest.json.tmp-{}", std::process::id()));
-    let mut file = File::create(&tmp).map_err(|e| {
-        Fail::new(
-            exit::FAILED,
-            format!("cannot create {}: {e}", tmp.display()),
-        )
-    })?;
-    file.write_all(&text)
-        .and_then(|()| file.write_all(b"\n"))
-        .and_then(|()| file.sync_all())
-        .map_err(|e| Fail::new(exit::FAILED, format!("cannot write {}: {e}", tmp.display())))?;
-    std::fs::rename(&tmp, root.join("manifest.json")).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
+    let text = serde_json::to_string_pretty(&manifest)
+        .map_err(|e| Fail::new(exit::FAILED, format!("cannot render offline manifest: {e}")))?
+        + "\n";
+    crate::util::write_atomic(&root.join("manifest.json"), text.as_bytes()).map_err(|e| {
         Fail::new(
             exit::FAILED,
             format!("cannot publish offline manifest: {e}"),
