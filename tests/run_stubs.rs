@@ -2393,8 +2393,8 @@ fn a_signal_while_waiting_for_the_summary_lock_preserves_signal_exit() {
                 if wchan.contains("lock") || wchan.contains("flock") {
                     true
                 } else {
-                    let stack =
-                        std::fs::read_to_string(format!("/proc/{child_pid}/stack")).unwrap_or_default();
+                    let stack = std::fs::read_to_string(format!("/proc/{child_pid}/stack"))
+                        .unwrap_or_default();
                     stack.contains("lock") || stack.contains("flock")
                 }
             }
