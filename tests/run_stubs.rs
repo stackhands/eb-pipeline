@@ -2513,9 +2513,16 @@ exit 0
             r#"D="${STUB_DIR:?}"
 [ -e "$D/rotating" ] && echo "$EB_PIPELINE_TARGET" >> "$D/keeplogs.overlap"
 : > "$D/rotating"
+echo "$EB_PIPELINE_TARGET" >> "$D/keeplogs.inflight"
 echo "$*" >> "$D/keeplogs.calls"
-sleep 0.5
+i=0
+while [ "$(sort -u "$D/keeplogs.inflight" 2>/dev/null | wc -l)" -lt 2 ] && [ $i -lt 200 ]; do
+  sleep 0.01
+  i=$((i + 1))
+done
 rm -f "$D/rotating"
+grep -vxF -- "$EB_PIPELINE_TARGET" "$D/keeplogs.inflight" > "$D/keeplogs.inflight.next" 2>/dev/null || true
+mv "$D/keeplogs.inflight.next" "$D/keeplogs.inflight" 2>/dev/null || true
 "#,
         ),
     );
