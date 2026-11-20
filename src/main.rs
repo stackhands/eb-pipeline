@@ -1664,7 +1664,20 @@ fn cmd_verify(
 }
 
 fn main() {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => match error.kind() {
+            clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => {
+                let text = error.to_string();
+                if let Err(write_error) = util::write_stdout(text.as_bytes()) {
+                    eprintln!("ERROR [main] -: cannot write stdout: {write_error}");
+                    std::process::exit(exit::FAILED);
+                }
+                std::process::exit(exit::OK);
+            }
+            _ => error.exit(),
+        },
+    };
     let r = match &cli.command {
         Cmd::Check {
             site,
