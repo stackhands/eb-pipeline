@@ -329,7 +329,7 @@ pub fn stage(
     let installed = work.join("installed.txt");
     let names: std::collections::BTreeSet<&String> = eessi.keys().chain(local.keys()).collect();
     let text: String = names.iter().map(|n| format!("{n}\n")).collect();
-    std::fs::write(&installed, text).map_err(|e| {
+    crate::util::write_atomic(&installed, text.as_bytes()).map_err(|e| {
         Fail::new(
             exit::FAILED,
             format!("cannot write {}: {e}", installed.display()),
@@ -374,7 +374,8 @@ pub fn rebuild_set(
     }
     let list = work.join(format!("{name}.changed"));
     let out = work.join(name);
-    std::fs::write(&list, changed.join("\n") + "\n").map_err(|e| {
+    let changed_list = changed.join("\n") + "\n";
+    crate::util::write_atomic(&list, changed_list.as_bytes()).map_err(|e| {
         Fail::new(
             exit::FAILED,
             format!("cannot write {}: {e}", list.display()),
@@ -1125,7 +1126,7 @@ pub fn order(
         .filter(|v| v.action == "rebuild")
         .map(|v| format!("{} --rebuild\n", file_name(&v.easyconfig)))
         .collect();
-    std::fs::write(&list, text).map_err(|e| {
+    crate::util::write_atomic(&list, text.as_bytes()).map_err(|e| {
         Fail::new(
             exit::FAILED,
             format!("cannot write {}: {e}", list.display()),

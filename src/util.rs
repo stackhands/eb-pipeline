@@ -644,6 +644,10 @@ pub fn package_of(easyconfig: &str) -> (String, Option<String>) {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the write_atomic tests seed fixture files directly before exercising atomic replacement"
+)]
 mod tests {
     use super::*;
     use std::ffi::CString;
