@@ -1507,7 +1507,7 @@ pub fn read_units(dir: &Path) -> Result<Vec<Unit>, Fail> {
             return Ok(());
         };
         let path = shard_list_path(dir, file)?;
-        let list = std::fs::read_to_string(&path)
+        let list = crate::util::read_text_file(&path)
             .map_err(|e| Fail::new(exit::FAILED, format!("cannot read {}: {e}", path.display())))?;
         let lines = parse_list(&list)?;
         if lines.is_empty() {

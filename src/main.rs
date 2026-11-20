@@ -964,7 +964,7 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         let lines = if easystack::is_easystack(list) {
             easystack::read(list).map_err(Fail::usage)?
         } else {
-            let list_text = std::fs::read_to_string(list)
+            let list_text = util::read_text_file(list)
                 .map_err(|e| Fail::usage(format!("cannot read list {}: {e}", list.display())))?;
             util::parse_list(&list_text)?
         };
@@ -1623,7 +1623,7 @@ fn cmd_verify(
     let lines = if easystack::is_easystack(list) {
         easystack::read(list).map_err(Fail::usage)?
     } else {
-        let list_text = std::fs::read_to_string(list)
+        let list_text = util::read_text_file(list)
             .map_err(|e| Fail::usage(format!("cannot read list {}: {e}", list.display())))?;
         util::parse_list(&list_text)?
     };

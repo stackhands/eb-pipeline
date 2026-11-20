@@ -10,6 +10,7 @@
 
 use crate::util::{list_word, ListLine};
 use serde_yaml::{Mapping, Value};
+use std::io::Read;
 use std::path::Path;
 
 struct Diagnostic {
@@ -28,8 +29,11 @@ pub fn is_easystack(path: &Path) -> bool {
 
 /// Read and parse an easystack, with source locations in its diagnostics.
 pub fn read(path: &Path) -> Result<Vec<ListLine>, String> {
-    let bytes =
-        std::fs::read(path).map_err(|e| format!("cannot read list {}: {e}", path.display()))?;
+    let mut file = crate::util::open_regular_file(path)
+        .map_err(|e| format!("cannot read list {}: {e}", path.display()))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|e| format!("cannot read list {}: {e}", path.display()))?;
     let text = std::str::from_utf8(&bytes).map_err(|e| {
         let (line, column) = byte_location(&bytes, e.valid_up_to());
         format!(

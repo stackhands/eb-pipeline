@@ -11,7 +11,6 @@
 use eb_pipeline::util;
 use std::collections::BTreeSet;
 use std::env;
-use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -306,7 +305,8 @@ fn easyconfigs_from_list(path: &str) -> Result<Vec<String>, String> {
         let lines = easystack::read(Path::new(path))?;
         Ok(lines.into_iter().map(|line| line.easyconfig).collect())
     } else {
-        let list_text = fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+        let list_text = util::read_text_file(Path::new(path))
+            .map_err(|e| format!("cannot read {path}: {e}"))?;
         Ok(util::parse_list(&list_text)
             .map_err(|error| format!("{path}: {}", error.msg))?
             .into_iter()
