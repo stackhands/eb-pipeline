@@ -700,3 +700,49 @@ fn plain_build_list_options_are_not_part_of_the_easyconfig_name() {
     assert_eq!(without_option.stdout, with_option.stdout);
     assert_eq!(without_option.stderr, b"");
 }
+
+#[test]
+fn result_input_refuses_a_fifo_without_blocking() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let dir = tempfile::tempdir().unwrap();
+    let map = dir.path().join("map.tsv");
+    std::fs::write(&map, "G g\n").unwrap();
+    let fifo = dir.path().join("result.json");
+    let raw = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+
+    let mut child = bin()
+        .args(["--map"])
+        .arg(&map)
+        .args(["--result"])
+        .arg(&fifo)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("eb-test-map blocked while reading a FIFO result path");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("not a regular file"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
