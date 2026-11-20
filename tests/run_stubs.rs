@@ -1108,7 +1108,18 @@ fn the_release_waits_for_the_admission_lock() {
         let held = reservations_here(&env, kind);
         let lock = hold_lock(&env.dir.path().join("admission.lock"), kind == "posix");
         let mut child = driver(&env, LIST, &[], &[]);
-        std::thread::sleep(Duration::from_millis(700));
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !held.exists() {
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "{kind}: the run ended before the reservation appeared"
+            );
+            assert!(
+                Instant::now() < deadline,
+                "{kind}: reservation never appeared"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
         assert!(
             child.try_wait().unwrap().is_none(),
             "{kind}: the run ended while the lock was held"
@@ -2317,7 +2328,21 @@ fn a_run_waits_to_start_while_another_run_rotates() {
     std::fs::create_dir(env.dir.path().join("logs")).unwrap();
     let rotating = hold_lock(Path::new(&lock), false);
     let mut child = driver(&env, LIST, &[], &[]);
-    std::thread::sleep(Duration::from_millis(1500));
+    let lock_path = std::fs::canonicalize(&lock).unwrap();
+    let fds = format!("/proc/{}/fd", child.id());
+    let opened = || {
+        std::fs::read_dir(&fds)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|e| std::fs::read_link(e.path()).is_ok_and(|l| l == lock_path))
+    };
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !opened() {
+        assert!(child.try_wait().unwrap().is_none(), "the run ended");
+        assert!(Instant::now() < deadline, "the rotation lock never opened");
+        std::thread::sleep(Duration::from_millis(20));
+    }
     assert!(child.try_wait().unwrap().is_none(), "the run ended");
     assert!(calls(&env, "eb.calls").is_empty(), "a line started");
     drop(rotating);
