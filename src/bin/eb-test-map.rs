@@ -10,8 +10,8 @@
 
 use eb_pipeline::util;
 use std::collections::BTreeSet;
-use std::env;
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use eb_pipeline::easystack;
@@ -31,9 +31,9 @@ const TOOLCHAINS: &[&str] = &[
 ];
 
 struct Args {
-    map: Option<String>,
-    list: Option<String>,
-    result: Option<String>,
+    map: Option<PathBuf>,
+    list: Option<PathBuf>,
+    result: Option<PathBuf>,
     extra_toolchains: BTreeSet<String>,
     allow_unmapped: bool,
     include_resumed: bool,
@@ -65,7 +65,7 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<ExitCode, String> {
-    let args = parse(env::args().skip(1))?;
+    let args = parse(util::os_args().into_iter())?;
     match args.format {
         OutputFormat::EessiModules => eessi_modules(&args),
         OutputFormat::Plain | OutputFormat::Reframe => text_names(&args),
@@ -75,7 +75,7 @@ fn run() -> Result<ExitCode, String> {
 fn text_names(args: &Args) -> Result<ExitCode, String> {
     let map_path = args
         .map
-        .as_deref()
+        .as_ref()
         .ok_or_else(|| "--map is required".to_string())?;
     let rows = read_map(map_path)?;
     let packages = package_names(args)?;
@@ -98,13 +98,16 @@ fn text_names(args: &Args) -> Result<ExitCode, String> {
     }
     if !missing.is_empty() && !args.allow_unmapped {
         for name in &missing {
-            eprintln!("eb-test-map: {name} has no test in {map_path}");
+            eprintln!("eb-test-map: {name} has no test in {}", map_path.display());
         }
         return Ok(ExitCode::from(2));
     }
     if args.allow_unmapped {
         for name in &missing {
-            eprintln!("eb-test-map: {name} has no test in {map_path}; allowed");
+            eprintln!(
+                "eb-test-map: {name} has no test in {}; allowed",
+                map_path.display()
+            );
         }
     }
     let mut out_text = String::new();
@@ -145,16 +148,41 @@ fn eessi_modules(args: &Args) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
+fn parse(words: impl Iterator<Item = OsString>) -> Result<Args, String> {
     let mut map = None;
-    let mut list: Option<String> = None;
-    let mut result: Option<String> = None;
+    let mut list: Option<PathBuf> = None;
+    let mut result: Option<PathBuf> = None;
     let mut extra_toolchains = BTreeSet::new();
     let mut allow_unmapped = false;
     let mut include_resumed = false;
     let mut format: Option<OutputFormat> = None;
     let mut words = words.peekable();
     while let Some(word) = words.next() {
+        if let Some((flag, value)) = util::split_os_flag_value(word.as_os_str()) {
+            if value.as_os_str().is_empty() {
+                return Err(format!("{flag} needs a value"));
+            }
+            match flag.as_str() {
+                "--map" => assign_once(&mut map, "--map", PathBuf::from(value))?,
+                "--list" => assign_once(&mut list, "--list", PathBuf::from(value))?,
+                "--result" => assign_once(&mut result, "--result", PathBuf::from(value))?,
+                "--toolchain" => {
+                    extra_toolchains.insert(util::os_to_string(value)?);
+                }
+                "--format" => {
+                    let text = util::os_to_string(value)?;
+                    assign_once(&mut format, "--format", parse_format(&text)?)?;
+                }
+                _ => {}
+            }
+            if matches!(
+                flag.as_str(),
+                "--map" | "--list" | "--result" | "--toolchain" | "--format"
+            ) {
+                continue;
+            }
+        }
+        let word = util::os_to_string(word)?;
         match word.as_str() {
             "-h" | "--help" => {
                 util::write_stdout(include_str!("eb-test-map-help.txt").as_bytes())
@@ -170,47 +198,28 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
             "--allow-unmapped" => allow_unmapped = true,
             "--include-resumed" => include_resumed = true,
             "--map" | "--list" | "--result" | "--toolchain" | "--format" => {
-                let value = words
-                    .next()
-                    .filter(|v| !v.is_empty())
-                    .ok_or_else(|| format!("{word} needs a value"))?;
+                let value = util::separate_os_value(&mut words, &format!("{word} needs a value"))?;
                 match word.as_str() {
-                    "--map" => assign_once(&mut map, "--map", value)?,
-                    "--list" => assign_once(&mut list, "--list", value)?,
-                    "--result" => assign_once(&mut result, "--result", value)?,
+                    "--map" => assign_once(&mut map, "--map", PathBuf::from(value))?,
+                    "--list" => assign_once(&mut list, "--list", PathBuf::from(value))?,
+                    "--result" => assign_once(&mut result, "--result", PathBuf::from(value))?,
                     "--toolchain" => {
-                        extra_toolchains.insert(value);
+                        extra_toolchains.insert(util::os_to_string(value)?);
                     }
-                    "--format" => assign_once(&mut format, "--format", parse_format(&value)?)?,
+                    "--format" => {
+                        let text = util::os_to_string(value)?;
+                        assign_once(&mut format, "--format", parse_format(&text)?)?
+                    }
                     _ => unreachable!(),
                 }
-            }
-            _ if word.starts_with("--map=") => {
-                let value = need_value("--map", &word["--map=".len()..])?;
-                assign_once(&mut map, "--map", value)?;
-            }
-            _ if word.starts_with("--list=") => {
-                let value = need_value("--list", &word["--list=".len()..])?;
-                assign_once(&mut list, "--list", value)?;
-            }
-            _ if word.starts_with("--result=") => {
-                let value = need_value("--result", &word["--result=".len()..])?;
-                assign_once(&mut result, "--result", value)?;
-            }
-            _ if word.starts_with("--toolchain=") => {
-                extra_toolchains.insert(need_value("--toolchain", &word["--toolchain=".len()..])?);
-            }
-            _ if word.starts_with("--format=") => {
-                let value = need_value("--format", &word["--format=".len()..])?;
-                assign_once(&mut format, "--format", parse_format(&value)?)?;
             }
             _ => return Err(format!("does not know `{word}`")),
         }
     }
     if list.is_none() && result.is_none() {
-        result = eb_pipeline::util::env_value("EB_PIPELINE_RESULT");
+        result = eb_pipeline::util::env_value("EB_PIPELINE_RESULT").map(PathBuf::from);
         if result.is_none() {
-            list = eb_pipeline::util::env_value("EB_PIPELINE_LIST");
+            list = eb_pipeline::util::env_value("EB_PIPELINE_LIST").map(PathBuf::from);
         }
     }
     let format = format.unwrap_or(OutputFormat::Plain);
@@ -243,14 +252,6 @@ fn assign_once<T>(slot: &mut Option<T>, flag: &str, value: T) -> Result<(), Stri
     }
     *slot = Some(value);
     Ok(())
-}
-
-fn need_value(flag: &str, value: &str) -> Result<String, String> {
-    if value.is_empty() {
-        Err(format!("{flag} needs a value"))
-    } else {
-        Ok(value.to_string())
-    }
 }
 
 fn strip_comment(line: &str) -> &str {
@@ -293,40 +294,40 @@ fn easyconfig_paths(args: &Args) -> Result<Vec<String>, String> {
     }
 }
 
-fn package_names_from_list(path: &str) -> Result<Vec<String>, String> {
+fn package_names_from_list(path: &Path) -> Result<Vec<String>, String> {
     easyconfigs_from_list(path)?
         .into_iter()
         .map(|line| package_name(&line))
         .collect()
 }
 
-fn easyconfigs_from_list(path: &str) -> Result<Vec<String>, String> {
-    if easystack::is_easystack(Path::new(path)) {
-        let lines = easystack::read(Path::new(path))?;
+fn easyconfigs_from_list(path: &Path) -> Result<Vec<String>, String> {
+    if easystack::is_easystack(path) {
+        let lines = easystack::read(path)?;
         Ok(lines.into_iter().map(|line| line.easyconfig).collect())
     } else {
-        let list_text = util::read_text_file(Path::new(path))
-            .map_err(|e| format!("cannot read {path}: {e}"))?;
+        let list_text = util::read_text_file(path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         Ok(util::parse_list(&list_text)
-            .map_err(|error| format!("{path}: {}", error.msg))?
+            .map_err(|error| format!("{}: {}", path.display(), error.msg))?
             .into_iter()
             .map(|line| line.easyconfig)
             .collect())
     }
 }
 
-fn package_names_from_result(path: &str, include_resumed: bool) -> Result<Vec<String>, String> {
+fn package_names_from_result(path: &Path, include_resumed: bool) -> Result<Vec<String>, String> {
     easyconfigs_from_result(path, include_resumed)?
         .into_iter()
         .map(|line| package_name(&line))
         .collect()
 }
 
-fn easyconfigs_from_result(path: &str, include_resumed: bool) -> Result<Vec<String>, String> {
+fn easyconfigs_from_result(path: &Path, include_resumed: bool) -> Result<Vec<String>, String> {
     let text =
-        util::read_text_file(Path::new(path)).map_err(|e| format!("cannot read {path}: {e}"))?;
+        util::read_text_file(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let value: Value =
-        serde_json::from_str(&text).map_err(|e| format!("cannot parse {path}: {e}"))?;
+        serde_json::from_str(&text).map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
     let obj = object(&value, "result")?;
     let kind = req_str(obj, "kind", "result")?;
     if kind != "result" {
@@ -388,9 +389,9 @@ fn escape_regex_literal(s: &str) -> String {
     out
 }
 
-fn read_map(path: &str) -> Result<Vec<(String, String)>, String> {
+fn read_map(path: &Path) -> Result<Vec<(String, String)>, String> {
     let text =
-        util::read_text_file(Path::new(path)).map_err(|e| format!("cannot read {path}: {e}"))?;
+        util::read_text_file(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     parse_map(&text)
 }
 
@@ -515,10 +516,9 @@ mod tests {
         let path = dir.path().join("test-map.tsv");
         let raw = CString::new(path.as_os_str().as_bytes()).unwrap();
         assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
-        let shown = path.display().to_string();
         let (send, receive) = std::sync::mpsc::channel();
         let reader = std::thread::spawn(move || {
-            send.send(read_map(&shown)).unwrap();
+            send.send(read_map(&path)).unwrap();
         });
         let error = receive
             .recv_timeout(std::time::Duration::from_secs(1))

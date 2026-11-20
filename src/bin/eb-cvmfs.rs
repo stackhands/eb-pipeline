@@ -6,7 +6,7 @@
 #[path = "../cvmfs_archive.rs"]
 mod archive_manifest;
 
-use std::env;
+use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::os::fd::AsRawFd;
@@ -51,7 +51,7 @@ enum VerifyCommand {
 }
 
 fn main() -> ExitCode {
-    let args = match parse(env::args().skip(1)) {
+    let args = match parse(eb_pipeline::util::os_args().into_iter()) {
         Ok(args) => args,
         Err(message) => {
             eprintln!("eb-cvmfs: {message}");
@@ -96,7 +96,7 @@ fn main() -> ExitCode {
     ExitCode::from(code)
 }
 
-fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
+fn parse(words: impl Iterator<Item = std::ffi::OsString>) -> Result<Args, String> {
     let mut check = false;
     let mut dry_run = false;
     let mut metrics_file = None;
@@ -115,9 +115,107 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
 
     while let Some(word) = words.next() {
         if after_separator {
-            sync.push(word);
+            sync.push(eb_pipeline::util::os_to_string(word)?);
             continue;
         }
+        if let Some((flag, value)) = eb_pipeline::util::split_os_flag_value(word.as_os_str()) {
+            match flag.as_str() {
+                "--metrics-file" => {
+                    if metrics_file.is_some() {
+                        return Err("--metrics-file may be given only once".into());
+                    }
+                    if value.as_os_str().is_empty() {
+                        return Err("--metrics-file PATH must not be empty".into());
+                    }
+                    if value.as_os_str() == OsStr::new("--") {
+                        return Err("--metrics-file requires PATH".into());
+                    }
+                    metrics_file = Some(PathBuf::from(value));
+                    continue;
+                }
+                "--archive-manifest" => {
+                    if archive_manifest.is_some() {
+                        return Err("`--archive-manifest` was given twice".into());
+                    }
+                    if value.as_os_str().is_empty() || value.as_os_str() == OsStr::new("--") {
+                        return Err("`--archive-manifest` needs a path".into());
+                    }
+                    archive_manifest = Some(PathBuf::from(value));
+                    continue;
+                }
+                "--tag" | "--tag-description" | "--verify-cmd" | "--sync-timeout"
+                | "--verify-timeout" | "--publish-timeout" | "--check-timeout" => {
+                    let word = format!("{}={}", flag, eb_pipeline::util::os_to_string(value)?);
+                    // Continue through string-based handling below.
+                    match word.as_str() {
+                        _ if word.starts_with("--tag=") => {
+                            if tag.is_some() {
+                                return Err("`--tag` may be given only once".into());
+                            }
+                            let name = word["--tag=".len()..].to_string();
+                            if name.is_empty() {
+                                return Err("`--tag` must not be empty".into());
+                            }
+                            tag = Some(name);
+                            continue;
+                        }
+                        _ if word.starts_with("--tag-description=") => {
+                            if tag_description.is_some() {
+                                return Err("`--tag-description` may be given only once".into());
+                            }
+                            let text = word["--tag-description=".len()..].to_string();
+                            if text.is_empty() {
+                                return Err("`--tag-description` must not be empty".into());
+                            }
+                            tag_description = Some(text);
+                            continue;
+                        }
+                        _ if word.starts_with("--verify-cmd=") => {
+                            if verify_cmd.is_some() {
+                                return Err("`--verify-cmd` may be given only once".into());
+                            }
+                            verify_cmd = Some(word["--verify-cmd=".len()..].to_string());
+                            continue;
+                        }
+                        _ if word.starts_with("--sync-timeout=") => {
+                            set_timeout(
+                                &mut sync_timeout,
+                                "--sync-timeout",
+                                Some(word["--sync-timeout=".len()..].to_string()),
+                            )?;
+                            continue;
+                        }
+                        _ if word.starts_with("--verify-timeout=") => {
+                            set_timeout(
+                                &mut verify_timeout,
+                                "--verify-timeout",
+                                Some(word["--verify-timeout=".len()..].to_string()),
+                            )?;
+                            continue;
+                        }
+                        _ if word.starts_with("--publish-timeout=") => {
+                            set_timeout(
+                                &mut publish_timeout,
+                                "--publish-timeout",
+                                Some(word["--publish-timeout=".len()..].to_string()),
+                            )?;
+                            continue;
+                        }
+                        _ if word.starts_with("--check-timeout=") => {
+                            set_timeout(
+                                &mut check_timeout,
+                                "--check-timeout",
+                                Some(word["--check-timeout=".len()..].to_string()),
+                            )?;
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        let word = eb_pipeline::util::os_to_string(word)?;
         match word.as_str() {
             "-h" | "--help" => {
                 write_stdout(include_str!("eb-cvmfs-help.txt").as_bytes())?;
@@ -133,10 +231,15 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 if metrics_file.is_some() {
                     return Err("--metrics-file may be given only once".into());
                 }
-                let path =
-                    eb_pipeline::util::separate_value(&mut words, "--metrics-file requires PATH")?;
-                if path.is_empty() {
+                let path = eb_pipeline::util::separate_os_value(
+                    &mut words,
+                    "--metrics-file requires PATH",
+                )?;
+                if path.as_os_str().is_empty() {
                     return Err("--metrics-file PATH must not be empty".into());
+                }
+                if path.as_os_str() == OsStr::new("--") {
+                    return Err("--metrics-file requires PATH".into());
                 }
                 metrics_file = Some(PathBuf::from(path));
             }
@@ -144,7 +247,10 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 if tag.is_some() {
                     return Err("`--tag` may be given only once".into());
                 }
-                let name = eb_pipeline::util::separate_value(&mut words, "`--tag` requires NAME")?;
+                let name = eb_pipeline::util::os_to_string(eb_pipeline::util::separate_os_value(
+                    &mut words,
+                    "`--tag` requires NAME",
+                )?)?;
                 if name.is_empty() {
                     return Err("`--tag` must not be empty".into());
                 }
@@ -154,10 +260,10 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 if tag_description.is_some() {
                     return Err("`--tag-description` may be given only once".into());
                 }
-                let text = eb_pipeline::util::separate_value(
+                let text = eb_pipeline::util::os_to_string(eb_pipeline::util::separate_os_value(
                     &mut words,
                     "`--tag-description` requires TEXT",
-                )?;
+                )?)?;
                 if text.is_empty() {
                     return Err("`--tag-description` must not be empty".into());
                 }
@@ -167,74 +273,55 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 if verify_cmd.is_some() {
                     return Err("`--verify-cmd` may be given only once".into());
                 }
-                verify_cmd = Some(eb_pipeline::util::separate_value(
-                    &mut words,
-                    "`--verify-cmd` requires CMD",
+                verify_cmd = Some(eb_pipeline::util::os_to_string(
+                    eb_pipeline::util::separate_os_value(
+                        &mut words,
+                        "`--verify-cmd` requires CMD",
+                    )?,
                 )?);
             }
             "--sync-timeout" => {
-                let value =
-                    eb_pipeline::util::separate_value(&mut words, "`--sync-timeout` requires SEC")?;
+                let value = eb_pipeline::util::os_to_string(eb_pipeline::util::separate_os_value(
+                    &mut words,
+                    "`--sync-timeout` requires SEC",
+                )?)?;
                 set_timeout(&mut sync_timeout, "--sync-timeout", Some(value))?;
             }
             "--verify-timeout" => {
-                let value = eb_pipeline::util::separate_value(
+                let value = eb_pipeline::util::os_to_string(eb_pipeline::util::separate_os_value(
                     &mut words,
                     "`--verify-timeout` requires SEC",
-                )?;
+                )?)?;
                 set_timeout(&mut verify_timeout, "--verify-timeout", Some(value))?;
             }
             "--publish-timeout" => {
-                let value = eb_pipeline::util::separate_value(
+                let value = eb_pipeline::util::os_to_string(eb_pipeline::util::separate_os_value(
                     &mut words,
                     "`--publish-timeout` requires SEC",
-                )?;
+                )?)?;
                 set_timeout(&mut publish_timeout, "--publish-timeout", Some(value))?;
             }
             "--check-timeout" => {
-                let value = eb_pipeline::util::separate_value(
+                let value = eb_pipeline::util::os_to_string(eb_pipeline::util::separate_os_value(
                     &mut words,
                     "`--check-timeout` requires SEC",
-                )?;
+                )?)?;
                 set_timeout(&mut check_timeout, "--check-timeout", Some(value))?;
             }
             "--archive-manifest" => {
                 if archive_manifest.is_some() {
                     return Err("`--archive-manifest` was given twice".into());
                 }
-                let path = eb_pipeline::util::separate_value(
+                let path = eb_pipeline::util::separate_os_value(
                     &mut words,
                     "`--archive-manifest` needs a path",
                 )?;
-                if path.is_empty() || path == "--" {
+                if path.as_os_str().is_empty() || path.as_os_str() == OsStr::new("--") {
                     return Err("`--archive-manifest` needs a path".into());
                 }
                 archive_manifest = Some(PathBuf::from(path));
             }
             "--" => after_separator = true,
-            _ if word.starts_with("--metrics-file=") => {
-                if metrics_file.is_some() {
-                    return Err("--metrics-file may be given only once".into());
-                }
-                let path = word.trim_start_matches("--metrics-file=");
-                if path.is_empty() {
-                    return Err("--metrics-file PATH must not be empty".into());
-                }
-                if path == "--" {
-                    return Err("--metrics-file requires PATH".into());
-                }
-                metrics_file = Some(PathBuf::from(path));
-            }
-            _ if word.starts_with("--archive-manifest=") => {
-                if archive_manifest.is_some() {
-                    return Err("`--archive-manifest` was given twice".into());
-                }
-                let path = &word["--archive-manifest=".len()..];
-                if path.is_empty() || path == "--" {
-                    return Err("`--archive-manifest` needs a path".into());
-                }
-                archive_manifest = Some(PathBuf::from(path));
-            }
             _ if word.starts_with("--tag=") => {
                 if tag.is_some() {
                     return Err("`--tag` may be given only once".into());

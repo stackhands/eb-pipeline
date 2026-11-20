@@ -6,15 +6,15 @@
 use eb_pipeline::{exit, util};
 use serde_json::{Map, Number, Value};
 use std::collections::BTreeMap;
-use std::env;
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 struct Args {
-    results: Vec<String>,
-    reframe_reports: Vec<String>,
+    results: Vec<PathBuf>,
+    reframe_reports: Vec<PathBuf>,
     properties: BTreeMap<String, String>,
-    out: Option<String>,
+    out: Option<PathBuf>,
     fail_on_failure: bool,
 }
 
@@ -54,35 +54,35 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<ExitCode, String> {
-    let args = parse(env::args().skip(1))?;
+    let args = parse(util::os_args().into_iter())?;
     let inputs: Vec<_> = args
         .results
         .iter()
-        .map(|path| ("--result", Some(Path::new(path))))
+        .map(|path| ("--result", Some(path.as_path())))
         .chain(
             args.reframe_reports
                 .iter()
-                .map(|path| ("--reframe-report", Some(Path::new(path)))),
+                .map(|path| ("--reframe-report", Some(path.as_path()))),
         )
         .collect();
-    util::refuse_output_alias("--out", args.out.as_deref().map(Path::new), &inputs)?;
+    util::refuse_output_alias("--out", args.out.as_deref(), &inputs)?;
     let mut labeled = Vec::with_capacity(args.results.len());
     for path in &args.results {
-        let (_, value) = exit::read_json_output(Path::new(path), "eb-pipeline run", exit::USAGE)
+        let (_, value) = exit::read_json_output(path, "eb-pipeline run", exit::USAGE)
             .map_err(|error| error.msg)?;
-        labeled.push((path.clone(), value));
+        labeled.push((path.display().to_string(), value));
     }
     let mut reframe = Vec::with_capacity(args.reframe_reports.len());
     for path in &args.reframe_reports {
-        let (_, value) = exit::read_json_output(Path::new(path), "ReFrame", exit::USAGE)
-            .map_err(|error| error.msg)?;
-        reframe.push((path.clone(), value));
+        let (_, value) =
+            exit::read_json_output(path, "ReFrame", exit::USAGE).map_err(|error| error.msg)?;
+        reframe.push((path.display().to_string(), value));
     }
     let (report, failures) = render_labeled_counted(&labeled, &reframe, &args.properties)?;
     match args.out.as_deref() {
-        Some(path) if path != "-" => {
-            util::write_atomic(Path::new(path), report.as_bytes())
-                .map_err(|e| format!("cannot write {path}: {e}"))?;
+        Some(path) if path != Path::new("-") => {
+            util::write_atomic(path, report.as_bytes())
+                .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
         }
         _ => {
             util::write_stdout(report.as_bytes())
@@ -96,7 +96,7 @@ fn run() -> Result<ExitCode, String> {
     }
 }
 
-fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
+fn parse(words: impl Iterator<Item = OsString>) -> Result<Args, String> {
     let mut results = Vec::new();
     let mut reframe_reports = Vec::new();
     let mut properties = BTreeMap::new();
@@ -104,6 +104,26 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut fail_on_failure = false;
     let mut words = words.peekable();
     while let Some(word) = words.next() {
+        if let Some((flag, value)) = util::split_os_flag_value(word.as_os_str()) {
+            if matches!(
+                flag.as_str(),
+                "--result" | "--reframe-report" | "--property" | "--out"
+            ) {
+                if value.as_os_str().is_empty() {
+                    return Err(format!("{flag} needs a value"));
+                }
+                assign(
+                    &flag,
+                    value,
+                    &mut results,
+                    &mut reframe_reports,
+                    &mut properties,
+                    &mut out,
+                )?;
+                continue;
+            }
+        }
+        let word = util::os_to_string(word)?;
         match word.as_str() {
             "-h" | "--help" => {
                 util::write_stdout(include_str!("eb-junit-help.txt").as_bytes())
@@ -118,7 +138,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
             }
             "--fail-on-failure" => fail_on_failure = true,
             "--result" | "--reframe-report" | "--property" | "--out" => {
-                let value = util::separate_value(&mut words, &format!("{word} needs a value"))?;
+                let value = util::separate_os_value(&mut words, &format!("{word} needs a value"))?;
                 assign(
                     &word,
                     value,
@@ -128,33 +148,12 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                     &mut out,
                 )?;
             }
-            _ => {
-                if let Some((flag, value)) = word.split_once('=') {
-                    if matches!(
-                        flag,
-                        "--result" | "--reframe-report" | "--property" | "--out"
-                    ) {
-                        if value.is_empty() {
-                            return Err(format!("{flag} needs a value"));
-                        }
-                        assign(
-                            flag,
-                            value.to_string(),
-                            &mut results,
-                            &mut reframe_reports,
-                            &mut properties,
-                            &mut out,
-                        )?;
-                        continue;
-                    }
-                }
-                return Err(format!("does not know `{word}`"));
-            }
+            _ => return Err(format!("does not know `{word}`")),
         }
     }
     if results.is_empty() && reframe_reports.is_empty() {
         if let Some(result) = util::env_value("EB_PIPELINE_RESULT") {
-            results.push(result);
+            results.push(PathBuf::from(result));
         }
     }
     if results.is_empty() && reframe_reports.is_empty() {
@@ -171,16 +170,17 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
 
 fn assign(
     flag: &str,
-    value: String,
-    results: &mut Vec<String>,
-    reframe_reports: &mut Vec<String>,
+    value: OsString,
+    results: &mut Vec<PathBuf>,
+    reframe_reports: &mut Vec<PathBuf>,
     properties: &mut BTreeMap<String, String>,
-    out: &mut Option<String>,
+    out: &mut Option<PathBuf>,
 ) -> Result<(), String> {
     match flag {
-        "--result" => results.push(value),
-        "--reframe-report" => reframe_reports.push(value),
+        "--result" => results.push(PathBuf::from(value)),
+        "--reframe-report" => reframe_reports.push(PathBuf::from(value)),
         "--property" => {
+            let value = util::os_to_string(value)?;
             let (name, value) = value
                 .split_once('=')
                 .ok_or("--property expects NAME=VALUE")?;
@@ -193,7 +193,7 @@ fn assign(
             if out.is_some() {
                 return Err("--out given twice".into());
             }
-            *out = Some(value);
+            *out = Some(PathBuf::from(value));
         }
         _ => unreachable!(),
     }
