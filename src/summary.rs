@@ -19,6 +19,39 @@ pub const JSON: &str = "summary.json";
 pub const HTML: &str = "summary.html";
 const LOCK: &str = ".summary.lock";
 
+#[cfg(test)]
+mod record_test_hook {
+    use std::sync::{mpsc::Sender, Mutex, OnceLock};
+
+    static LOCK_ACQUIRED_SENDER: OnceLock<Mutex<Option<Sender<()>>>> = OnceLock::new();
+
+    pub(super) fn install(sender: Sender<()>) {
+        *LOCK_ACQUIRED_SENDER
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .expect("lock acquired sender mutex poisoned") = Some(sender);
+    }
+
+    pub(super) fn clear() {
+        if let Some(slot) = LOCK_ACQUIRED_SENDER.get() {
+            *slot.lock().expect("lock acquired sender mutex poisoned") = None;
+        }
+    }
+
+    pub(super) fn notify_lock_acquired() {
+        let Some(slot) = LOCK_ACQUIRED_SENDER.get() else {
+            return;
+        };
+        if let Some(sender) = slot
+            .lock()
+            .expect("lock acquired sender mutex poisoned")
+            .as_ref()
+        {
+            let _ = sender.send(());
+        }
+    }
+}
+
 /// `summary.json`: what each target that ran in a run directory came to.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Summary {
@@ -261,6 +294,8 @@ pub fn record(site: &str, entry: TargetSummary, run_dir: &Path) -> Result<Summar
         .open(&lock_path)
         .map_err(|e| shown(&lock_path, e))?;
     lock.lock().map_err(|e| shown(&lock_path, e))?;
+    #[cfg(test)]
+    record_test_hook::notify_lock_acquired();
     let path = run_dir.join(JSON);
     let earlier = match std::fs::read_to_string(&path) {
         Ok(t) => match serde_json::from_str::<Summary>(&t) {
@@ -709,6 +744,8 @@ pub fn html(s: &Summary, run_dir: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
 
     fn summary(easyconfig: &str, reason: &str) -> Summary {
         Summary {
@@ -752,6 +789,70 @@ mod tests {
                 watch: None,
             }],
         }
+    }
+
+    fn target(name: &str, code: i32) -> TargetSummary {
+        TargetSummary {
+            name: name.into(),
+            command: "run".into(),
+            build_type: "production".into(),
+            run_id: "r".into(),
+            list: "/srv/list.txt".into(),
+            log_dir: format!("/srv/logs/20260101_000000/{name}"),
+            result: None,
+            started_at: "2026-01-01T00:00:00+00:00".into(),
+            ended_at: "2026-01-01T00:00:01+00:00".into(),
+            duration_seconds: 1.0,
+            exit_code: code,
+            status: status_of(code).into(),
+            message: None,
+            interrupted_by: None,
+            counts: BTreeMap::new(),
+            phases: vec![],
+            packages: vec![],
+            deselected: vec![],
+            watch: None,
+        }
+    }
+
+    #[test]
+    fn record_blocks_until_the_lock_is_released() {
+        let dir = tempfile::tempdir().unwrap();
+        let run_dir = dir.path().join("20260101_000000");
+        std::fs::create_dir_all(&run_dir).unwrap();
+
+        let lock_path = run_dir.join(LOCK);
+        let held = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        held.lock().unwrap();
+
+        let (acquired_tx, acquired_rx) = mpsc::channel();
+        record_test_hook::install(acquired_tx);
+        let run_dir_bg = run_dir.clone();
+        let writer =
+            std::thread::spawn(move || record("t", target("cpu", exit::FAILED), &run_dir_bg));
+
+        assert!(matches!(
+            acquired_rx.recv_timeout(Duration::from_millis(200)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        assert!(
+            !run_dir.join(JSON).exists(),
+            "summary appeared while lock was held"
+        );
+
+        drop(held);
+        acquired_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let written = writer.join().unwrap().unwrap();
+        record_test_hook::clear();
+
+        assert_eq!(written.targets.len(), 1);
+        assert!(run_dir.join(JSON).is_file());
+        assert!(run_dir.join(HTML).is_file());
     }
 
     #[test]
