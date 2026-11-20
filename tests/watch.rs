@@ -5,8 +5,9 @@
 mod common;
 
 use common::*;
+use serde_json::Value;
 use std::process::{Command, Output, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const WATCH: &str = "[watch]\neasyconfigs = [\"@ROOT@/robot\"]\n";
 
@@ -131,6 +132,82 @@ fn watch(t: &T, stamp: &str, extra: &[&str], vars: &[(&str, &str)]) -> Output {
     ];
     args.extend(extra);
     eb_pipeline(t, &args, vars)
+}
+
+#[test]
+fn a_signal_while_watch_waits_for_the_summary_lock_preserves_signal_exit() {
+    let t = built("");
+    change(&t);
+    let vars = eessi_vars(&t, "2023.06");
+    let lock = t.root().join(format!("logs/{LATER}/.summary.lock"));
+    std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
+    let held = hold_lock(&lock, false);
+    let lock = std::fs::canonicalize(&lock).unwrap();
+    let result = t.root().join("watch-result.json");
+    let site = t.site.display().to_string();
+    let result_arg = result.display().to_string();
+    let path = format!(
+        "{}:{}",
+        t.stubs.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut command = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"));
+    without_host_eessi(&mut command)
+        .args([
+            "watch",
+            "--site",
+            &site,
+            "--target",
+            "cpu",
+            "--build-type",
+            "production",
+            "--log-stamp",
+            LATER,
+            "--result",
+            &result_arg,
+        ])
+        .env("PATH", path)
+        .env("STUB_DIR", t.root())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, value) in &vars {
+        command.env(key, value);
+    }
+    let mut child = command.sync_spawn();
+    let pid = child.id();
+    let fds = format!("/proc/{pid}/fd");
+    let opened = || {
+        std::fs::read_dir(&fds)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|entry| std::fs::read_link(entry.path()).is_ok_and(|path| path == lock))
+    };
+    let start = Instant::now();
+    while !opened() {
+        assert!(child.try_wait().unwrap().is_none(), "watch ended early");
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "watch never opened .summary.lock"
+        );
+        std::thread::yield_now();
+    }
+    // SAFETY: the pid is the child this test started.
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGTERM);
+    }
+    drop(held);
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(143),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: Value = serde_json::from_str(&std::fs::read_to_string(&result).unwrap()).unwrap();
+    assert_eq!(result["interrupted_by"], "SIGTERM", "{result}");
+    assert_eq!(result["exit_code"], 143, "{result}");
 }
 
 const LATER: &str = "20260102_000000";
