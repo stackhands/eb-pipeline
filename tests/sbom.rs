@@ -80,6 +80,22 @@ fn an_sbom_command_that_fails_fails_the_run_and_leaves_no_document() {
 }
 
 #[test]
+fn an_sbom_command_status_outside_the_contract_fails_the_run_with_1() {
+    for status in ["2", "3", "75", "78"] {
+        let t = setup("[sbom]\nlock = \"@ROOT@/stack.lock.json\"\n");
+        let o = run(&t, "cpu", STAMP, LIST, &[("STUB_SBOM_FAIL", status)]);
+        assert_eq!(code(&o), 1, "sbom exit {status}: {}", stderr(&o));
+        assert!(
+            stderr(&o).contains(&format!("exited {status}")),
+            "sbom exit {status}: {}",
+            stderr(&o)
+        );
+        assert!(!t.run_dir(STAMP).join("sbom.cdx.json").exists());
+        assert_eq!(t.summary(STAMP)["exit_code"], 1, "sbom exit {status}");
+    }
+}
+
+#[test]
 fn a_success_without_a_new_document_does_not_accept_a_stale_one() {
     let t = setup("[sbom]\nlock = \"@ROOT@/stack.lock.json\"\n");
     let document = t.run_dir(STAMP).join("sbom.cdx.json");
