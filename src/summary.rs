@@ -309,7 +309,7 @@ pub fn record(site: &str, entry: TargetSummary, run_dir: &Path) -> Result<Summar
     record_test_hook::notify_before_lock(&lock_path);
     lock.lock().map_err(|e| shown(&lock_path, e))?;
     let path = run_dir.join(JSON);
-    let earlier = match std::fs::read_to_string(&path) {
+    let earlier = match util::read_text_file(&path) {
         Ok(t) => match serde_json::from_str::<Summary>(&t) {
             Ok(summary) if summary.schema_version == SCHEMA_VERSION => Some(summary),
             Ok(_) => None,
@@ -318,7 +318,7 @@ pub fn record(site: &str, entry: TargetSummary, run_dir: &Path) -> Result<Summar
             }
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(shown(&path, e)),
+        Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
     };
     let mut targets = earlier.map(|s| s.targets).unwrap_or_default();
     targets.retain(|t| t.name != entry.name);
@@ -355,7 +355,8 @@ fn write_new(path: &Path, text: &str) -> Result<(), String> {
 /// Read a run directory's summary.
 pub fn read(run_dir: &Path) -> Result<Summary, String> {
     let path = run_dir.join(JSON);
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let text =
+        util::read_text_file(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let s: Summary = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
     if s.schema_version != SCHEMA_VERSION {
         return Err(format!(
