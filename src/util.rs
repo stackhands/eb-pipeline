@@ -817,16 +817,19 @@ mod tests {
     #[test]
     fn atomic_write_leaves_foreign_host_temps_alone() {
         let _guard = atomic_test_guard();
+        let Some(local) = reap_safe_test_identity() else {
+            return;
+        };
+        let _override = install_identity_override(local.clone());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("result.json");
         std::fs::write(&path, b"old bytes\n").unwrap();
 
-        let local = local_writer_identity();
         let foreign_pid = spawned_and_reaped_pid();
         let foreign = dir.path().join(format!(
             ".result.json.{}.{}.{}.{}.tmp",
             "other-host",
-            local.boot_id.clone().unwrap_or_else(|| "other-boot".into()),
+            local.boot_id.clone().unwrap(),
             foreign_pid,
             1,
         ));
@@ -856,13 +859,11 @@ mod tests {
     #[test]
     fn atomic_write_reaps_same_host_temps_from_earlier_boot() {
         let _guard = atomic_test_guard();
-        let local = local_writer_identity();
-        if !local.host_reap_safe {
-            return;
-        }
-        let Some(local_boot) = local.boot_id.clone() else {
+        let Some(local) = reap_safe_test_identity() else {
             return;
         };
+        let _override = install_identity_override(local.clone());
+        let local_boot = local.boot_id.clone().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("result.json");
         std::fs::write(&path, b"old bytes\n").unwrap();
@@ -889,11 +890,12 @@ mod tests {
     #[test]
     fn atomic_write_does_not_reap_when_boot_id_is_unavailable() {
         let _guard = atomic_test_guard();
-        let local = local_writer_identity();
+        let Some(local) = reap_safe_test_identity() else {
+            return;
+        };
         let _override = install_identity_override(WriterIdentity {
-            host: local.host.clone(),
-            host_reap_safe: local.host_reap_safe,
             boot_id: None,
+            ..local.clone()
         });
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("result.json");
@@ -943,13 +945,11 @@ mod tests {
     #[test]
     fn atomic_write_keeps_same_boot_temps_for_live_pids() {
         let _guard = atomic_test_guard();
-        let local = local_writer_identity();
-        if !local.host_reap_safe {
-            return;
-        }
-        let Some(local_boot) = local.boot_id.clone() else {
+        let Some(local) = reap_safe_test_identity() else {
             return;
         };
+        let _override = install_identity_override(local.clone());
+        let local_boot = local.boot_id.clone().unwrap();
         let mut child = Command::new("sh")
             .arg("-c")
             .arg("sleep 30")
@@ -980,6 +980,10 @@ mod tests {
     #[test]
     fn atomic_write_recovers_after_kills_at_write_steps() {
         let _guard = atomic_test_guard();
+        let Some(identity) = reap_safe_test_identity() else {
+            return;
+        };
+        let _override = install_identity_override(identity);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("result.json");
         let new_bytes = b"complete new bytes\n";
@@ -1117,6 +1121,7 @@ mod tests {
             .arg("--exact")
             .arg("util::tests::atomic_write_crash_helper")
             .env("EB_PIPELINE_TEST_ATOMIC_HELPER", "1")
+            .env("HOSTNAME", REAP_SAFE_TEST_HOST)
             .env("EB_PIPELINE_TEST_ATOMIC_PATH", path)
             .env(
                 "EB_PIPELINE_TEST_ATOMIC_BYTES",
