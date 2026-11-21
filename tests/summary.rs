@@ -232,3 +232,30 @@ fn summary_record_refuses_a_symbolic_link_output_path() {
     assert!(error.contains("output path is a symbolic link"), "{error}");
     assert!(run_dir.join(JSON).is_symlink());
 }
+
+#[test]
+fn summary_record_refuses_a_fifo_summary_promptly() {
+    let dir = tempfile::tempdir().unwrap();
+    let run_dir = dir.path().join("20260101_000000");
+    std::fs::create_dir_all(&run_dir).unwrap();
+    let summary = run_dir.join(JSON);
+    let raw = std::ffi::CString::new(std::os::unix::ffi::OsStrExt::as_bytes(summary.as_os_str()))
+        .unwrap();
+    assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+
+    let (send, receive) = std::sync::mpsc::channel();
+    let recorder = std::thread::spawn({
+        let run_dir = run_dir.clone();
+        move || send.send(record("t", target("cpu", 1), &run_dir)).unwrap()
+    });
+    let error = receive
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("record blocked on a FIFO summary")
+        .unwrap_err();
+    recorder.join().unwrap();
+
+    assert_eq!(
+        error,
+        format!("cannot read {}: not a regular file", summary.display())
+    );
+}

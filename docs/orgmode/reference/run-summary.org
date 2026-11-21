@@ -71,7 +71,7 @@ eb-pipeline run --site site.toml --list example.list --target zen4 --build-type 
 #+begin_example
 INFO [licences] zen4: not configured
 ...
-WARN [summary] zen4: no summary written: $WORK/site/logs/20261117_100000/summary.json: Is a directory (os error 21)
+WARN [summary] zen4: no summary written: cannot read $WORK/site/logs/20261117_100000/summary.json: Is a directory (os error 21)
 exit 0
 #+end_example
 
