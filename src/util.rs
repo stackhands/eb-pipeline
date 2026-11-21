@@ -44,6 +44,11 @@ pub fn write_stdout(bytes: &[u8]) -> std::io::Result<()> {
     }
 }
 
+/// Write bytes to standard output or format a user-facing error message.
+pub fn write_stdout_checked(bytes: &[u8]) -> Result<(), String> {
+    write_stdout(bytes).map_err(|e| format!("cannot write stdout: {e}"))
+}
+
 /// A non-empty Unicode value from the process environment.
 pub fn env_value(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.is_empty())

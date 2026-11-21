@@ -763,6 +763,107 @@ fn a_new_eessi_version_is_refused_rather_than_mixed_into_the_old_stack() {
 }
 
 #[test]
+fn watch_dry_run_names_stdout_when_it_cannot_print_refusal_details() {
+    let t = built("");
+    let vars = eessi_vars(&t, "2025.06");
+    let site = t.site.display().to_string();
+    let path = format!(
+        "{}:{}",
+        t.stubs.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let stdout_full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"));
+    without_host_eessi(&mut command)
+        .args([
+            "watch",
+            "--site",
+            &site,
+            "--target",
+            "cpu",
+            "--build-type",
+            "production",
+            "--log-stamp",
+            LATER,
+            "--dry-run",
+        ])
+        .env("PATH", path)
+        .env("STUB_DIR", t.root())
+        .env_remove("EB_PIPELINE_LOG_STAMP")
+        .env_remove("EB_PIPELINE_RUN_ID")
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout_full))
+        .stderr(Stdio::piped());
+    for (key, value) in &with(&vars) {
+        command.env(key, value);
+    }
+    let output = command.output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert!(err.contains("cannot write stdout"), "{err}");
+    assert!(!t
+        .root()
+        .join("scratch/eb-pipeline-watch/cpu")
+        .join(LATER)
+        .join("plan")
+        .exists());
+}
+
+#[test]
+fn watch_adopt_dry_run_removes_work_when_stdout_cannot_be_written() {
+    let t = built("");
+    let vars = eessi_vars(&t, "2025.06");
+    let site = t.site.display().to_string();
+    let path = format!(
+        "{}:{}",
+        t.stubs.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let stdout_full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"));
+    without_host_eessi(&mut command)
+        .args([
+            "watch",
+            "--site",
+            &site,
+            "--target",
+            "cpu",
+            "--build-type",
+            "production",
+            "--log-stamp",
+            LATER,
+            "--adopt",
+            "--dry-run",
+        ])
+        .env("PATH", path)
+        .env("STUB_DIR", t.root())
+        .env_remove("EB_PIPELINE_LOG_STAMP")
+        .env_remove("EB_PIPELINE_RUN_ID")
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout_full))
+        .stderr(Stdio::piped());
+    for (key, value) in &with(&vars) {
+        command.env(key, value);
+    }
+    let output = command.output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert!(err.contains("cannot write stdout"), "{err}");
+    assert!(!t
+        .root()
+        .join("scratch/eb-pipeline-watch/cpu")
+        .join(LATER)
+        .join("plan")
+        .exists());
+}
+
+#[test]
 fn without_eb_stack_watch_says_what_to_rebuild_and_refuses_to_guess_the_rest() {
     let t = built("");
     let vars = eessi_vars(&t, "2023.06");
