@@ -58,7 +58,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(msg) => {
-            eprintln!("eb-test-map: {msg}");
+            util::write_stderr_line(&format!("eb-test-map: {msg}"));
             ExitCode::from(2)
         }
     }
@@ -98,16 +98,19 @@ fn text_names(args: &Args) -> Result<ExitCode, String> {
     }
     if !missing.is_empty() && !args.allow_unmapped {
         for name in &missing {
-            eprintln!("eb-test-map: {name} has no test in {}", map_path.display());
+            util::write_stderr_line(&format!(
+                "eb-test-map: {name} has no test in {}",
+                map_path.display()
+            ));
         }
         return Ok(ExitCode::from(2));
     }
     if args.allow_unmapped {
         for name in &missing {
-            eprintln!(
+            util::write_stderr_line(&format!(
                 "eb-test-map: {name} has no test in {}; allowed",
                 map_path.display()
-            );
+            ));
         }
     }
     let mut out_text = String::new();

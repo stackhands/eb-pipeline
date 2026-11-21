@@ -1568,3 +1568,119 @@ fn value_options_do_not_consume_the_next_long_option() {
     }
     assert!(!fixture.dir.path().join("--check").exists());
 }
+
+#[derive(Clone, Copy, Debug)]
+enum StderrFault {
+    Full,
+    ClosedPipe,
+}
+
+fn faulty_stderr(fault: StderrFault) -> std::process::Stdio {
+    match fault {
+        StderrFault::Full => std::process::Stdio::from(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open("/dev/full")
+                .unwrap(),
+        ),
+        StderrFault::ClosedPipe => {
+            let (reader, writer) = std::io::pipe().unwrap();
+            drop(reader);
+            std::process::Stdio::from(writer)
+        }
+    }
+}
+
+type Scenario = (&'static str, i32, fn(&Fixture) -> Command);
+
+/// Every place eb-cvmfs reports on stderr, with the exit status it must keep.
+fn diagnostic_scenarios() -> Vec<Scenario> {
+    vec![
+        ("an unknown option", 2, |_| {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"));
+            command.arg("--no-such-option");
+            command
+        }),
+        ("metrics that cannot be prepared", 2, |fixture| {
+            let metrics = fixture.dir.path().join("missing").join("cvmfs.prom");
+            fixture.command_with_metrics(Some(&metrics))
+        }),
+        ("a missing cvmfs_server", 2, |fixture| {
+            let empty = fixture.dir.path().join("empty");
+            std::fs::create_dir(&empty).unwrap();
+            let mut command = fixture.command();
+            command.env("PATH", empty);
+            command
+        }),
+        ("metrics that cannot be written", 23, |fixture| {
+            let metrics = fixture.dir.path().join("cvmfs.prom");
+            std::fs::create_dir(&metrics).unwrap();
+            let mut command = fixture.command_with_metrics(Some(&metrics));
+            command.env("SYNC_EXIT", "23");
+            command
+        }),
+        ("a sync command that cannot start", 127, |fixture| {
+            let missing = fixture.dir.path().join("missing-sync");
+            let mut command = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"));
+            command
+                .env("PATH", &fixture.bin)
+                .env("CALLS", &fixture.calls)
+                .env("REPOSITORY", "repo.example")
+                .args(["repo.example", "--"])
+                .arg(missing);
+            command
+        }),
+        ("a verification command that cannot start", 127, |fixture| {
+            let missing = fixture.dir.path().join("missing-verify");
+            fixture.command_with_verify(Some(&missing.display().to_string()))
+        }),
+        ("a sync timeout", 124, |fixture| {
+            let mut command =
+                fixture.command_with_options(None, None, None, &["--sync-timeout", "1"]);
+            command.env("SYNC_DELAY", "30");
+            command
+        }),
+        ("an abort that fails", 23, |fixture| {
+            let mut command = fixture.command();
+            command.env("SYNC_EXIT", "23").env("STUB_ABORT_EXIT", "5");
+            command
+        }),
+        ("an abort that cannot start", 23, |fixture| {
+            let mut command = fixture.command();
+            command.env("SYNC_EXIT", "23").env("REMOVE_SERVER", "1");
+            command
+        }),
+    ]
+}
+
+#[test]
+fn diagnostics_keep_the_exit_status_when_stderr_is_unwritable() {
+    let mut failures = Vec::new();
+    for (name, expected, build) in diagnostic_scenarios() {
+        let fixture = Fixture::new();
+        let output = build(&fixture).sync_output();
+        if code(&output) != expected || stderr(&output).is_empty() {
+            failures.push(format!(
+                "{name}: exited {} with stderr {:?}, expected {expected} and a diagnostic",
+                code(&output),
+                stderr(&output)
+            ));
+            continue;
+        }
+        for fault in [StderrFault::Full, StderrFault::ClosedPipe] {
+            let fixture = Fixture::new();
+            let output = build(&fixture).stderr(faulty_stderr(fault)).sync_output();
+            if code(&output) != expected {
+                failures.push(format!(
+                    "{name} with stderr {fault:?}: exited {}, expected {expected}",
+                    code(&output)
+                ));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "an unwritable stderr changed an exit status:\n{}",
+        failures.join("\n")
+    );
+}
