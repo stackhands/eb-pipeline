@@ -438,13 +438,22 @@ fn current_pid_namespace() -> Option<u64> {
         .filter(|&ino| ino > 0)
 }
 
-fn parse_proc_stat_start_time(stat: &str) -> Option<u64> {
+/// Parse the process state (field 3) and start time in clock ticks (field 22)
+/// from `/proc/<pid>/stat`.
+pub fn parse_proc_stat(stat: &str) -> Option<(char, u64)> {
     let after_comm = stat.rsplit_once(')')?.1;
-    after_comm
-        .split_ascii_whitespace()
-        .nth(19)?
-        .parse::<u64>()
-        .ok()
+    let mut fields = after_comm.split_ascii_whitespace();
+    let state = fields.next()?;
+    if state.len() != 1 {
+        return None;
+    }
+    let state = state.chars().next()?;
+    let start_time = fields.nth(18)?.parse::<u64>().ok()?;
+    Some((state, start_time))
+}
+
+fn parse_proc_stat_start_time(stat: &str) -> Option<u64> {
+    parse_proc_stat(stat).map(|(_, start_time)| start_time)
 }
 
 fn process_start_time(pid: libc::pid_t) -> Option<u64> {
@@ -1868,6 +1877,18 @@ mod tests {
         assert_eq!(parse_proc_stat_start_time(stat), Some(987_654));
         assert_eq!(parse_proc_stat_start_time("42 (broken"), None);
         assert_eq!(parse_proc_stat_start_time("42 (short) S 1 2"), None);
+    }
+
+    #[test]
+    fn parse_proc_stat_extracts_state_and_start_time() {
+        let live = "42 (my (weird) proc) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 987654 999";
+        let zombie = "42 (sleep) Z 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 987654 999";
+        let bad_state = "42 (sleep) ZZ 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 987654 999";
+        assert_eq!(parse_proc_stat(live), Some(('S', 987_654)));
+        assert_eq!(parse_proc_stat(zombie), Some(('Z', 987_654)));
+        assert_eq!(parse_proc_stat(bad_state), None);
+        assert_eq!(parse_proc_stat("42 (broken"), None);
+        assert_eq!(parse_proc_stat("42 (short) S 1 2"), None);
     }
 
     #[test]
