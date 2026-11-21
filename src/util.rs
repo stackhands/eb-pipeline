@@ -193,7 +193,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         ));
     }
     let destination = path.to_path_buf();
-    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    let parent = atomic_parent(&destination);
     let existing_mode = match std::fs::metadata(&destination) {
         Ok(metadata) if metadata.is_file() => Some(metadata.permissions().mode() & 0o7777),
         Ok(_) => None,
@@ -247,12 +247,23 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         }
         #[cfg(test)]
         maybe_kill_atomic_writer("after-rename-before-dir-sync");
+        // Best effort: the rename is done, and not every filesystem can sync
+        // a directory.
+        let _ = std::fs::File::open(parent).and_then(|dir| dir.sync_all());
         return Ok(());
     }
     Err(std::io::Error::new(
         std::io::ErrorKind::AlreadyExists,
         "cannot allocate a temporary output file",
     ))
+}
+
+/// The directory holding `destination`; a bare file name lives in `.`.
+fn atomic_parent(destination: &Path) -> &Path {
+    match destination.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    }
 }
 
 #[cfg(not(test))]
@@ -342,11 +353,10 @@ fn local_writer_identity() -> WriterIdentity {
 
 fn detect_writer_identity() -> WriterIdentity {
     // Host from HOSTNAME or /proc hostname; boot id from Linux procfs.
-    let raw_host = std::env::var("HOSTNAME")
-        .ok()
-        .or_else(|| std::fs::read_to_string("/proc/sys/kernel/hostname").ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+    let raw_host = select_raw_host(
+        std::env::var("HOSTNAME").ok(),
+        std::fs::read_to_string("/proc/sys/kernel/hostname").ok(),
+    );
     let (host, host_reap_safe) = host_tag_and_reap_safety(raw_host.as_deref());
     // /proc/sys/kernel/random/boot_id names one kernel boot instance.
     let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
@@ -356,8 +366,25 @@ fn detect_writer_identity() -> WriterIdentity {
     WriterIdentity {
         host,
         host_reap_safe,
-        boot_id: boot_id.map(|boot| sanitize_tag_component(&boot).value),
+        boot_id: boot_id.and_then(|boot| boot_tag(&boot)),
     }
+}
+
+/// The first non-blank host name, so an empty `HOSTNAME` falls back to the
+/// kernel's name.
+fn select_raw_host(env_host: Option<String>, kernel_host: Option<String>) -> Option<String> {
+    [env_host, kernel_host]
+        .into_iter()
+        .flatten()
+        .map(|host| host.trim().to_string())
+        .find(|host| !host.is_empty())
+}
+
+/// A boot id usable in a temporary file name; `None` when it would need
+/// rewriting, since a rewritten id no longer names one boot.
+fn boot_tag(boot: &str) -> Option<String> {
+    let tag = sanitize_tag_component(boot);
+    (!tag.used_fallback).then_some(tag.value)
 }
 
 fn host_tag_and_reap_safety(raw_host: Option<&str>) -> (String, bool) {
@@ -431,8 +458,11 @@ fn remove_stale_atomic_temporary_files(parent: &Path, name: &str, local_identity
         Err(_) => return,
     };
     for entry in entries.filter_map(Result::ok) {
-        let shown = entry.file_name().to_string_lossy().to_string();
-        let Some((host, boot, pid, _attempt)) = parse_atomic_temporary_name(&shown, name) else {
+        let file_name = entry.file_name();
+        let Some(shown) = file_name.to_str() else {
+            continue;
+        };
+        let Some((host, boot, pid, _attempt)) = parse_atomic_temporary_name(shown, name) else {
             continue;
         };
         if host != local_identity.host
@@ -1079,6 +1109,40 @@ mod tests {
         for sibling in siblings {
             assert!(dir.path().join(sibling).exists(), "{sibling} was removed");
         }
+    }
+
+    #[test]
+    fn atomic_parent_of_a_bare_file_name_is_the_current_directory() {
+        assert_eq!(atomic_parent(Path::new("result.json")), Path::new("."));
+        assert_eq!(atomic_parent(Path::new("./result.json")), Path::new("."));
+        assert_eq!(
+            atomic_parent(Path::new("out/result.json")),
+            Path::new("out")
+        );
+        assert_eq!(atomic_parent(Path::new("/result.json")), Path::new("/"));
+    }
+
+    #[test]
+    fn raw_host_skips_blank_names() {
+        let some = |text: &str| Some(text.to_string());
+        assert_eq!(select_raw_host(some("a"), some("b")), some("a"));
+        assert_eq!(select_raw_host(some(" a \n"), some("b")), some("a"));
+        assert_eq!(select_raw_host(some(""), some("b\n")), some("b"));
+        assert_eq!(select_raw_host(some(" \t"), some("b")), some("b"));
+        assert_eq!(select_raw_host(None, some("b")), some("b"));
+        assert_eq!(select_raw_host(some(""), some("\n")), None);
+        assert_eq!(select_raw_host(None, None), None);
+    }
+
+    #[test]
+    fn boot_tag_fails_closed_when_the_id_needs_rewriting() {
+        assert_eq!(
+            boot_tag("0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9").as_deref(),
+            Some("0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9")
+        );
+        assert_eq!(boot_tag("boot.id"), None);
+        assert_eq!(boot_tag("boot id"), None);
+        assert_eq!(boot_tag(""), None);
     }
 
     #[test]
