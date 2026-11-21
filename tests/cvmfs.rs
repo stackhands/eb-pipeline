@@ -432,17 +432,18 @@ fn a_shared_metrics_file_serializes_whole_invocations() {
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join(".cvmfs.prom.lock");
-    assert!(
-        wait_for_fd_target(
-            second.id(),
-            &std::fs::canonicalize(&lock_path).unwrap_or(lock_path),
-            std::time::Duration::from_secs(10),
-        ),
-        "second invocation never reached the metrics lock path"
+    let reached_lock = wait_for_fd_target(
+        second.id(),
+        &std::fs::canonicalize(&lock_path).unwrap_or(lock_path),
+        std::time::Duration::from_secs(10),
     );
     let second_status = second.try_wait();
     let calls_while_locked = fixture.calls();
     std::fs::write(release, b"go\n").unwrap();
+    assert!(
+        reached_lock,
+        "second invocation never reached the metrics lock path"
+    );
     assert!(
         second_status.unwrap().is_none(),
         "second invocation finished while the first held the metrics lock"
