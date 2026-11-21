@@ -453,14 +453,20 @@ fn parse_atomic_temporary_name(
     output_name: &str,
 ) -> Option<(String, String, libc::pid_t, u32)> {
     let prefix = format!(".{output_name}.");
-    if !file_name.starts_with(&prefix) || !file_name.ends_with(".tmp") {
+    if file_name.len() < prefix.len() + ".tmp".len() {
         return None;
     }
-    let middle = &file_name[prefix.len()..file_name.len() - ".tmp".len()];
+    let middle = file_name
+        .strip_prefix(prefix.as_str())?
+        .strip_suffix(".tmp")?;
     let mut fields = middle.split('.');
     let host = fields.next()?.to_string();
     let boot = fields.next()?.to_string();
-    let pid = fields.next()?.parse::<libc::pid_t>().ok()?;
+    let pid = fields
+        .next()?
+        .parse::<libc::pid_t>()
+        .ok()
+        .filter(|pid| *pid > 0)?;
     let attempt = fields.next()?.parse::<u32>().ok()?;
     if host.is_empty() || boot.is_empty() || fields.next().is_some() {
         return None;
@@ -709,6 +715,23 @@ mod tests {
     fn install_identity_override(identity: WriterIdentity) -> IdentityOverrideGuard {
         writer_identity_test_hook::install(identity);
         IdentityOverrideGuard
+    }
+
+    const REAP_SAFE_TEST_HOST: &str = "atomic-test-host";
+
+    /// A writer identity that may reap, whatever `HOSTNAME` the host has.
+    /// `None` when the kernel offers no boot id to pair with the host tag.
+    fn reap_safe_test_identity() -> Option<WriterIdentity> {
+        let boot_id = detect_writer_identity().boot_id?;
+        assert_eq!(
+            host_tag_and_reap_safety(Some(REAP_SAFE_TEST_HOST)),
+            (REAP_SAFE_TEST_HOST.to_string(), true)
+        );
+        Some(WriterIdentity {
+            host: REAP_SAFE_TEST_HOST.into(),
+            host_reap_safe: true,
+            boot_id: Some(boot_id),
+        })
     }
 
     #[test]
@@ -983,6 +1006,74 @@ mod tests {
                 "{stage}: stale local temp files remained: {:?}",
                 temporary_atomic_siblings(&path)
             );
+        }
+    }
+
+    #[test]
+    fn atomic_temporary_name_parser_accepts_only_complete_tagged_names() {
+        let parsed =
+            parse_atomic_temporary_name(".result.json.node-1.boot-1.42.7.tmp", "result.json");
+        assert_eq!(
+            parsed,
+            Some(("node-1".to_string(), "boot-1".to_string(), 42, 7))
+        );
+
+        for (file_name, output_name) in [
+            (".cpu.json.tmp", "cpu.json"),
+            (".result.json.tmp", "result.json"),
+            (".cvmfs.prom.tmp", "cvmfs.prom"),
+            (".result.json..tmp", "result.json"),
+            (".result.json.", "result.json"),
+            (".result.json", "result.json"),
+            (".result.json.tmp.tmp", "result.json"),
+            (".result.json.1.2.tmp", "result.json"),
+            (".result.json.node-1.boot-1.42.tmp", "result.json"),
+            (".result.json.node-1.boot-1.42.7.8.tmp", "result.json"),
+            (".result.json..boot-1.42.7.tmp", "result.json"),
+            (".result.json.node-1..42.7.tmp", "result.json"),
+            (".result.json.node-1.boot-1.0.7.tmp", "result.json"),
+            (".result.json.node-1.boot-1.-1.7.tmp", "result.json"),
+            (".result.json.node-1.boot-1.42.7.tmp", "other.json"),
+            ("", "result.json"),
+            ("tmp", ""),
+            (".tmp", ""),
+            ("..tmp", ""),
+        ] {
+            assert_eq!(
+                parse_atomic_temporary_name(file_name, output_name),
+                None,
+                "{file_name:?} for {output_name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn atomic_write_ignores_siblings_with_short_or_malformed_temp_names() {
+        let _guard = atomic_test_guard();
+        let Some(identity) = reap_safe_test_identity() else {
+            return;
+        };
+        let _override = install_identity_override(identity);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("result.json");
+        std::fs::write(&path, b"old bytes\n").unwrap();
+        let siblings = [
+            ".result.json.tmp",
+            ".result.json..tmp",
+            ".result.json.tmp.tmp",
+            ".result.json.1.2.tmp",
+            ".result.json.atomic-test-host.boot.0.1.tmp",
+            ".result.json.atomic-test-host.boot.-1.1.tmp",
+        ];
+        for sibling in siblings {
+            std::fs::write(dir.path().join(sibling), b"unrelated\n").unwrap();
+        }
+
+        write_atomic(&path, b"new bytes\n").unwrap();
+
+        assert_eq!(std::fs::read(&path).unwrap(), b"new bytes\n");
+        for sibling in siblings {
+            assert!(dir.path().join(sibling).exists(), "{sibling} was removed");
         }
     }
 

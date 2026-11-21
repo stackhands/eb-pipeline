@@ -73,6 +73,47 @@ fn write_atomic_reaps_only_local_stale_temps() {
     assert_eq!(std::fs::read(&path).unwrap(), b"new bytes\n");
 }
 
+#[test]
+fn temp_name_helper_rejects_short_and_overlapping_names() {
+    for (file_name, output_name) in [
+        (".cpu.json.tmp", "cpu.json"),
+        (".result.json.tmp", "result.json"),
+        (".result.json.", "result.json"),
+        (".result.json", "result.json"),
+        (".tmp", ""),
+        ("..tmp", ""),
+    ] {
+        assert!(
+            parse_atomic_temporary_name(Path::new(file_name), output_name).is_none(),
+            "{file_name:?} for {output_name:?}"
+        );
+    }
+    assert!(matches!(
+        parse_atomic_temporary_name(Path::new(".result.json.node.boot-1.42.1.tmp"), "result.json"),
+        Some(AtomicTempName::Tagged { boot }) if boot == "boot-1"
+    ));
+    assert!(matches!(
+        parse_atomic_temporary_name(Path::new(".result.json.42.1.tmp"), "result.json"),
+        Some(AtomicTempName::Legacy)
+    ));
+}
+
+#[test]
+fn write_atomic_ignores_a_sibling_named_like_a_bare_temp_file() {
+    let _guard = test_guard();
+    std::env::set_var("HOSTNAME", "atomic-test-host");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("result.json");
+    std::fs::write(&path, b"old bytes\n").unwrap();
+    let sibling = dir.path().join(".result.json.tmp");
+    std::fs::write(&sibling, b"unrelated\n").unwrap();
+
+    eb_pipeline::util::write_atomic(&path, b"new bytes\n").unwrap();
+
+    assert_eq!(std::fs::read(&path).unwrap(), b"new bytes\n");
+    assert_eq!(std::fs::read(&sibling).unwrap(), b"unrelated\n");
+}
+
 fn spawn_helper_and_capture_temp(path: &Path) -> (std::process::Child, PathBuf) {
     let mut helper = Command::new(std::env::current_exe().unwrap())
         .arg("--exact")
@@ -133,10 +174,12 @@ enum AtomicTempName {
 fn parse_atomic_temporary_name(path: &Path, output_name: &str) -> Option<AtomicTempName> {
     let file_name = path.file_name()?.to_str()?;
     let prefix = format!(".{output_name}.");
-    if !file_name.starts_with(&prefix) || !file_name.ends_with(".tmp") {
+    if file_name.len() < prefix.len() + ".tmp".len() {
         return None;
     }
-    let middle = &file_name[prefix.len()..file_name.len() - ".tmp".len()];
+    let middle = file_name
+        .strip_prefix(prefix.as_str())?
+        .strip_suffix(".tmp")?;
     let fields: Vec<&str> = middle.split('.').collect();
     match fields.as_slice() {
         [host, boot, pid, attempt]
