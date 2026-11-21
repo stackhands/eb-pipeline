@@ -7,7 +7,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// One file in an offline bundle.
@@ -336,21 +336,11 @@ pub fn write(root: &Path, scope: &Scope<'_>, assets: &[OfflineAsset]) -> Result<
         kind: "offline-bundle",
         files: entries.into_iter().collect(),
     };
-    let text = serde_json::to_vec_pretty(&manifest)
+    let mut text = serde_json::to_vec_pretty(&manifest)
         .map_err(|e| Fail::new(exit::FAILED, format!("cannot render offline manifest: {e}")))?;
-    let tmp = root.join(format!(".manifest.json.tmp-{}", std::process::id()));
-    let mut file = File::create(&tmp).map_err(|e| {
-        Fail::new(
-            exit::FAILED,
-            format!("cannot create {}: {e}", tmp.display()),
-        )
-    })?;
-    file.write_all(&text)
-        .and_then(|()| file.write_all(b"\n"))
-        .and_then(|()| file.sync_all())
-        .map_err(|e| Fail::new(exit::FAILED, format!("cannot write {}: {e}", tmp.display())))?;
-    std::fs::rename(&tmp, root.join("manifest.json")).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
+    text.push(b'\n');
+    let manifest_path = root.join("manifest.json");
+    crate::util::write_atomic(&manifest_path, &text).map_err(|e| {
         Fail::new(
             exit::FAILED,
             format!("cannot publish offline manifest: {e}"),
@@ -361,7 +351,9 @@ pub fn write(root: &Path, scope: &Scope<'_>, assets: &[OfflineAsset]) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_locators, Entry};
+    use super::{validate_locators, write, Entry};
+    use crate::resolve::Scope;
+    use crate::util::{atomic_write_trace, AtomicWriteOp};
     use std::collections::BTreeSet;
 
     fn entry(digest: &str) -> Entry {
@@ -374,10 +366,72 @@ mod tests {
         }
     }
 
+    fn minimal_site() -> crate::schema::Site {
+        let mut site = crate::site::parse(include_str!("../templates/small-cluster.toml")).unwrap();
+        site.filesystems.source_paths.clear();
+        site
+    }
+
     #[test]
     fn conflicting_consumer_locators_are_refused() {
         let entries = BTreeSet::from([entry("first"), entry("second")]);
         let failure = validate_locators(&entries).unwrap_err();
         assert!(failure.msg.contains("conflicting offline locator"));
+    }
+
+    #[test]
+    fn manifest_write_uses_atomic_writer_with_parent_dir_sync() {
+        let site = minimal_site();
+        let scope = Scope {
+            site: &site,
+            site_file: None,
+            target: site.target("cpu").unwrap(),
+            build_type: None,
+            run_id: "run".into(),
+            log_stamp: "20261121_220000".into(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+
+        let trace = atomic_write_trace::Guard::start();
+        let manifest = write(dir.path(), &scope, &[]).unwrap();
+        let ops = trace.take();
+
+        assert_eq!(manifest.kind, "offline-bundle");
+        assert_eq!(
+            ops,
+            vec![
+                AtomicWriteOp::SyncTemp,
+                AtomicWriteOp::Rename,
+                AtomicWriteOp::SyncParentDir(dir.path().to_path_buf()),
+            ]
+        );
+        let bytes = std::fs::read(dir.path().join("manifest.json")).unwrap();
+        assert!(bytes.ends_with(b"\n"));
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed["kind"], "offline-bundle");
+    }
+
+    #[test]
+    fn manifest_write_refuses_symlink_destination() {
+        let site = minimal_site();
+        let scope = Scope {
+            site: &site,
+            site_file: None,
+            target: site.target("cpu").unwrap(),
+            build_type: None,
+            run_id: "run".into(),
+            log_stamp: "20261121_220000".into(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim.json");
+        std::fs::write(&victim, b"original\n").unwrap();
+        let manifest_link = dir.path().join("manifest.json");
+        std::os::unix::fs::symlink(&victim, &manifest_link).unwrap();
+
+        let failure = write(dir.path(), &scope, &[]).unwrap_err();
+
+        assert!(failure.msg.contains("cannot publish offline manifest"));
+        assert!(manifest_link.is_symlink());
+        assert_eq!(std::fs::read(&victim).unwrap(), b"original\n");
     }
 }
