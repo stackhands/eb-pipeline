@@ -1749,13 +1749,8 @@ fn main() {
         Err(error) => match error.kind() {
             clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => {
                 let text = error.to_string();
-                if let Err(write_error) = util::write_stdout(text.as_bytes()) {
-                    log(
-                        "ERROR",
-                        "main",
-                        "-",
-                        &format!("cannot write stdout: {write_error}"),
-                    );
+                if let Err(message) = util::write_stdout_checked(text.as_bytes()) {
+                    log("ERROR", "main", "-", &message);
                     std::process::exit(exit::FAILED);
                 }
                 std::process::exit(exit::OK);
