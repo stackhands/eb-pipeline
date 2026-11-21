@@ -2474,16 +2474,20 @@ exit 0
             r#"D="${STUB_DIR:?}"
 [ -e "$D/rotating" ] && echo "$EB_PIPELINE_TARGET" >> "$D/keeplogs.overlap"
 : > "$D/rotating"
-echo "$EB_PIPELINE_TARGET" >> "$D/keeplogs.inflight"
+me="$D/keeplogs.inflight.$EB_PIPELINE_TARGET"
+: > "$me"
 echo "$*" >> "$D/keeplogs.calls"
+case "$EB_PIPELINE_TARGET" in cpu) other=gpu;; *) other=cpu;; esac
+reason=timeout
 i=0
-while [ "$(sort -u "$D/keeplogs.inflight" 2>/dev/null | wc -l)" -lt 2 ] && [ $i -lt 200 ]; do
+while [ $i -lt 1000 ]; do
+  if [ -e "$D/keeplogs.inflight.$other" ]; then reason=overlap; break; fi
+  if [ -e "$D/result-$other.json" ]; then reason=sibling-finished; break; fi
   sleep 0.01
   i=$((i + 1))
 done
-rm -f "$D/rotating"
-grep -vxF -- "$EB_PIPELINE_TARGET" "$D/keeplogs.inflight" > "$D/keeplogs.inflight.next" 2>/dev/null || true
-mv "$D/keeplogs.inflight.next" "$D/keeplogs.inflight" 2>/dev/null || true
+echo "$EB_PIPELINE_TARGET $reason $i" >> "$D/keeplogs.wait"
+rm -f "$D/rotating" "$me"
 "#,
         ),
     );
@@ -2538,6 +2542,15 @@ mv "$D/keeplogs.inflight.next" "$D/keeplogs.inflight" 2>/dev/null || true
     assert_eq!(status, ["ok", "skipped"]);
     assert_eq!(rotations(&env).len(), 1, "{:?}", rotations(&env));
     assert!(calls(&env, "keeplogs.overlap").is_empty());
+    let waits = calls(&env, "keeplogs.wait");
+    assert!(
+        !waits.is_empty(),
+        "the rotation never waited for its sibling"
+    );
+    assert!(
+        waits.iter().all(|wait| !wait.contains(" timeout ")),
+        "the rotation timed out instead of observing its sibling: {waits:?}"
+    );
 }
 
 /// An eb-keep-logs `rotate` that exits with `STUB_ROTATE_EXIT`, saying what
