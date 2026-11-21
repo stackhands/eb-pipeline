@@ -10,6 +10,7 @@ use serde_json::Value;
 use std::os::fd::FromRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::time::Duration;
 
 pub const STAMP: &str = "20260101_000000";
 
@@ -425,4 +426,43 @@ pub fn stdout(o: &Output) -> String {
 
 pub fn code(o: &Output) -> i32 {
     o.status.code().unwrap_or(-1)
+}
+
+/// Create an empty FIFO at `path`.
+pub fn make_fifo(path: &Path) {
+    use std::os::unix::ffi::OsStrExt;
+    let raw = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+}
+
+/// Spawn `cmd` and collect its output. A child still running after `limit`
+/// is killed so the caller does not wait on a blocked read.
+pub fn output_within(cmd: &mut Command, limit: Duration) -> Output {
+    let mut child = cmd.sync_spawn();
+    let pid = libc::pid_t::try_from(child.id()).unwrap();
+    // SAFETY: `pid` is the live child just spawned, and `pidfd` is closed below.
+    let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    assert!(
+        pidfd >= 0,
+        "pidfd_open: {}",
+        std::io::Error::last_os_error()
+    );
+    let pidfd = libc::c_int::try_from(pidfd).unwrap();
+    let mut pollfd = libc::pollfd {
+        fd: pidfd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let timeout = i32::try_from(limit.as_millis()).unwrap_or(i32::MAX);
+    // SAFETY: `pollfd` is a valid one-element list and `pidfd` stays open.
+    let waited = unsafe { libc::poll(&mut pollfd, 1, timeout) };
+    // SAFETY: `pidfd` is the descriptor opened above and is not used again.
+    unsafe { libc::close(pidfd) };
+    assert!(waited >= 0, "poll: {}", std::io::Error::last_os_error());
+    if waited == 0 || child.try_wait().unwrap().is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("command still running after {limit:?}");
+    }
+    child.wait_with_output().unwrap()
 }
