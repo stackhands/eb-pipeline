@@ -228,6 +228,44 @@ fn a_plan_without_attest_matches_the_output_from_before_the_feature() {
 }
 
 #[test]
+fn signed_record_names_the_plan_target() {
+    let tree = Tree::new();
+    let root = tree.path();
+    std::fs::create_dir_all(root.join("easyconfigs")).unwrap();
+    std::fs::create_dir_all(root.join("easyblocks")).unwrap();
+    std::fs::create_dir_all(root.join("patches")).unwrap();
+    let easyconfig = root.join("easyconfigs/Foo-1.0.eb");
+    std::fs::write(&easyconfig, "name = 'Foo'\n").unwrap();
+    std::fs::write(root.join("key.pem"), "k\n").unwrap();
+    std::fs::write(root.join("site.toml"), attest_site(root)).unwrap();
+    std::fs::write(root.join("list.txt"), "Foo-1.0.eb\n").unwrap();
+    let easyconfig = easyconfig.display().to_string();
+
+    let output = plan(
+        &tree,
+        &[
+            ("STUB_EASYCONFIG", easyconfig.as_str()),
+            ("EB_IMAGE_DIGEST", "sha256:abc"),
+            ("EB_ROUTE_RECEIPT", "receipt-1"),
+        ],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let sha = document["input_attestation"]["record_sha256"]
+        .as_str()
+        .unwrap();
+    let record = root.join("log/inputs").join(format!("{sha}.json"));
+    let body: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(record).unwrap()).unwrap();
+    assert_eq!(body["target"], "cpu");
+}
+
+#[test]
 fn an_enabled_plan_appends_a_record_and_verify_recomputes_it() {
     let tree = Tree::new();
     let root = tree.path();
