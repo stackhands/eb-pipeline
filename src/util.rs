@@ -138,17 +138,20 @@ pub fn paths_alias(path_a: &Path, path_b: &Path) -> bool {
     }
 }
 
+/// Directory holding `path`, treating a bare file name as living in `.`.
+fn parent_dir(path: &Path) -> &Path {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    }
+}
+
 /// Resolve a path as far as the filesystem permits.
 pub fn resolved_path(path: &Path) -> PathBuf {
     if let Ok(path) = std::fs::canonicalize(path) {
         return path;
     }
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let parent = if parent.as_os_str().is_empty() {
-        Path::new(".")
-    } else {
-        parent
-    };
+    let parent = parent_dir(path);
     match (
         std::fs::canonicalize(parent),
         path.file_name().map(ToOwned::to_owned),
@@ -197,7 +200,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         ));
     }
     let destination = path.to_path_buf();
-    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    let parent = parent_dir(&destination);
     let existing_mode = match std::fs::metadata(&destination) {
         Ok(metadata) if metadata.is_file() => Some(metadata.permissions().mode() & 0o7777),
         Ok(_) => None,
@@ -228,22 +231,151 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
                 return Err(error);
             }
         }
-        let written = file.write_all(bytes).and_then(|()| file.sync_all());
+        let written = file.write_all(bytes).and_then(|()| sync_temp_file(&file));
         drop(file);
         if let Err(error) = written {
             let _ = std::fs::remove_file(&temporary);
             return Err(error);
         }
-        if let Err(error) = std::fs::rename(&temporary, &destination) {
+        if let Err(error) = rename_atomic_temp(&temporary, &destination) {
             let _ = std::fs::remove_file(&temporary);
             return Err(error);
         }
+        sync_parent_dir(parent)?;
         return Ok(());
     }
     Err(std::io::Error::new(
         std::io::ErrorKind::AlreadyExists,
         "cannot allocate a temporary output file",
     ))
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum AtomicWriteOp {
+    SyncTemp,
+    Rename,
+    SyncParentDir(PathBuf),
+}
+
+#[cfg(test)]
+pub(crate) mod atomic_write_trace {
+    use super::AtomicWriteOp;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static OPS: RefCell<Option<Vec<AtomicWriteOp>>> = const { RefCell::new(None) };
+    }
+
+    pub(super) fn record(op: AtomicWriteOp) {
+        OPS.with(|cell| {
+            if let Some(ops) = cell.borrow_mut().as_mut() {
+                ops.push(op);
+            }
+        });
+    }
+
+    pub(crate) struct Guard;
+
+    impl Guard {
+        pub(crate) fn start() -> Self {
+            OPS.with(|cell| *cell.borrow_mut() = Some(Vec::new()));
+            Self
+        }
+
+        pub(crate) fn take(&self) -> Vec<AtomicWriteOp> {
+            OPS.with(|cell| {
+                cell.borrow_mut()
+                    .as_mut()
+                    .map(std::mem::take)
+                    .unwrap_or_default()
+            })
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            OPS.with(|cell| *cell.borrow_mut() = None);
+        }
+    }
+}
+
+#[cfg(test)]
+mod dir_sync_fault_hook {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static FAULT: RefCell<Option<libc::c_int>> = const { RefCell::new(None) };
+    }
+
+    pub(super) fn take() -> Option<std::io::Error> {
+        FAULT.with(|slot| {
+            slot.borrow_mut()
+                .take()
+                .map(std::io::Error::from_raw_os_error)
+        })
+    }
+
+    pub(super) struct Guard;
+
+    impl Guard {
+        pub(super) fn inject(errno: libc::c_int) -> Self {
+            FAULT.with(|slot| *slot.borrow_mut() = Some(errno));
+            Self
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            FAULT.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+}
+
+fn sync_temp_file(file: &std::fs::File) -> std::io::Result<()> {
+    file.sync_all()?;
+    #[cfg(test)]
+    atomic_write_trace::record(AtomicWriteOp::SyncTemp);
+    Ok(())
+}
+
+fn rename_atomic_temp(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    std::fs::rename(temporary, destination)?;
+    #[cfg(test)]
+    atomic_write_trace::record(AtomicWriteOp::Rename);
+    Ok(())
+}
+
+fn is_dir_sync_unsupported(error: &std::io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(libc::EINVAL | libc::ENOTSUP | libc::EBADF)
+    )
+}
+
+fn sync_dir_handle(dir: &std::fs::File) -> std::io::Result<()> {
+    #[cfg(test)]
+    if let Some(error) = dir_sync_fault_hook::take() {
+        return Err(error);
+    }
+    dir.sync_all()
+}
+
+fn sync_parent_dir(parent: &Path) -> std::io::Result<()> {
+    let dir = std::fs::File::open(parent)?;
+    match sync_dir_handle(&dir) {
+        Ok(()) => {
+            #[cfg(test)]
+            atomic_write_trace::record(AtomicWriteOp::SyncParentDir(parent.to_path_buf()));
+            Ok(())
+        }
+        Err(error) if is_dir_sync_unsupported(&error) => {
+            #[cfg(test)]
+            atomic_write_trace::record(AtomicWriteOp::SyncParentDir(parent.to_path_buf()));
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// Split a string on whitespace, honouring single and double quotes.
@@ -552,6 +684,51 @@ mod tests {
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
         assert!(!missing.exists());
         assert!(dangling.is_symlink());
+    }
+
+    #[test]
+    fn parent_dir_of_a_bare_file_name_is_the_current_directory() {
+        assert_eq!(parent_dir(Path::new("result.json")), Path::new("."));
+        assert_eq!(parent_dir(Path::new("./result.json")), Path::new("."));
+        assert_eq!(parent_dir(Path::new("out/result.json")), Path::new("out"));
+        assert_eq!(parent_dir(Path::new("/result.json")), Path::new("/"));
+    }
+
+    #[test]
+    fn atomic_write_syncs_temp_then_renames_then_syncs_parent_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("result.json");
+        let trace = atomic_write_trace::Guard::start();
+
+        write_atomic(&path, b"durable bytes\n").unwrap();
+
+        assert_eq!(
+            trace.take(),
+            vec![
+                AtomicWriteOp::SyncTemp,
+                AtomicWriteOp::Rename,
+                AtomicWriteOp::SyncParentDir(dir.path().to_path_buf()),
+            ]
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"durable bytes\n");
+    }
+
+    #[test]
+    fn atomic_write_propagates_parent_dir_sync_errors_except_unsupported() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("result.json");
+
+        for errno in [libc::EIO, libc::ENOSPC] {
+            let _fault = dir_sync_fault_hook::Guard::inject(errno);
+            let error = write_atomic(&path, b"bytes\n").unwrap_err();
+            assert_eq!(error.raw_os_error(), Some(errno), "errno {errno}");
+        }
+
+        for errno in [libc::EINVAL, libc::ENOTSUP, libc::EBADF] {
+            let _fault = dir_sync_fault_hook::Guard::inject(errno);
+            write_atomic(&path, b"accepted\n").unwrap();
+            assert_eq!(std::fs::read(&path).unwrap(), b"accepted\n");
+        }
     }
 
     #[test]
