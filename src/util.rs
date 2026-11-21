@@ -38,7 +38,8 @@ pub fn read_text_file(path: &Path) -> std::io::Result<String> {
 /// Write all bytes to standard output, treating a closed pipeline consumer as
 /// successful completion.
 pub fn write_stdout(bytes: &[u8]) -> std::io::Result<()> {
-    match std::io::stdout().lock().write_all(bytes) {
+    let mut stdout = std::io::stdout().lock();
+    match stdout.write_all(bytes).and_then(|()| stdout.flush()) {
         Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
         result => result,
     }
