@@ -194,11 +194,43 @@ pub fn refuse_output_alias(
 /// file before the rename. Ownership follows the account creating the
 /// temporary file.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    publish_atomic_with(
+        path,
+        |file, _| write_atomic_bytes(file, bytes),
+        std::convert::identity,
+    )
+}
+
+/// Atomically copy regular file `source` to non-symlink `destination` through a
+/// temporary sibling, running `verify` before syncing and renaming into place.
+pub fn copy_atomic_checked<E>(
+    source: &Path,
+    destination: &Path,
+    verify: impl FnOnce(&Path) -> Result<(), E>,
+    map_io: impl Fn(std::io::Error) -> E,
+) -> Result<(), E> {
+    publish_atomic_with(
+        destination,
+        |file, temporary| {
+            let mut input = open_regular_file(source).map_err(&map_io)?;
+            std::io::copy(&mut input, file).map_err(&map_io)?;
+            file.flush().map_err(&map_io)?;
+            verify(temporary)
+        },
+        &map_io,
+    )
+}
+
+fn publish_atomic_with<T, E>(
+    path: &Path,
+    populate: impl FnOnce(&mut std::fs::File, &Path) -> Result<T, E>,
+    map_io: impl Fn(std::io::Error) -> E,
+) -> Result<T, E> {
     if path.is_symlink() {
-        return Err(std::io::Error::new(
+        return Err(map_io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "output path is a symbolic link",
-        ));
+        )));
     }
     let destination = path.to_path_buf();
     let parent = parent_dir(&destination);
@@ -206,7 +238,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         Ok(metadata) if metadata.is_file() => Some(metadata.permissions().mode() & 0o7777),
         Ok(_) => None,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error),
+        Err(error) => return Err(map_io(error)),
     };
     let name = atomic_output_name(&destination);
     let local_identity = local_writer_identity();
@@ -225,7 +257,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
+            Err(error) => return Err(map_io(error)),
         };
         #[cfg(test)]
         maybe_kill_atomic_writer("after-temp-created");
@@ -235,30 +267,36 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
             {
                 drop(file);
                 let _ = std::fs::remove_file(&temporary);
-                return Err(error);
+                return Err(map_io(error));
             }
         }
-        let written = write_atomic_bytes(&mut file, bytes).and_then(|()| sync_temp_file(&file));
+        let outcome = populate(&mut file, &temporary).and_then(|value| {
+            sync_temp_file(&file).map_err(&map_io)?;
+            Ok(value)
+        });
         drop(file);
-        if let Err(error) = written {
-            let _ = std::fs::remove_file(&temporary);
-            return Err(error);
-        }
+        let value = match outcome {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = std::fs::remove_file(&temporary);
+                return Err(error);
+            }
+        };
         #[cfg(test)]
         maybe_kill_atomic_writer("before-rename");
         if let Err(error) = rename_atomic_temp(&temporary, &destination) {
             let _ = std::fs::remove_file(&temporary);
-            return Err(error);
+            return Err(map_io(error));
         }
         #[cfg(test)]
         maybe_kill_atomic_writer("after-rename-before-dir-sync");
-        sync_parent_dir(parent)?;
-        return Ok(());
+        sync_parent_dir(parent).map_err(&map_io)?;
+        return Ok(value);
     }
-    Err(std::io::Error::new(
+    Err(map_io(std::io::Error::new(
         std::io::ErrorKind::AlreadyExists,
         "cannot allocate a temporary output file",
-    ))
+    )))
 }
 
 #[cfg(not(test))]
@@ -715,7 +753,7 @@ pub(crate) mod atomic_write_trace {
 }
 
 #[cfg(test)]
-mod dir_sync_fault_hook {
+pub(crate) mod dir_sync_fault_hook {
     use std::cell::RefCell;
 
     thread_local! {
@@ -730,10 +768,10 @@ mod dir_sync_fault_hook {
         })
     }
 
-    pub(super) struct Guard;
+    pub(crate) struct Guard;
 
     impl Guard {
-        pub(super) fn inject(errno: libc::c_int) -> Self {
+        pub(crate) fn inject(errno: libc::c_int) -> Self {
             FAULT.with(|slot| *slot.borrow_mut() = Some(errno));
             Self
         }
@@ -997,15 +1035,12 @@ pub fn package_of(easyconfig: &str) -> (String, Option<String>) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod atomic_test_support {
     use super::*;
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::process::ExitStatusExt;
-    use std::process::{Command, Stdio};
+    use std::process::Command;
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
-    fn atomic_test_guard() -> MutexGuard<'static, ()> {
+    pub(crate) fn guard() -> MutexGuard<'static, ()> {
         static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
         GUARD
             .get_or_init(|| Mutex::new(()))
@@ -1013,7 +1048,7 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    struct IdentityOverrideGuard;
+    pub(crate) struct IdentityOverrideGuard;
 
     impl Drop for IdentityOverrideGuard {
         fn drop(&mut self) {
@@ -1021,10 +1056,69 @@ mod tests {
         }
     }
 
-    fn install_identity_override(identity: WriterIdentity) -> IdentityOverrideGuard {
+    pub(super) fn install_identity_override(identity: WriterIdentity) -> IdentityOverrideGuard {
         writer_identity_test_hook::install(identity);
         IdentityOverrideGuard
     }
+
+    pub(super) const REAP_SAFE_TEST_HOST: &str = "atomic-test-host";
+    pub(super) const REAP_SAFE_TEST_MACHINE: &str = "0123456789abcdef0123456789abcdef";
+    pub(super) const REAP_SAFE_TEST_BOOT: &str = "boot-current-1";
+    pub(super) const REAP_SAFE_TEST_PID_NS: u64 = 4_026_531_836;
+
+    pub(super) fn reap_safe_test_identity() -> WriterIdentity {
+        assert_eq!(
+            host_tag_and_reap_safety(Some(REAP_SAFE_TEST_HOST)),
+            (REAP_SAFE_TEST_HOST.to_string(), true)
+        );
+        let start_time = process_start_time(std::process::id() as libc::pid_t)
+            .expect("current process start time should be readable");
+        WriterIdentity {
+            host: REAP_SAFE_TEST_HOST.into(),
+            host_reap_safe: true,
+            machine_id: Some(REAP_SAFE_TEST_MACHINE.into()),
+            boot_id: Some(REAP_SAFE_TEST_BOOT.into()),
+            pid_ns: Some(REAP_SAFE_TEST_PID_NS),
+            start_time: Some(start_time),
+        }
+    }
+
+    pub(crate) fn install_reap_safe_identity() -> IdentityOverrideGuard {
+        install_identity_override(reap_safe_test_identity())
+    }
+
+    pub(crate) fn spawned_and_reaped_pid() -> libc::pid_t {
+        let mut child = Command::new("sh").arg("-c").arg("exit 0").spawn().unwrap();
+        let pid = child.id() as libc::pid_t;
+        let _ = child.wait();
+        pid
+    }
+
+    pub(crate) fn dead_local_temp_name(output_name: &str, attempt: u32) -> String {
+        let identity = reap_safe_test_identity();
+        let dead_pid = spawned_and_reaped_pid();
+        atomic_temp_file_name(output_name, &identity, dead_pid, attempt)
+    }
+
+    pub(crate) fn foreign_host_temp_name(output_name: &str, attempt: u32) -> String {
+        let mut identity = reap_safe_test_identity();
+        identity.host = "other-host".into();
+        let dead_pid = spawned_and_reaped_pid();
+        atomic_temp_file_name(output_name, &identity, dead_pid, attempt)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::atomic_test_support::{
+        guard as atomic_test_guard, install_identity_override, reap_safe_test_identity,
+        spawned_and_reaped_pid, REAP_SAFE_TEST_MACHINE,
+    };
+    use super::*;
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{Command, Stdio};
 
     struct EnvVarGuard {
         name: &'static str,
@@ -1049,35 +1143,6 @@ mod tests {
                 None => std::env::remove_var(self.name),
             }
         }
-    }
-
-    const REAP_SAFE_TEST_HOST: &str = "atomic-test-host";
-    const REAP_SAFE_TEST_MACHINE: &str = "0123456789abcdef0123456789abcdef";
-    const REAP_SAFE_TEST_BOOT: &str = "boot-current-1";
-    const REAP_SAFE_TEST_PID_NS: u64 = 4_026_531_836;
-
-    fn reap_safe_test_identity() -> WriterIdentity {
-        assert_eq!(
-            host_tag_and_reap_safety(Some(REAP_SAFE_TEST_HOST)),
-            (REAP_SAFE_TEST_HOST.to_string(), true)
-        );
-        let start_time = process_start_time(std::process::id() as libc::pid_t)
-            .expect("current process start time should be readable");
-        WriterIdentity {
-            host: REAP_SAFE_TEST_HOST.into(),
-            host_reap_safe: true,
-            machine_id: Some(REAP_SAFE_TEST_MACHINE.into()),
-            boot_id: Some(REAP_SAFE_TEST_BOOT.into()),
-            pid_ns: Some(REAP_SAFE_TEST_PID_NS),
-            start_time: Some(start_time),
-        }
-    }
-
-    fn spawned_and_reaped_pid() -> libc::pid_t {
-        let mut child = Command::new("sh").arg("-c").arg("exit 0").spawn().unwrap();
-        let pid = child.id() as libc::pid_t;
-        let _ = child.wait();
-        pid
     }
 
     fn crash_write_atomic(path: &Path, stage: &str, bytes: &[u8]) -> std::process::ExitStatus {
@@ -2149,6 +2214,30 @@ mod tests {
             write_atomic(&path, b"accepted\n").unwrap();
             assert_eq!(std::fs::read(&path).unwrap(), b"accepted\n");
         }
+    }
+
+    #[test]
+    fn copy_atomic_checked_cleans_up_temp_when_verification_fails() {
+        let _guard = atomic_test_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("source.bin");
+        let dst = dir.path().join("dest.bin");
+        std::fs::write(&src, b"payload\n").unwrap();
+
+        let err = copy_atomic_checked(
+            &src,
+            &dst,
+            |tmp| {
+                assert_eq!(std::fs::read(tmp).unwrap(), b"payload\n");
+                Err("checksum mismatch")
+            },
+            |_| "io error",
+        )
+        .unwrap_err();
+
+        assert_eq!(err, "checksum mismatch");
+        assert!(!dst.exists());
+        assert!(atomic_temporary_siblings(&dst).is_empty());
     }
 
     #[test]
