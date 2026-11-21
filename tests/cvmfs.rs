@@ -632,18 +632,26 @@ fn a_sync_timeout_kills_its_process_group_aborts_once_and_records_the_phase() {
 }
 
 fn same_live_process(pid: i32, start_time: u64) -> bool {
-    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
-        return false;
-    };
-    let Some((_, fields)) = stat.rsplit_once(") ") else {
-        return false;
-    };
-    let fields: Vec<_> = fields.split_whitespace().collect();
-    fields.first() != Some(&"Z")
-        && fields
-            .get(19)
-            .and_then(|field| field.parse::<u64>().ok())
-            .is_some_and(|current| current == start_time)
+    std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|stat| eb_pipeline::util::parse_proc_stat(&stat))
+        .is_some_and(|(state, current)| state != 'Z' && current == start_time)
+}
+
+#[test]
+fn cvmfs_process_check_uses_shared_proc_stat_parser() {
+    let live = "42 (my (sleep) child) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 777 0";
+    let zombie = "42 (sleep) Z 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 777 0";
+    assert_eq!(eb_pipeline::util::parse_proc_stat(live), Some(('S', 777)));
+    assert_eq!(eb_pipeline::util::parse_proc_stat(zombie), Some(('Z', 777)));
+    let self_stat = std::fs::read_to_string("/proc/self/stat").unwrap();
+    let (state, start_time) = eb_pipeline::util::parse_proc_stat(&self_stat).unwrap();
+    assert_ne!(state, 'Z');
+    assert!(same_live_process(std::process::id() as i32, start_time));
+    assert!(!same_live_process(
+        std::process::id() as i32,
+        start_time.wrapping_add(1)
+    ));
 }
 
 #[test]
