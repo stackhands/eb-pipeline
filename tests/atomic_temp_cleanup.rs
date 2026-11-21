@@ -13,9 +13,11 @@ fn test_guard() -> std::sync::MutexGuard<'static, ()> {
 
 #[test]
 fn atomic_temp_cleanup_helper() {
+    let guard = test_guard();
     if std::env::var_os("EB_PIPELINE_TEST_ATOMIC_HELPER").is_none() {
         return;
     }
+    drop(guard);
     let path = PathBuf::from(std::env::var("EB_PIPELINE_TEST_ATOMIC_PATH").unwrap());
     let bytes_len: usize = std::env::var("EB_PIPELINE_TEST_ATOMIC_BYTES")
         .unwrap()
@@ -35,20 +37,23 @@ fn write_atomic_reaps_only_local_stale_temps() {
     let path = dir.path().join("result.json");
     std::fs::write(&path, b"old bytes\n").unwrap();
 
-    let (mut helper, observed_temp) = spawn_helper_and_capture_temp(&path);
-    // SAFETY: this test started the helper process.
-    unsafe {
-        libc::kill(helper.id() as libc::pid_t, libc::SIGKILL);
-    }
-    let _ = helper.wait();
-    let local_temp = if observed_temp.exists() {
-        observed_temp
-    } else {
-        temporary_atomic_siblings(&path)
-            .into_iter()
-            .next()
-            .expect("no stale temp remained after killing helper")
-    };
+    // The helper can be killed in the instant between one rename and the next
+    // temp file, leaving nothing behind; try again rather than flake.
+    let local_temp = (0..10)
+        .find_map(|_| {
+            let (mut helper, observed_temp) = spawn_helper_and_capture_temp(&path);
+            // SAFETY: this test started the helper process.
+            unsafe {
+                libc::kill(helper.id() as libc::pid_t, libc::SIGKILL);
+            }
+            let _ = helper.wait();
+            if observed_temp.exists() {
+                Some(observed_temp)
+            } else {
+                temporary_atomic_siblings(&path).into_iter().next()
+            }
+        })
+        .expect("no stale temp remained after killing helper");
     let output_name = path.file_name().unwrap().to_string_lossy().into_owned();
     let foreign = match parse_atomic_temporary_name(&local_temp, &output_name) {
         Some(AtomicTempName::Tagged { boot, .. }) => {
@@ -119,6 +124,7 @@ fn spawn_helper_and_capture_temp(path: &Path) -> (std::process::Child, PathBuf) 
         .arg("--exact")
         .arg("atomic_temp_cleanup_helper")
         .env("EB_PIPELINE_TEST_ATOMIC_HELPER", "1")
+        .env("HOSTNAME", "atomic-test-host")
         .env("EB_PIPELINE_TEST_ATOMIC_PATH", path)
         .env(
             "EB_PIPELINE_TEST_ATOMIC_BYTES",
