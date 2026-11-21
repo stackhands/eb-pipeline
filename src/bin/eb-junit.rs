@@ -47,7 +47,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(msg) => {
-            eprintln!("eb-junit: {msg}");
+            util::write_stderr_line(&format!("eb-junit: {msg}"));
             ExitCode::from(2)
         }
     }

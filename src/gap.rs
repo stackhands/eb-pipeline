@@ -155,16 +155,13 @@ fn write(path: &Path, bytes: &[u8]) -> Result<(), Fail> {
 
 fn emit(bytes: &[u8], stderr: bool) -> Result<(), Fail> {
     let result = if stderr {
-        std::io::stderr().write_all(bytes)
+        std::io::stderr()
+            .write_all(bytes)
+            .map_err(|error| format!("cannot write stderr: {error}"))
     } else {
-        util::write_stdout(bytes)
+        util::write_stdout_checked(bytes)
     };
-    result.map_err(|error| {
-        Fail::new(
-            exit::FAILED,
-            format!("cannot print eb-stack output: {error}"),
-        )
-    })
+    result.map_err(|message| Fail::new(exit::FAILED, message))
 }
 
 fn failed(bin: &str, argv: &[String], output: &Output, log: &Path) -> Fail {

@@ -1168,6 +1168,59 @@ printf '{"jobs":[{"class":"infra","sub_class":"scheduler"}]}\n'
 }
 
 #[test]
+fn node_warnings_do_not_panic_when_stderr_is_unwritable() {
+    let dir = tempfile::tempdir().unwrap();
+    let (list, result) = class_fixture(
+        dir.path(),
+        &[("Big.eb", "timeout"), ("Small.eb", "timeout")],
+    );
+    let calls = dir.path().join("calls");
+    let bin_dir = dir.path().join("bin");
+    std::fs::create_dir(&bin_dir).unwrap();
+    stub_both(&bin_dir.join("eb-stack"));
+    let path = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let easyconfigs = dir.path().join("easyconfigs");
+    std::fs::create_dir(&easyconfigs).unwrap();
+    for closed_pipe in [false, true] {
+        let stderr = if closed_pipe {
+            let (reader, writer) = std::io::pipe().unwrap();
+            drop(reader);
+            std::process::Stdio::from(writer)
+        } else {
+            std::process::Stdio::from(
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open("/dev/full")
+                    .unwrap(),
+            )
+        };
+        let o = bin()
+            .args(["--result"])
+            .arg(&result)
+            .args(["--list"])
+            .arg(&list)
+            .args(["--classify", "--node", "8:1024:x86_64/amd/zen4"])
+            .args(["--easyconfigs"])
+            .arg(&easyconfigs)
+            .args(["--arch", "x86_64/amd/zen4"])
+            .env("PATH", &path)
+            .env("CALLS", &calls)
+            .stderr(stderr)
+            .output()
+            .unwrap();
+        assert_eq!(o.status.code(), Some(0), "closed pipe {closed_pipe}");
+        assert_eq!(
+            String::from_utf8(o.stdout).unwrap(),
+            "Big.eb --robot\nSmall.eb --robot\n"
+        );
+    }
+}
+
+#[test]
 fn node_warns_without_dropping_unless_drop_oom_is_set() {
     let dir = tempfile::tempdir().unwrap();
     let (list, result) = class_fixture(

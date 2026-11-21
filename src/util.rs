@@ -38,10 +38,19 @@ pub fn read_text_file(path: &Path) -> std::io::Result<String> {
 /// Write all bytes to standard output, treating a closed pipeline consumer as
 /// successful completion.
 pub fn write_stdout(bytes: &[u8]) -> std::io::Result<()> {
-    match std::io::stdout().lock().write_all(bytes) {
+    let mut stdout = std::io::stdout().lock();
+    match stdout.write_all(bytes).and_then(|()| stdout.flush()) {
         Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
         result => result,
     }
+}
+
+/// Write one line to standard error on a best-effort basis. A closed or full
+/// stderr is ignored, so a diagnostic never turns into a panic or changes the
+/// exit status the caller already chose.
+pub fn write_stderr_line(message: &str) {
+    let mut stderr = std::io::stderr().lock();
+    let _ = writeln!(stderr, "{message}");
 }
 
 /// Write bytes to standard output or format a user-facing error message.

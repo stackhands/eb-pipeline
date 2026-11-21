@@ -58,7 +58,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(msg) => {
-            eprintln!("eb-retry-list: {msg}");
+            util::write_stderr_line(&format!("eb-retry-list: {msg}"));
             ExitCode::from(2)
         }
     }
@@ -747,7 +747,7 @@ fn filter_oom(
         }
     }
     for hit in &hits {
-        eprintln!("eb-retry-list: {}", hit.line);
+        util::write_stderr_line(&format!("eb-retry-list: {}", hit.line));
     }
     Ok(lines
         .into_iter()
