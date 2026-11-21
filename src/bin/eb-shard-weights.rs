@@ -43,7 +43,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(msg) => {
-            eprintln!("eb-shard-weights: {msg}");
+            util::write_stderr_line(&format!("eb-shard-weights: {msg}"));
             ExitCode::from(2)
         }
     }

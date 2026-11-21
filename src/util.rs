@@ -45,6 +45,14 @@ pub fn write_stdout(bytes: &[u8]) -> std::io::Result<()> {
     }
 }
 
+/// Write one line to standard error on a best-effort basis. A closed or full
+/// stderr is ignored, so a diagnostic never turns into a panic or changes the
+/// exit status the caller already chose.
+pub fn write_stderr_line(message: &str) {
+    let mut stderr = std::io::stderr().lock();
+    let _ = writeln!(stderr, "{message}");
+}
+
 /// Write bytes to standard output or format a user-facing error message.
 pub fn write_stdout_checked(bytes: &[u8]) -> Result<(), String> {
     write_stdout(bytes).map_err(|e| format!("cannot write stdout: {e}"))
