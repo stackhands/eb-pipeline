@@ -343,10 +343,15 @@ fn python_float(value: f64) -> String {
         return "-inf".into();
     }
 
-    let lexical = value.to_string();
+    // Ryu follows round-to-nearest, ties-to-even when two shortest decimal
+    // representations round back to the same binary float. This is the rule
+    // used by CPython's dtoa mode 0; Rust's Display implementation may choose
+    // the other decimal in that case.
+    let mut buffer = ryu::Buffer::new();
+    let lexical = buffer.format_finite(value);
     let (negative, unsigned) = lexical
         .strip_prefix('-')
-        .map_or((false, lexical.as_str()), |s| (true, s));
+        .map_or((false, lexical), |s| (true, s));
     let (mantissa, explicit_exponent) = unsigned
         .split_once(['e', 'E'])
         .map_or((unsigned, 0), |(m, e)| (m, e.parse::<i32>().unwrap()));
@@ -562,6 +567,36 @@ easyconfigs:
                 "--small=1e-06"
             ]
         );
+    }
+
+    #[test]
+    fn decimal_tie_is_written_as_in_python() {
+        let l = &parse("easyconfigs:\n  - x.eb: {options: {parallel: 1136789840277548.3}}\n")
+            .unwrap()[0];
+        assert_eq!(l.args, ["--parallel=1136789840277548.2"]);
+    }
+
+    #[test]
+    fn finite_floats_are_written_as_in_python() {
+        for (line_number, line) in include_str!("../tests/data/python-float-repr.tsv")
+            .lines()
+            .enumerate()
+        {
+            if line.starts_with('#') {
+                continue;
+            }
+            let (bits, expected) = line
+                .split_once('\t')
+                .unwrap_or_else(|| panic!("fixture line {} has no tab", line_number + 1));
+            let bits = u64::from_str_radix(bits, 16)
+                .unwrap_or_else(|_| panic!("fixture line {} has invalid bits", line_number + 1));
+            assert_eq!(
+                python_float(f64::from_bits(bits)),
+                expected,
+                "fixture line {} for bits {bits:016x}",
+                line_number + 1
+            );
+        }
     }
 
     #[test]

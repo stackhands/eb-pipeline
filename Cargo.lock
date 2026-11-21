@@ -248,6 +248,7 @@ dependencies = [
  "flate2",
  "libc",
  "rfc9162",
+ "ryu",
  "serde",
  "serde_json",
  "serde_yaml",
