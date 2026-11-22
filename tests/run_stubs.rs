@@ -2,7 +2,6 @@
 
 mod common;
 
-use common::CommandSyncExt;
 use serde_json::Value;
 use std::io::Write;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -355,7 +354,7 @@ fn driver_named(
         }
     }
     let _g = SPAWN.lock().unwrap();
-    c.sync_spawn()
+    c.spawn().unwrap()
 }
 
 fn finish(env: &Env, child: std::process::Child) -> Out {
@@ -2559,7 +2558,7 @@ rm -f "$D/rotating"
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
             let _g = SPAWN.lock().unwrap();
-            (t, c.sync_spawn())
+            (t, c.spawn().unwrap())
         })
         .collect();
     let mut status = Vec::new();
@@ -3037,7 +3036,7 @@ fn with_job_dirs(env: &Env) -> PathBuf {
 fn each_job_builds_in_its_own_directory() {
     let env = setup("");
     let local = with_job_dirs(&env);
-    let user = Command::new("id").arg("-un").sync_output().stdout;
+    let user = Command::new("id").arg("-un").output().unwrap().stdout;
     let user = String::from_utf8(user).unwrap();
     // The job's user, else the user the job runs as.
     for (stem, job_user, owner) in [
@@ -3279,7 +3278,7 @@ fn a_command_that_runs_eb_pipeline_reads_the_site_file_of_the_run() {
         .stderr(Stdio::piped());
     let child = {
         let _g = SPAWN.lock().unwrap();
-        c.sync_spawn()
+        c.spawn().unwrap()
     };
     let o = child.wait_with_output().unwrap();
     assert_eq!(

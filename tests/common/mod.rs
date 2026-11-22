@@ -5,7 +5,6 @@
 #[path = "exec_stub.rs"]
 mod exec_stub_shared;
 
-pub use exec_stub_shared::CommandSyncExt;
 use serde_json::Value;
 use std::os::fd::FromRawFd;
 use std::path::{Path, PathBuf};
@@ -374,7 +373,7 @@ pub fn eb_pipeline(t: &T, args: &[&str], vars: &[(&str, &str)]) -> Output {
     for (k, v) in vars {
         c.env(k, v);
     }
-    c.sync_output()
+    c.output().unwrap()
 }
 
 /// `run` of `list` for `target` in the run directory `stamp`.
@@ -438,7 +437,7 @@ pub fn make_fifo(path: &Path) {
 /// Spawn `cmd` and collect its output. A child still running after `limit`
 /// is killed so the caller does not wait on a blocked read.
 pub fn output_within(cmd: &mut Command, limit: Duration) -> Output {
-    let mut child = cmd.sync_spawn();
+    let mut child = cmd.spawn().unwrap();
     let pid = libc::pid_t::try_from(child.id()).unwrap();
     // SAFETY: `pid` is the live child just spawned, and `pidfd` is closed below.
     let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
