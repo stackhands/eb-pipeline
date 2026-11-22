@@ -2284,8 +2284,7 @@ fn a_run_skips_its_rotation_while_another_run_holds_the_log_root() {
     let r = env.dir.path().display().to_string();
     let lock = format!("{r}/logs/.eb-pipeline-rotate.lock");
     std::fs::create_dir(env.dir.path().join("logs")).unwrap();
-    let live = std::fs::File::create(&lock).unwrap();
-    live.try_lock_shared().unwrap();
+    let live = common::LockHolder::shared(Path::new(&lock));
     let o = go(&env, LIST, &[]);
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert!(rotations(&env).is_empty());
@@ -2303,7 +2302,7 @@ fn a_run_skips_its_rotation_while_another_run_holds_the_log_root() {
     );
     assert!(calls(&env, "keeplogs.help").is_empty());
 
-    drop(live);
+    live.release();
     let o = go(&env, LIST, &[]);
     assert_eq!(o.code, 0, "{}", o.stderr);
     let logs = result_phase(o.result.as_ref().unwrap(), "logs");
