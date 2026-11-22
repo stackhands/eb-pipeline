@@ -2,16 +2,14 @@
 
 mod common;
 
+use common::write_exec;
 use serde_json::Value;
 use std::io::Write;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
-
-static SPAWN: Mutex<()> = Mutex::new(());
 
 fn write_skip_notice(reason: &str) {
     let mut stderr = std::io::stderr().lock();
@@ -210,11 +208,6 @@ struct Env {
     stubs: PathBuf,
 }
 
-fn write_exec(path: &Path, text: &str) {
-    let _g = SPAWN.lock().unwrap();
-    common::write_exec(path, text);
-}
-
 fn setup(extra_site: &str) -> Env {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
@@ -353,7 +346,6 @@ fn driver_named(
             c.env(k, v);
         }
     }
-    let _g = SPAWN.lock().unwrap();
     c.spawn().unwrap()
 }
 
@@ -2557,7 +2549,6 @@ rm -f "$D/rotating"
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
-            let _g = SPAWN.lock().unwrap();
             (t, c.spawn().unwrap())
         })
         .collect();
@@ -3276,10 +3267,7 @@ fn a_command_that_runs_eb_pipeline_reads_the_site_file_of_the_run() {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let child = {
-        let _g = SPAWN.lock().unwrap();
-        c.spawn().unwrap()
-    };
+    let child = c.spawn().unwrap();
     let o = child.wait_with_output().unwrap();
     assert_eq!(
         o.status.code(),
