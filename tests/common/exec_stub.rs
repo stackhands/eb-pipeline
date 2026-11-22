@@ -1,63 +1,67 @@
-use std::fs::OpenOptions;
-use std::io::Write;
+use std::ffi::OsStr;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::{Child, Command, ExitStatus, Output};
-use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{RwLock, RwLockReadGuard};
 use std::time::Duration;
 
 static EXEC_FORK_LOCK: RwLock<()> = RwLock::new(());
-
-fn writer_guard() -> RwLockWriteGuard<'static, ()> {
-    EXEC_FORK_LOCK.write().unwrap_or_else(|e| e.into_inner())
-}
 
 fn reader_guard() -> RwLockReadGuard<'static, ()> {
     EXEC_FORK_LOCK.read().unwrap_or_else(|e| e.into_inner())
 }
 
+const WRITER: &str = r#"out=$1; shift; set -C; : > "$out" || exit 1; set +C; for chunk; do printf '%s' "$chunk" >> "$out" || exit 1; done"#;
+const CHUNK: usize = 32 * 1024;
+
+/// Installs `text` as an executable at `path`.
+///
+/// The bytes are written by a short-lived `sh` child, so this process never
+/// holds a writable descriptor for the stub. A concurrent fork in another test
+/// thread therefore cannot inherit one, and a later exec of the stub cannot
+/// fail with ETXTBSY because of it.
 pub fn write_exec(path: &Path, text: &str) {
-    let _guard = writer_guard();
+    assert!(
+        !text.contains('\0'),
+        "an argv chunk cannot carry a NUL byte"
+    );
+    static NEXT: AtomicU64 = AtomicU64::new(0);
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let stem = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("stub");
-    for attempt in 0..1000u32 {
-        let temp = parent.join(format!(".{stem}.{}.{}.tmp", std::process::id(), attempt));
-        let mut file = match OpenOptions::new().write(true).create_new(true).open(&temp) {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => panic!("cannot create {}: {error}", temp.display()),
-        };
-        if let Err(error) = std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o755))
-        {
-            drop(file);
-            let _ = std::fs::remove_file(&temp);
-            panic!("cannot chmod {}: {error}", temp.display());
-        }
-        let written = file
-            .write_all(text.as_bytes())
-            .and_then(|()| file.sync_all());
-        drop(file);
-        if let Err(error) = written {
-            let _ = std::fs::remove_file(&temp);
-            panic!("cannot write {}: {error}", temp.display());
-        }
-        if let Err(error) = std::fs::rename(&temp, path) {
-            let _ = std::fs::remove_file(&temp);
-            panic!(
-                "cannot move {} to {}: {error}",
-                temp.display(),
-                path.display()
-            );
-        }
-        return;
+    let temp = parent.join(format!(
+        ".{stem}.{}.{}.tmp",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut writer = Command::new("/bin/sh");
+    writer.args(["-c", WRITER, "stub-writer"]).arg(&temp);
+    for chunk in text.as_bytes().chunks(CHUNK) {
+        writer.arg(OsStr::from_bytes(chunk));
     }
-    panic!(
-        "cannot allocate temporary executable near {}",
-        path.display()
-    );
+    let output = writer
+        .stdin(Stdio::null())
+        .output()
+        .unwrap_or_else(|error| panic!("cannot start the stub writer: {error}"));
+    if !output.status.success() {
+        let _ = std::fs::remove_file(&temp);
+        panic!(
+            "cannot write {}: {}\n{}",
+            temp.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let installed = std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o755))
+        .and_then(|()| std::fs::rename(&temp, path));
+    if let Err(error) = installed {
+        let _ = std::fs::remove_file(&temp);
+        panic!("cannot install {}: {error}", path.display());
+    }
 }
 
 fn retry_etxtbsy<T>(mut run: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
