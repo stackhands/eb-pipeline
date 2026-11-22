@@ -320,13 +320,86 @@ fn text(k: &str, v: &Value) -> Result<String, String> {
         Value::Bool(b) => Ok(python_bool(*b).into()),
         Value::Null => Ok("None".into()),
         Value::Number(n) if n.is_i64() || n.is_u64() => Ok(n.to_string()),
-        Value::Number(n) => Err(format!(
-            "the option `{k}`: put `{n}` in quotes; Python and eb-pipeline write a number with a point differently"
-        )),
+        Value::Number(n) => {
+            Ok(python_float(n.as_f64().ok_or_else(|| {
+                format!("the option `{k}`: `{n}` is not a finite number")
+            })?))
+        }
         _ => Err(format!(
             "the option `{k}`: a value is text, a number, a boolean or a list of them"
         )),
     }
+}
+
+/// Format a binary float as Python's `str(float)` does.
+fn python_float(value: f64) -> String {
+    if value.is_nan() {
+        return "nan".into();
+    }
+    if value == f64::INFINITY {
+        return "inf".into();
+    }
+    if value == f64::NEG_INFINITY {
+        return "-inf".into();
+    }
+
+    // Ryu follows round-to-nearest, ties-to-even when two shortest decimal
+    // representations round back to the same binary float. This is the rule
+    // used by CPython's dtoa mode 0; Rust's Display implementation may choose
+    // the other decimal in that case.
+    let mut buffer = ryu::Buffer::new();
+    let lexical = buffer.format_finite(value);
+    let (negative, unsigned) = lexical
+        .strip_prefix('-')
+        .map_or((false, lexical), |s| (true, s));
+    let (mantissa, explicit_exponent) = unsigned
+        .split_once(['e', 'E'])
+        .map_or((unsigned, 0), |(m, e)| (m, e.parse::<i32>().unwrap()));
+    let (integer, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let raw_digits = format!("{integer}{fraction}");
+
+    if raw_digits.bytes().all(|b| b == b'0') {
+        return if negative { "-0.0" } else { "0.0" }.into();
+    }
+
+    let leading = raw_digits.bytes().take_while(|b| *b == b'0').count();
+    let mut digits = raw_digits[leading..].trim_end_matches('0').to_string();
+    let exponent = if integer.bytes().any(|b| b != b'0') {
+        integer.len() as i32 - integer.bytes().take_while(|b| *b == b'0').count() as i32 - 1
+    } else {
+        -(fraction.bytes().take_while(|b| *b == b'0').count() as i32) - 1
+    } + explicit_exponent;
+
+    let mut result = String::new();
+    if negative {
+        result.push('-');
+    }
+    if !(-4..16).contains(&exponent) {
+        result.push(digits.remove(0));
+        if !digits.is_empty() {
+            result.push('.');
+            result.push_str(&digits);
+        }
+        result.push('e');
+        result.push(if exponent < 0 { '-' } else { '+' });
+        result.push_str(&format!("{:02}", exponent.unsigned_abs()));
+    } else if exponent < 0 {
+        result.push_str("0.");
+        result.extend(std::iter::repeat_n('0', (-exponent - 1) as usize));
+        result.push_str(&digits);
+    } else {
+        let decimal = exponent as usize + 1;
+        if digits.len() <= decimal {
+            result.push_str(&digits);
+            result.extend(std::iter::repeat_n('0', decimal - digits.len()));
+            result.push_str(".0");
+        } else {
+            result.push_str(&digits[..decimal]);
+            result.push('.');
+            result.push_str(&digits[decimal..]);
+        }
+    }
+    result
 }
 
 fn python_bool(b: bool) -> &'static str {
@@ -476,6 +549,57 @@ easyconfigs:
     }
 
     #[test]
+    fn decimal_option_values_are_written_as_in_easybuild() {
+        let l = &parse(
+            "easyconfigs:\n  - x.eb: {options: {amend: 2.5, large: 1.0e+20, nan: .nan, negative: -.inf, parallel: 1.5, positive: .inf, ratios: [2.5, 3.25], small: 0.000001}}\n",
+        )
+        .unwrap()[0];
+        assert_eq!(
+            l.args,
+            [
+                "--amend=2.5",
+                "--large=1e+20",
+                "--nan=nan",
+                "--negative=-inf",
+                "--parallel=1.5",
+                "--positive=inf",
+                "--ratios=2.5,3.25",
+                "--small=1e-06"
+            ]
+        );
+    }
+
+    #[test]
+    fn decimal_tie_is_written_as_in_python() {
+        let l = &parse("easyconfigs:\n  - x.eb: {options: {parallel: 1136789840277548.3}}\n")
+            .unwrap()[0];
+        assert_eq!(l.args, ["--parallel=1136789840277548.2"]);
+    }
+
+    #[test]
+    fn finite_floats_are_written_as_in_python() {
+        for (line_number, line) in include_str!("../tests/data/python-float-repr.tsv")
+            .lines()
+            .enumerate()
+        {
+            if line.starts_with('#') {
+                continue;
+            }
+            let (bits, expected) = line
+                .split_once('\t')
+                .unwrap_or_else(|| panic!("fixture line {} has no tab", line_number + 1));
+            let bits = u64::from_str_radix(bits, 16)
+                .unwrap_or_else(|_| panic!("fixture line {} has invalid bits", line_number + 1));
+            assert_eq!(
+                python_float(f64::from_bits(bits)),
+                expected,
+                "fixture line {} for bits {bits:016x}",
+                line_number + 1
+            );
+        }
+    }
+
+    #[test]
     fn ordinary_option_output_keeps_its_exact_bytes() {
         let l = &parse(
             "easyconfigs:\n  - x.eb: {options: {rebuild: true, parallel: 4, robot: false}}\n",
@@ -520,10 +644,6 @@ easyconfigs:
             (
                 "easyconfigs:\n  - x.eb: {options: {--rebuild: true}}\n",
                 "without its dashes",
-            ),
-            (
-                "easyconfigs:\n  - x.eb: {options: {parallel: 1.5}}\n",
-                "put `1.5` in quotes",
             ),
             (
                 "easyconfigs:\n  - x.eb: {options: {hooks: {a: b}}}\n",
