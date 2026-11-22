@@ -3,7 +3,6 @@
 #[path = "common/exec_stub.rs"]
 mod exec_stub;
 
-use exec_stub::CommandSyncExt;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -204,7 +203,8 @@ fn run(f: &Fixture, extra: &[&str]) -> Output {
         .current_dir(root)
         .env("PATH", path)
         .env("STUB_DIR", root)
-        .sync_output()
+        .output()
+        .unwrap()
 }
 
 fn plan(f: &Fixture) -> Output {
@@ -226,7 +226,8 @@ fn plan(f: &Fixture) -> Output {
             "-",
         ])
         .current_dir(f.dir.path())
-        .sync_output()
+        .output()
+        .unwrap()
 }
 
 fn calls(f: &Fixture, name: &str) -> String {

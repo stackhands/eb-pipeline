@@ -5,7 +5,7 @@
 
 mod common;
 
-use common::{output_within, CommandSyncExt};
+use common::output_within;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
@@ -131,7 +131,7 @@ impl Tree {
     }
 
     fn run(&self, args: &[&str], vars: &[(&str, &str)]) -> Output {
-        self.command(args, vars).sync_output()
+        self.command(args, vars).output().unwrap()
     }
 }
 

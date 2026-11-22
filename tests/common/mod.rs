@@ -5,11 +5,11 @@
 #[path = "exec_stub.rs"]
 mod exec_stub_shared;
 
-pub use exec_stub_shared::CommandSyncExt;
 use serde_json::Value;
+use std::io::BufRead;
 use std::os::fd::FromRawFd;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, ChildStdin, Command, Output, Stdio};
 use std::time::Duration;
 
 pub const STAMP: &str = "20260101_000000";
@@ -23,6 +23,67 @@ pub fn closed_stdout() -> Stdio {
         assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
         assert_eq!(libc::close(fds[0]), 0);
         Stdio::from_raw_fd(fds[1])
+    }
+}
+
+/// A `flock(2)` lock on a file, held by a separate process until released.
+///
+/// A descriptor for the lock file in this multithreaded process can be copied
+/// by another test thread's fork and kept until that child execs. The lock
+/// then outlives the test's release and the next lock attempt fails. The
+/// holder is one process that owns the only descriptor, and `release` returns
+/// only after it is dead, so the lock is free from then on. It is stopped with
+/// a signal, not by closing a pipe, because a forked copy of a pipe end would
+/// keep the holder alive in the same way.
+pub struct LockHolder {
+    child: Child,
+    _stdin: Option<ChildStdin>,
+}
+
+impl LockHolder {
+    pub fn shared(path: &Path) -> Self {
+        Self::hold("--shared", path)
+    }
+
+    pub fn exclusive(path: &Path) -> Self {
+        Self::hold("--exclusive", path)
+    }
+
+    fn hold(mode: &str, path: &Path) -> Self {
+        let script = r#"exec 9>>"$1" || exit 98; flock "$2" --timeout 20 9 || exit 99; echo held; exec cat >/dev/null"#;
+        let mut child = Command::new("sh")
+            .args(["-c", script, "lock-holder"])
+            .arg(path)
+            .arg(mode)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("cannot start the lock holder");
+        let stdin = child.stdin.take();
+        let mut line = String::new();
+        std::io::BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        assert_eq!(line, "held\n", "cannot lock {}", path.display());
+        Self {
+            child,
+            _stdin: stdin,
+        }
+    }
+
+    pub fn release(mut self) {
+        self.stop();
+    }
+
+    fn stop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+impl Drop for LockHolder {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -374,7 +435,7 @@ pub fn eb_pipeline(t: &T, args: &[&str], vars: &[(&str, &str)]) -> Output {
     for (k, v) in vars {
         c.env(k, v);
     }
-    c.sync_output()
+    c.output().unwrap()
 }
 
 /// `run` of `list` for `target` in the run directory `stamp`.
@@ -438,7 +499,7 @@ pub fn make_fifo(path: &Path) {
 /// Spawn `cmd` and collect its output. A child still running after `limit`
 /// is killed so the caller does not wait on a blocked read.
 pub fn output_within(cmd: &mut Command, limit: Duration) -> Output {
-    let mut child = cmd.sync_spawn();
+    let mut child = cmd.spawn().unwrap();
     let pid = libc::pid_t::try_from(child.id()).unwrap();
     // SAFETY: `pid` is the live child just spawned, and `pidfd` is closed below.
     let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
