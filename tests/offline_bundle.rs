@@ -345,6 +345,45 @@ fn bundle_indexes_prefetched_and_runtime_assets_and_isolates_later_commands() {
 }
 
 #[test]
+fn a_bundle_manifest_is_not_taken_for_a_run_summary() {
+    let f = fixture(true, &digest(b"runtime data"));
+    let bundle = f.bundle.display().to_string();
+    let output = run(&f, &["--offline-bundle", &bundle, "--require-offline"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let manifest = std::fs::read_to_string(f.bundle.join("manifest.json")).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&manifest).unwrap()["kind"],
+        "offline-bundle"
+    );
+    let summary = f.dir.path().join("logs/20261117_220000/summary.json");
+    std::fs::write(&summary, &manifest).unwrap();
+    let why = "kind `offline-bundle` is not `summary`";
+
+    let again = run(&f, &[]);
+    let stderr = String::from_utf8_lossy(&again.stderr);
+    assert_eq!(again.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("no summary written: ") && stderr.contains(why),
+        "{stderr}"
+    );
+    assert_eq!(std::fs::read_to_string(&summary).unwrap(), manifest);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"))
+        .args(["status", "--site"])
+        .arg(&f.site)
+        .output()
+        .unwrap();
+    let shown = String::from_utf8_lossy(&status.stdout);
+    assert_eq!(status.status.code(), Some(0), "{shown}");
+    assert!(shown.contains(why), "{shown}");
+}
+
+#[test]
 fn default_run_does_not_plan_or_write_a_bundle() {
     let f = fixture(true, &digest(b"runtime data"));
     let output = run(&f, &[]);
