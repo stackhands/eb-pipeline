@@ -4,6 +4,103 @@ All notable changes to this project are documented here.
 
 <!-- towncrier release notes start -->
 
+## 0.5.0 (2026-11-24)
+
+### Features
+
+- Add `--refuse-systemic-failure` to `eb-retry-list`. The flag classifies
+  failed logs and refuses output only when every failed line is one shared
+  infrastructure class (command path, disk full, fetch network, or missing
+  module tree). Ordinary build failures still produce retry lists.
+
+### Fixes
+
+- A run or a watch that a signal stopped exits 130 or 143 when its result file
+  cannot be written, and no longer exits 1.
+- A run stopped by SIGINT or SIGTERM while a site command of a late phase is
+  running records that phase once, as interrupted, and no longer as failed too.
+- Audit refuses an `eb-stack rebuild-set` result file that is not valid JSON,
+  as it already does for the SBOM and component analysis files, and copies no
+  rebuild list from it.
+- Audit rejects empty CVE values and CVE values containing control characters.
+- Avoid panic/backtrace output when `eb-pipeline init` cannot write to stderr;
+  the command now exits with a controlled runtime failure instead.
+- Clear the default and the configured target override variables of the European
+  Environment for Scientific Software Installations before starting a command.
+- Companion commands now read path arguments as byte-preserving paths via
+  `args_os`, matching `eb-pipeline` behavior for non-UTF-8 file names instead of
+  panicking in argument parsing.
+- Decode `_ModuleTable_` with the same URL-safe base64 path as chunked
+  module table exports before hashing, so equivalent exports record the
+  same `module_table_sha256` and malformed singleton values are rejected.
+- Explain rejects empty build types and build types containing control characters.
+- From-commit checks reject empty EasyBuild versions and versions containing control characters.
+- Gap checks reject empty generations and generations containing control characters.
+- Isolate European Environment for Scientific Software Installations commands
+  from inherited installation modes and target overrides.
+- Make `watch --dry-run` fail when refusal details cannot be written to
+  stdout, instead of discarding that write error.
+- Preserve repeated EasyBuild amend options in memory-check easystacks.
+- Readers of list, site, existing-weights and previous-metrics inputs refuse a
+  FIFO promptly instead of blocking while waiting for a writer.
+- Reading a directory as an input file reports "Is a directory" again, as
+  it did before the shared reader, instead of "not a regular file".
+- Record a compact European Environment for Scientific Software Installations
+  module state in watch plans.
+- Refuse a package-plan `closure.plan.json` whose `companions` key is present and
+  is not an array, with exit 2 and a message naming the file.
+- Refuse a shard plan whose `shards` is not an array or whose `prelude` or
+  `cpu_prerequisites` is not an object, in place of building only the units
+  that were left.
+- Refuse unclosed patch strings instead of recording a partial patch list.
+- Refuse unreadable easyblock files instead of recording a missing definition.
+- Remove watch scratch work on every exit after it is created, including a dry-run stdout write failure, unless the command keeps that directory on purpose.
+- Resolve nonliteral easyblock expressions before signing their class.
+- Route companion stdout writes through shared util helpers so all shipped
+  binaries report the same `cannot write stdout: ...` diagnostic and
+  expected exit code when stdout writes fail.
+- Run ends with exit 1 when `eb-stack stack sbom` exits with a status other than
+  0, 130 or 143, in place of passing that status on as its own.
+- Run rejects empty OOM node values and OOM node values containing control characters.
+- Set `EESSI_ACCELERATOR_INSTALL` for configured accelerator targets.
+- Summary writes use the shared atomic writer, which syncs the file before
+  the rename. A symbolic link at the summary output path is now refused with
+  an error instead of being replaced by a regular file.
+- `eb-cvmfs` exits with status `2`, not `1`, when the metrics file cannot be
+  prepared before any repository command starts. Status `1` now means only that
+  the repository operation succeeded and the metrics write failed.
+- `eb-pipeline --help` and `--version` now report stdout write failures (for
+  example `/dev/full`) as runtime errors instead of exiting successfully without
+  diagnostic output.
+- `eb-pipeline run` now preserves `SIGINT`/`SIGTERM` exit status in
+  `result.json` when a signal lands while the process is waiting on
+  `.summary.lock`.
+- `eb-shard-weights` rejects a succeeded build duration that cannot fit any
+  whole-second weight, instead of writing the largest integer.
+- `eb-test-map` rejects a FIFO passed as the result input with a prompt
+  usage error instead of blocking while reading it.
+
+### Documentation
+
+- The README says when `eb --easystack --job` or the EESSI build-and-deploy bot is enough, and what a site stack on a shared file system needs beyond them.
+
+### Miscellaneous
+
+- A test pins that `eb-cvmfs` finishes with a FIFO at its metrics path.
+- Duration validation for read-only result consumers is centralized in one
+  helper used by eb-junit, eb-shard-weights and metrics parsing.
+- Format the run_stubs wchan/stack helper block to satisfy rustfmt.
+- Replace fixed sleeps in lock-contention integration tests with observable
+  wait conditions and bounded deadlines.
+- Synchronize the summary lock test at the lock attempt instead of relying on timeouts.
+- The ci workflow runs the tests that read EB_STACK_REAL against the eb-stack 0.8.0 release.
+- The summary lock unit test now proves blocking by waiting for a test-only
+  post-lock-acquire signal from `record`.
+- The summary-lock signal regression now writes its `SKIP:` notice directly
+  to a locked stderr handle, and only after a sustained unobservable
+  `/proc` wait-state window.
+
+
 ## 0.4.0 (2026-11-19)
 
 ### Features
