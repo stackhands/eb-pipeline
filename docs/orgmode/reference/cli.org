@@ -284,7 +284,8 @@ With =--target=, the selected target's exit code decides whether a run is proble
 A status the run did not use is 0.
 Log paths stay in the result file.
 Exit 0 means the file was read, including when the run's own exit code is not 0.
-Exit 2 means the file is missing, is not JSON, or its =kind= is not =result=.
+Exit 2 means the file is missing, is not JSON, its =kind= is not =result=, or it has a =schema_version= that is not the integer 1.
+A result without a =schema_version= key is read as version 1.
 
 *** plan
 
