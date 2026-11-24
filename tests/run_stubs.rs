@@ -2,17 +2,14 @@
 
 mod common;
 
-use common::CommandSyncExt;
+use common::write_exec;
 use serde_json::Value;
 use std::io::Write;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
-
-static SPAWN: Mutex<()> = Mutex::new(());
 
 fn write_skip_notice(reason: &str) {
     let mut stderr = std::io::stderr().lock();
@@ -211,11 +208,6 @@ struct Env {
     stubs: PathBuf,
 }
 
-fn write_exec(path: &Path, text: &str) {
-    let _g = SPAWN.lock().unwrap();
-    common::write_exec(path, text);
-}
-
 fn setup(extra_site: &str) -> Env {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
@@ -354,8 +346,7 @@ fn driver_named(
             c.env(k, v);
         }
     }
-    let _g = SPAWN.lock().unwrap();
-    c.sync_spawn()
+    c.spawn().unwrap()
 }
 
 fn finish(env: &Env, child: std::process::Child) -> Out {
@@ -2293,8 +2284,7 @@ fn a_run_skips_its_rotation_while_another_run_holds_the_log_root() {
     let r = env.dir.path().display().to_string();
     let lock = format!("{r}/logs/.eb-pipeline-rotate.lock");
     std::fs::create_dir(env.dir.path().join("logs")).unwrap();
-    let live = std::fs::File::create(&lock).unwrap();
-    live.try_lock_shared().unwrap();
+    let live = common::LockHolder::shared(Path::new(&lock));
     let o = go(&env, LIST, &[]);
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert!(rotations(&env).is_empty());
@@ -2312,7 +2302,7 @@ fn a_run_skips_its_rotation_while_another_run_holds_the_log_root() {
     );
     assert!(calls(&env, "keeplogs.help").is_empty());
 
-    drop(live);
+    live.release();
     let o = go(&env, LIST, &[]);
     assert_eq!(o.code, 0, "{}", o.stderr);
     let logs = result_phase(o.result.as_ref().unwrap(), "logs");
@@ -2558,8 +2548,7 @@ rm -f "$D/rotating"
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
-            let _g = SPAWN.lock().unwrap();
-            (t, c.sync_spawn())
+            (t, c.spawn().unwrap())
         })
         .collect();
     let mut status = Vec::new();
@@ -3037,7 +3026,7 @@ fn with_job_dirs(env: &Env) -> PathBuf {
 fn each_job_builds_in_its_own_directory() {
     let env = setup("");
     let local = with_job_dirs(&env);
-    let user = Command::new("id").arg("-un").sync_output().stdout;
+    let user = Command::new("id").arg("-un").output().unwrap().stdout;
     let user = String::from_utf8(user).unwrap();
     // The job's user, else the user the job runs as.
     for (stem, job_user, owner) in [
@@ -3277,10 +3266,7 @@ fn a_command_that_runs_eb_pipeline_reads_the_site_file_of_the_run() {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let child = {
-        let _g = SPAWN.lock().unwrap();
-        c.sync_spawn()
-    };
+    let child = c.spawn().unwrap();
     let o = child.wait_with_output().unwrap();
     assert_eq!(
         o.status.code(),

@@ -979,8 +979,7 @@ fn watch_refuses_without_its_table_waits_for_another_watch_and_for_eessi() {
 
     let dir = t.root().join("install/.eb-pipeline-watch");
     std::fs::create_dir_all(&dir).unwrap();
-    let held = std::fs::File::create(dir.join("cpu.watch.lock")).unwrap();
-    held.lock().unwrap();
+    let held = LockHolder::exclusive(&dir.join("cpu.watch.lock"));
     let o = watch(&t, LATER, &[], &with(&vars));
     assert_eq!(code(&o), 75, "{}", stderr(&o));
     assert!(
@@ -988,7 +987,7 @@ fn watch_refuses_without_its_table_waits_for_another_watch_and_for_eessi() {
         "{}",
         stderr(&o)
     );
-    drop(held);
+    held.release();
 
     let mut gone = with(&vars);
     gone.push(("EESSI_MODULEPATH", "/nonexistent/modules/all"));

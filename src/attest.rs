@@ -18,6 +18,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Read;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -763,7 +764,7 @@ fn find_easyblock(class: &str, index: &Index) -> Result<Option<ResolvedFile>, Fa
     let mut found = Vec::new();
     for paths in index.by_name.values() {
         for path in paths {
-            let text = fs::read_to_string(path).map_err(|e| {
+            let text = util::read_text_file(path).map_err(|e| {
                 Fail::new(
                     exit::REFUSED,
                     format!("cannot read {}: {e}", path.display()),
@@ -852,12 +853,20 @@ fn absolute(path: &Path) -> Result<PathBuf, Fail> {
 }
 
 fn read_bytes(path: &Path) -> Result<Vec<u8>, Fail> {
-    fs::read(path).map_err(|e| {
+    let mut file = util::open_regular_file(path).map_err(|e| {
         Fail::new(
             exit::REFUSED,
             format!("cannot read {}: {e}", path.display()),
         )
-    })
+    })?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(|e| {
+        Fail::new(
+            exit::REFUSED,
+            format!("cannot read {}: {e}", path.display()),
+        )
+    })?;
+    Ok(bytes)
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
