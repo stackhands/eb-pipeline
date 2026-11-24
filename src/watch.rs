@@ -1649,22 +1649,40 @@ pub fn settle(
     rebuild: Option<Rebuild>,
     abi: Option<&AbiBaseline>,
 ) -> Result<Vec<String>, Fail> {
-    let dir = p.scope.watch_state_dir().expect("[watch] is on");
-    let target = &p.scope.target.name;
     let rebuilt = match rebuild {
         Some((lines, res, before)) => built_by(p, lines, res, before)?.0,
         None => Vec::new(),
     };
+    settle_built(p, probe, revision, verdicts, &rebuilt, abi)
+}
+
+/// [`settle`] once the installs the rebuild built are known.
+fn settle_built(
+    p: &Planner,
+    probe: &Probe,
+    revision: Option<u64>,
+    verdicts: &[Verdict],
+    rebuilt: &[ToRecord],
+    abi: Option<&AbiBaseline>,
+) -> Result<Vec<String>, Fail> {
+    let dir = p.scope.watch_state_dir().expect("[watch] is on");
+    let target = &p.scope.target.name;
     let mut recorded = Vec::new();
-    let inputs = inputs(p)?;
-    if !rebuilt.is_empty() {
+    // A record stores the inputs it read; a snapshot taken before it would
+    // be older than the record it replaced.
+    let inputs = if rebuilt.is_empty() {
+        Some(inputs(p)?)
+    } else {
         let work = work_dir(p, "record")?;
-        recorded = record(p, &work, probe, revision, &rebuilt, false)?;
+        recorded = record(p, &work, probe, revision, rebuilt, false)?;
         let _ = std::fs::remove_dir_all(&work);
-    }
+        None
+    };
     let local = vec![local_modules_dir(p)];
     update(&dir, target, |s| {
-        s.inputs = Some(inputs);
+        if let Some(i) = inputs {
+            s.inputs = Some(i);
+        }
         if let Some(a) = abi {
             s.abi_baseline = Some(a.clone());
         }
@@ -1983,6 +2001,88 @@ mod tests {
             got,
             input(&tree).unwrap(),
             "the digest is of the new content"
+        );
+    }
+
+    #[test]
+    fn settle_keeps_the_inputs_the_record_of_a_rebuild_read() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().display().to_string();
+        let tree = d.path().join("robot");
+        std::fs::create_dir_all(&tree).unwrap();
+        let site_file = d.path().join("site.toml");
+        let text = format!(
+            r#"
+schema_version = 1
+kind = "site"
+[site]
+name = "example"
+[scheduler]
+kind = "local"
+[[targets]]
+name = "zen4"
+site_prefix = "{root}/site"
+default = true
+[filesystems]
+scratch = "{root}/scratch"
+tmp = "{root}/scratch/tmp"
+build_path = "{root}/scratch/build"
+install_root = "{root}/site"
+log_root = "{root}/logs"
+[modules]
+init = ["EESSI/2023.06"]
+[watch]
+easyconfigs = ["{tree}"]
+"#,
+            tree = tree.display()
+        );
+        std::fs::write(&site_file, &text).unwrap();
+        let site = crate::site::parse(&text).unwrap();
+        let scope = crate::resolve::Scope {
+            site: &site,
+            site_file: Some(site_file.display().to_string()),
+            target: site.target("zen4").unwrap(),
+            build_type: Some("production"),
+            run_id: "r".into(),
+            log_stamp: "20261117_140000".into(),
+        };
+        let planner = Planner::new(scope, "zen4.list".into());
+        let probe = Probe {
+            version: "2023.06".into(),
+            software_subdir: "x86_64/amd/zen4".into(),
+            repository: None,
+            modules_dirs: Vec::new(),
+            loaded_modules: None,
+            module_table_sha256: None,
+        };
+        let rebuilt = [ToRecord {
+            module: "Foo/1.0".into(),
+            easyconfig: "Foo-1.0.eb".into(),
+            args: Vec::new(),
+            how: "built",
+        }];
+
+        // Each snapshot of the inputs sees a site file no earlier one saw.
+        let mut reads = 0;
+        let path = site_file.clone();
+        HOOK.with(|h| {
+            *h.borrow_mut() = Some(Box::new(move |at| {
+                if at == "inputs" {
+                    reads += 1;
+                    std::fs::write(&path, format!("{text}# snapshot {reads}\n")).unwrap();
+                }
+            }))
+        });
+        let settled = settle_built(&planner, &probe, None, &[], &rebuilt, None);
+        HOOK.with(|h| *h.borrow_mut() = None);
+        settled.unwrap();
+
+        let dir = planner.scope.watch_state_dir().unwrap();
+        let state = load(&dir, "zen4").unwrap();
+        assert_eq!(
+            state.inputs.unwrap().site_file,
+            input(&site_file).unwrap(),
+            "the stored digest is of the site file as the record read it"
         );
     }
 
