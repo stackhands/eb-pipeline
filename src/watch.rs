@@ -204,16 +204,93 @@ fn unreadable(path: &Path, error: impl std::fmt::Display) -> Fail {
     )
 }
 
-fn modified(path: &Path) -> Result<std::time::SystemTime, Fail> {
-    std::fs::metadata(path)
-        .and_then(|meta| meta.modified())
-        .map_err(|error| {
-            Fail::new(
-                exit::FAILED,
-                format!("cannot stat {}: {error}", path.display()),
-            )
-        })
+/// What `stat` says of one entry of an input: a write to it, or its
+/// replacement by another file, moves at least one of these unless it
+/// keeps the size and lands within the file system's timestamp resolution.
+#[derive(Debug, PartialEq, Eq)]
+struct Stamp {
+    dev: u64,
+    ino: u64,
+    mode: u32,
+    size: u64,
+    mtime: (i64, i64),
+    ctime: (i64, i64),
 }
+
+impl Stamp {
+    fn of(meta: &std::fs::Metadata) -> Stamp {
+        use std::os::unix::fs::MetadataExt;
+        Stamp {
+            dev: meta.dev(),
+            ino: meta.ino(),
+            mode: meta.mode(),
+            size: meta.size(),
+            mtime: (meta.mtime(), meta.mtime_nsec()),
+            ctime: (meta.ctime(), meta.ctime_nsec()),
+        }
+    }
+}
+
+fn unstatable(path: &Path, error: std::io::Error) -> Fail {
+    Fail::new(
+        exit::FAILED,
+        format!("cannot stat {}: {error}", path.display()),
+    )
+}
+
+/// The stamp of `path` and, for a tree, of every entry under it that
+/// [`tree_content`] reads, in the order it reads them. A link carries the
+/// stamps of itself and of what it names.
+fn stamps(path: &Path, out: &mut Vec<(PathBuf, Stamp)>) -> Result<(), Fail> {
+    let link = std::fs::symlink_metadata(path).map_err(|error| unstatable(path, error))?;
+    let meta = std::fs::metadata(path).map_err(|error| unstatable(path, error))?;
+    if link.file_type().is_symlink() {
+        out.push((path.to_path_buf(), Stamp::of(&link)));
+        if meta.is_dir() {
+            return Ok(());
+        }
+    }
+    out.push((path.to_path_buf(), Stamp::of(&meta)));
+    if !meta.is_dir() {
+        return Ok(());
+    }
+    let mut entries: Vec<_> = std::fs::read_dir(path)
+        .map_err(|error| unreadable(path, error))?
+        .collect::<Result<_, _>>()
+        .map_err(|error| unreadable(path, error))?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        stamps(&entry.path(), out)?;
+    }
+    Ok(())
+}
+
+fn snapshot(path: &Path) -> Result<Vec<(PathBuf, Stamp)>, Fail> {
+    let mut out = Vec::new();
+    stamps(path, &mut out)?;
+    Ok(out)
+}
+
+#[cfg(test)]
+type Hook = Box<dyn FnMut(&str)>;
+
+#[cfg(test)]
+thread_local! {
+    static HOOK: std::cell::RefCell<Option<Hook>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Lets a test act at a named point of an input read.
+#[cfg(test)]
+fn hook(at: &str) {
+    HOOK.with(|h| {
+        if let Some(f) = h.borrow_mut().as_mut() {
+            f(at)
+        }
+    })
+}
+
+#[cfg(not(test))]
+fn hook(_: &str) {}
 
 /// Hash the content of one file in blocks, after its name and length.
 fn file_content(path: &Path, name: &str, hash: &mut Sha256, size: &mut u64) -> Result<(), Fail> {
@@ -296,10 +373,13 @@ fn tree_content(path: &Path, hash: &mut Sha256, size: &mut u64) -> Result<(), Fa
 /// path as `watch` names module trees.
 ///
 /// Files are read in blocks, so the memory used does not grow with the
-/// input. A modification time that moves while the input is read means a
-/// concurrent writer, so the read is repeated, three times at most. The
-/// modification time is not stored or used to decide identity: the SHA-256
-/// is the decision. A missing or unreadable input is an error.
+/// input. The device, inode, mode, size, modification and change times of
+/// the input and of every entry under it are taken before and after the
+/// read; any that moved means a concurrent writer, so the read is
+/// repeated, three times at most. A write that keeps the size and lands
+/// within the file system's timestamp resolution moves none of them and
+/// goes unseen. None of this is stored or used to decide identity: the
+/// SHA-256 is the decision. A missing or unreadable input is an error.
 pub fn input(path: &Path) -> Result<Input, Fail> {
     let path = std::fs::canonicalize(path).map_err(|error| {
         Fail::new(
@@ -308,7 +388,7 @@ pub fn input(path: &Path) -> Result<Input, Fail> {
         )
     })?;
     for _ in 0..3 {
-        let before = modified(&path)?;
+        let before = snapshot(&path)?;
         let mut hash = Sha256::new();
         let mut size = 0;
         if path.is_dir() {
@@ -317,7 +397,8 @@ pub fn input(path: &Path) -> Result<Input, Fail> {
         } else {
             file_content(&path, "", &mut hash, &mut size)?;
         }
-        if modified(&path)? == before {
+        hook("read");
+        if snapshot(&path)? == before {
             return Ok(Input {
                 path: path.display().to_string(),
                 size,
@@ -333,6 +414,7 @@ pub fn input(path: &Path) -> Result<Input, Fail> {
 
 /// The site file and configured easyconfig trees that a record uses.
 pub fn inputs(planner: &Planner) -> Result<Inputs, Fail> {
+    hook("inputs");
     let site_file = planner.scope.site_file.as_deref().ok_or_else(|| {
         Fail::new(
             exit::FAILED,
@@ -1826,6 +1908,82 @@ mod tests {
         let after = input(&d.path().join("tree")).unwrap();
         assert_eq!(before.size, after.size);
         assert_ne!(before.sha256, after.sha256);
+    }
+
+    /// Runs `write` once, after the first read of the input is hashed and
+    /// before its stamps are taken again.
+    fn input_with_write_during_read(path: &Path, write: impl FnOnce() + 'static) -> Input {
+        let mut write = Some(write);
+        HOOK.with(|h| {
+            *h.borrow_mut() = Some(Box::new(move |at| {
+                if at == "read" {
+                    if let Some(w) = write.take() {
+                        w()
+                    }
+                }
+            }))
+        });
+        let got = input(path);
+        HOOK.with(|h| *h.borrow_mut() = None);
+        got.unwrap()
+    }
+
+    fn tree_with_recipe() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let d = tempfile::tempdir().unwrap();
+        let tree = d.path().join("tree");
+        std::fs::create_dir_all(tree.join("f/Foo")).unwrap();
+        let recipe = tree.join("f/Foo/Foo-1.0.eb");
+        std::fs::write(&recipe, "one\n").unwrap();
+        (d, tree, recipe)
+    }
+
+    #[test]
+    fn a_same_length_rewrite_of_a_file_deep_in_a_tree_during_the_read_is_read_again() {
+        let (_d, tree, recipe) = tree_with_recipe();
+        let root = std::fs::metadata(&tree).unwrap().modified().unwrap();
+        let mtime = std::fs::metadata(&recipe).unwrap().modified().unwrap();
+        let path = recipe.clone();
+        let got = input_with_write_during_read(&tree, move || {
+            std::fs::write(&path, "two\n").unwrap();
+            File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_times(
+                    std::fs::FileTimes::new()
+                        .set_modified(mtime + std::time::Duration::from_secs(1)),
+                )
+                .unwrap();
+        });
+        assert_eq!(std::fs::metadata(&tree).unwrap().modified().unwrap(), root);
+        assert_eq!(
+            got,
+            input(&tree).unwrap(),
+            "the digest is of the new content"
+        );
+    }
+
+    #[test]
+    fn a_file_deep_in_a_tree_replaced_during_the_read_with_its_old_times_is_read_again() {
+        let (_d, tree, recipe) = tree_with_recipe();
+        let mtime = std::fs::metadata(&recipe).unwrap().modified().unwrap();
+        let path = recipe.clone();
+        let got = input_with_write_during_read(&tree, move || {
+            let new = path.with_extension("new");
+            std::fs::write(&new, "two\n").unwrap();
+            File::options()
+                .write(true)
+                .open(&new)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(mtime))
+                .unwrap();
+            std::fs::rename(&new, &path).unwrap();
+        });
+        assert_eq!(
+            got,
+            input(&tree).unwrap(),
+            "the digest is of the new content"
+        );
     }
 
     #[test]

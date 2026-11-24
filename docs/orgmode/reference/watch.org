@@ -449,8 +449,12 @@ cat site/zen4/.eb-pipeline-watch/zen4.json
 
 =site_file= and each entry of =easyconfig_trees= hold the canonical =path=, =size= and
 =sha256=. The size is the file size, or the total size of regular files in a
-tree. The SHA-256 covers the file or tree content and decides its identity;
-modification times only detect a concurrent write while eb-pipeline reads it.
+tree. The SHA-256 covers the file or tree content and decides its identity.
+eb-pipeline takes the device, inode, mode, size, modification and change times
+of the input and of every entry in a tree before and after it reads them, and
+reads again, three times at most, when any of them moved. A concurrent write
+that keeps the size and lands within the file system's timestamp resolution
+moves none of them, so it can go unseen.
 
 *** =abi_baseline=
 
