@@ -260,6 +260,7 @@ It shows =<run-id>= and =<log-stamp>= where a run puts its own.
 =status= reads the directories under =filesystems.log_root= whose names are log stamps, newest first, and leaves out every other entry.
 With =--problems-only=, =--last= counts runs after filtering.
 With =--target=, the selected target's exit code decides whether a run is problematic.
+A run directory whose =summary.json= has another =kind= or an unsupported =schema_version= counts as a run without a readable summary: =status= names the reason on that run's line and exits 0.
 [[file:run-summary.org][The run summary]] shows what it prints.
 
 *** metrics

@@ -1,0 +1,1 @@
+Read the `kind` and `schema_version` of a `summary.json` before its other keys, so `run` leaves another artifact of the tool in its place and `status` names its kind, and a summary of a later schema version is replaced.
