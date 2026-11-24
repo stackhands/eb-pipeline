@@ -57,6 +57,22 @@ pub fn signal_exit() -> Option<i32> {
     })
 }
 
+/// If a SIGINT or SIGTERM is pending, apply its exit code and label.
+pub fn apply_pending_signal(exit_code: &mut i32, interrupted_by: &mut Option<String>) {
+    let Some(code) = signal_exit() else {
+        return;
+    };
+    if interrupted_by.is_none() {
+        let name = if code == exit::SIGINT {
+            "SIGINT"
+        } else {
+            "SIGTERM"
+        };
+        *interrupted_by = Some(name.into());
+    }
+    *exit_code = code;
+}
+
 /// The wait before the next admission attempt. It starts at `wait_seconds`
 /// and is never longer than `max_wait_seconds`, including when that maximum
 /// is the smaller of the two.

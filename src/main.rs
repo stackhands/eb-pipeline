@@ -5,7 +5,7 @@ use eb_pipeline::exit::{self, Fail};
 use eb_pipeline::package_plan;
 use eb_pipeline::plan::{build_plan, read_units, Planner};
 use eb_pipeline::resolve::{explain, Scope};
-use eb_pipeline::run::{install_handlers, log, run, signal_exit, Options, RunResult};
+use eb_pipeline::run::{apply_pending_signal, install_handlers, log, run, Options, RunResult};
 use eb_pipeline::{
     audit, easystack, eessi, from_commit, metrics, notify, sbom, schema, site, stack_checks,
     summary, templates, tools, util, watch,
@@ -1106,9 +1106,9 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         if let Some(before) = &before {
             watch::record_run(&planner, &lines, &res, before);
         }
-        apply_pending_signal(&mut res);
+        apply_pending_signal(&mut res.exit_code, &mut res.interrupted_by);
         write_summary(&s, &res, "run", result, None, &planner.offline_wrapper);
-        apply_pending_signal(&mut res);
+        apply_pending_signal(&mut res.exit_code, &mut res.interrupted_by);
         let value = to_sorted(&res);
         let mut output_errors = Vec::new();
         if let Some(p) = result {
@@ -1143,21 +1143,6 @@ fn signal_outranks(run_code: i32, failure: Fail) -> Fail {
         exit::SIGINT | exit::SIGTERM => Fail::new(run_code, failure.msg),
         _ => failure,
     }
-}
-
-fn apply_pending_signal(res: &mut RunResult) {
-    let Some(code) = signal_exit() else {
-        return;
-    };
-    if res.interrupted_by.is_none() {
-        let name = if code == exit::SIGINT {
-            "SIGINT"
-        } else {
-            "SIGTERM"
-        };
-        res.interrupted_by = Some(name.into());
-    }
-    res.exit_code = code;
 }
 
 /// Merge a target's run into its run directory's summary; a problem is a
@@ -1214,6 +1199,49 @@ struct WatchArgs<'a> {
     result: Option<&'a Path>,
 }
 
+/// Watch scratch removed on drop unless retention was requested.
+///
+/// A dry run that points at eb-stack's files, an interrupted rebuild, and an
+/// error that names a file in the directory keep it. Every other return,
+/// including a failed stdout write, removes it.
+struct ScratchDir {
+    path: PathBuf,
+    cited: String,
+    retain: bool,
+}
+
+impl ScratchDir {
+    fn new(path: &Path) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            cited: path.display().to_string(),
+            retain: false,
+        }
+    }
+
+    fn retain(&mut self) {
+        self.retain = true;
+    }
+
+    /// Keep the directory when `result` names a file inside it.
+    fn keep_cited<T>(&mut self, result: Result<T, Fail>) -> Result<T, Fail> {
+        if let Err(err) = &result {
+            if err.msg.contains(&self.cited) {
+                self.retain();
+            }
+        }
+        result
+    }
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        if !self.retain {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
 fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     validate_option_values(&[("--build-type", Some(w.build_type)), ("--run-id", w.run_id)])?;
     if let Some(stamp) = w.log_stamp.filter(|s| !util::is_log_stamp(s)) {
@@ -1261,10 +1289,9 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     install_handlers();
     let _lock = watch::hold(&state_dir, name)?;
     let work = watch::work_dir(&planner, "plan")?;
-    let drop_work = || {
-        let _ = std::fs::remove_dir_all(&work);
-    };
-    let (probe, env) = watch::probe(&planner, &work)?;
+    // Drop removes this directory unless a path below keeps it.
+    let mut scratch = ScratchDir::new(&work);
+    let (probe, env) = scratch.keep_cited(watch::probe(&planner, &work))?;
     let revision = watch::revision_of(&probe)?;
     watch::check_dirs(&probe)?;
     // A newer versions/YYYY.MM directory, while this module environment
@@ -1275,7 +1302,6 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             let versions = eessi::versions_dir(repo);
             match eessi::newer_generation(&versions, &probe.version) {
                 Ok(Some(newer)) => {
-                    drop_work();
                     return Err(Fail::new(
                         exit::TEMPFAIL,
                         format!(
@@ -1287,7 +1313,6 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                 }
                 Ok(None) => {}
                 Err(e) => {
-                    drop_work();
                     return Err(Fail::new(
                         exit::TEMPFAIL,
                         format!("cannot list {}: {e}", versions.display()),
@@ -1328,7 +1353,6 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                 out.push('\n');
             }
             write_stdout_text(&out)?;
-            drop_work();
             say(&format!(
                 "dry run: would adopt {} against {eessi_now}",
                 installs.len()
@@ -1336,8 +1360,9 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             return Ok(exit::OK);
         }
         watch::need_eb_stack(&s)?;
-        let names = watch::record(&planner, &work, &probe, revision, &installs, true)?;
-        drop_work();
+        let names = scratch.keep_cited(watch::record(
+            &planner, &work, &probe, revision, &installs, true,
+        ))?;
         say(&format!(
             "adopted {} against {eessi_now}: {}",
             names.len(),
@@ -1347,7 +1372,6 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     }
     let state = watch::load(&state_dir, name).map_err(|e| Fail::new(exit::FAILED, e))?;
     if state.installs.is_empty() {
-        drop_work();
         log(
             "WARN",
             "watch",
@@ -1370,9 +1394,8 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                     i.eessi_version, i.software_subdir
                 ));
             }
-            let _ = write_stdout_text(&out);
+            write_stdout_text(&out)?;
         }
-        drop_work();
         return Err(Fail::new(
             exit::REFUSED,
             format!(
@@ -1396,7 +1419,7 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     };
     let abi_conf = conf.abi_drift.as_ref().filter(|a| a.enabled);
     let (abi_now, abi_fields) = if let Some(a) = abi_conf {
-        let now = watch::abi_baseline(&planner, &work, a)?;
+        let now = scratch.keep_cited(watch::abi_baseline(&planner, &work, a))?;
         let changed = watch::abi_changes(a, &state, &now);
         (Some(now), changed)
     } else {
@@ -1410,7 +1433,6 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
         None => Ok(()),
     };
     if watch::unchanged_at(&state, &probe, revision) && abi_fields.is_empty() && !abi_needs_update {
-        drop_work();
         let doc = watch::PlanDoc::unchanged(name, &probe, revision, &state);
         write_plan(&doc)?;
         print(&doc)?;
@@ -1429,12 +1451,12 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
-        let u = watch::stage(
+        let u = scratch.keep_cited(watch::stage(
             &work,
             &eessi::scan(&probe.modules_dirs),
             &eessi::scan(std::slice::from_ref(&local_dir)),
-        )?;
-        watch::apply_abi_changes(
+        ))?;
+        scratch.keep_cited(watch::apply_abi_changes(
             &planner,
             &work,
             &u,
@@ -1442,7 +1464,7 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             &abi_fields,
             conf.rebuild_review,
             &probe.software_subdir,
-        )?;
+        ))?;
         staged = Some(u);
     }
     let mut doc;
@@ -1459,19 +1481,22 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                 ),
             ));
         }
-        let u = staged.take().unwrap_or(watch::stage(
-            &work,
-            &eessi::scan(&probe.modules_dirs),
-            &eessi::scan(std::slice::from_ref(&local_dir)),
-        )?);
-        watch::cascade(
+        let u = match staged.take() {
+            Some(u) => u,
+            None => scratch.keep_cited(watch::stage(
+                &work,
+                &eessi::scan(&probe.modules_dirs),
+                &eessi::scan(std::slice::from_ref(&local_dir)),
+            ))?,
+        };
+        scratch.keep_cited(watch::cascade(
             &planner,
             &work,
             &u,
             &mut verdicts,
             conf.rebuild_review,
             &probe.software_subdir,
-        )?;
+        ))?;
         let vanished = verdicts
             .iter()
             .any(|v| v.action == "rebuild" && v.changes.iter().any(|c| c.change == "vanished"));
@@ -1489,7 +1514,7 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                 "a dependency vanished from EESSI, and eb-stack has no easyconfig tree to plan its local build from: set [watch] easyconfigs, or load EasyBuild in [modules] init",
             ));
         }
-        let ordered = watch::order(&planner, &work, &u, &verdicts, &robot)?;
+        let ordered = scratch.keep_cited(watch::order(&planner, &work, &u, &verdicts, &robot))?;
         doc = watch::PlanDoc::new(name, &probe, revision, verdicts);
         doc.rebuild = ordered;
     } else {
@@ -1513,13 +1538,12 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     }
     print(&doc)?;
     if w.dry_run {
-        if doc.rebuild.is_empty() {
-            drop_work();
-        } else {
+        if !doc.rebuild.is_empty() {
             say(&format!(
                 "dry run: nothing rebuilt; eb-stack's files are in {}",
                 work.display()
             ));
+            scratch.retain();
         }
         return Ok(exit::OK);
     }
@@ -1539,7 +1563,6 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                 &format!("record not updated: {}", f.msg),
             );
         }
-        drop_work();
         return Ok(exit::OK);
     }
     let log_dir = PathBuf::from(planner.scope.log_dir());
@@ -1570,7 +1593,9 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     if let Some(m) = &res.message {
         log("ERROR", "run", name, m);
     }
-    if res.interrupted_by.is_none() {
+    if res.interrupted_by.is_some() {
+        scratch.retain();
+    } else {
         let rebuild = Some((lines.as_slice(), &res, &before));
         match watch::settle(
             &planner,
@@ -1596,7 +1621,6 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                 ),
             ),
         }
-        drop_work();
     }
     write_summary(&s, &res, "watch", w.result, Some(to_sorted(&doc)), &[]);
     if let Some(p) = w.result {

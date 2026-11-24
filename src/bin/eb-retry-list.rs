@@ -125,8 +125,7 @@ fn run() -> Result<ExitCode, String> {
                 .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
         }
         _ => {
-            util::write_stdout(text.as_bytes())
-                .map_err(|e| format!("cannot write retry list: {e}"))?;
+            util::write_stdout_checked(text.as_bytes())?;
         }
     }
     if args.require_lines && selected.is_empty() {
@@ -250,14 +249,12 @@ fn parse(words: impl Iterator<Item = OsString>) -> Result<Args, String> {
         let word = util::os_to_string(word)?;
         match word.as_str() {
             "-h" | "--help" => {
-                util::write_stdout(include_str!("eb-retry-list-help.txt").as_bytes())
-                    .map_err(|error| format!("cannot write help: {error}"))?;
+                util::write_stdout_checked(include_str!("eb-retry-list-help.txt").as_bytes())?;
                 std::process::exit(0);
             }
             "-V" | "--version" => {
                 let version = format!("eb-retry-list {}\n", env!("CARGO_PKG_VERSION"));
-                util::write_stdout(version.as_bytes())
-                    .map_err(|error| format!("cannot write version: {error}"))?;
+                util::write_stdout_checked(version.as_bytes())?;
                 std::process::exit(0);
             }
             "--classify" => parsed.classify = true,

@@ -3,12 +3,12 @@
 //! `run` append a record through `eb-stack` and `rfc9162-sidecar`, and
 //! `verify` recomputes that record.
 
-#[path = "common/exec_stub.rs"]
-mod exec_stub;
+mod common;
 
-use exec_stub::CommandSyncExt;
+use common::output_within;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::time::Duration;
 
 const EB_STACK: &str = r#"#!/bin/sh
 printf '%s\n' "$*" >> "$STUB_DIR/ebstack.calls"
@@ -77,7 +77,7 @@ exit 2
 const EB: &str = "#!/bin/sh\nexit 0\n";
 
 fn write_exec(path: &Path, text: &str) {
-    exec_stub::write_exec(path, text);
+    common::write_exec(path, text);
 }
 
 fn bin() -> Command {
@@ -103,7 +103,7 @@ impl Tree {
         self.root.path()
     }
 
-    fn run(&self, args: &[&str], vars: &[(&str, &str)]) -> Output {
+    fn command(&self, args: &[&str], vars: &[(&str, &str)]) -> Command {
         let path = format!(
             "{}:{}",
             self.path().join("stubs").display(),
@@ -120,11 +120,18 @@ impl Tree {
             .env_remove("EB_PIPELINE_RUN_ID")
             .env_remove("EB_PIPELINE_LOG_STAMP")
             .env_remove("EB_IMAGE_DIGEST")
-            .env_remove("EB_ROUTE_RECEIPT");
+            .env_remove("EB_ROUTE_RECEIPT")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         for (k, v) in vars {
             cmd.env(k, v);
         }
-        cmd.sync_output()
+        cmd
+    }
+
+    fn run(&self, args: &[&str], vars: &[(&str, &str)]) -> Output {
+        self.command(args, vars).output().unwrap()
     }
 }
 
@@ -199,6 +206,66 @@ fn plan(tree: &Tree, vars: &[(&str, &str)]) -> Output {
         ],
         vars,
     )
+}
+
+#[test]
+fn plan_refuses_a_fifo_or_directory_easyconfig() {
+    for kind in ["fifo", "dir"] {
+        let tree = Tree::new();
+        let root = tree.path();
+        std::fs::create_dir_all(root.join("easyconfigs")).unwrap();
+        std::fs::create_dir_all(root.join("easyblocks")).unwrap();
+        std::fs::create_dir_all(root.join("patches")).unwrap();
+        std::fs::write(root.join("key.pem"), "not-a-key\n").unwrap();
+        std::fs::write(root.join("site.toml"), attest_site(root)).unwrap();
+        std::fs::write(root.join("list.txt"), "Foo-1.0.eb\n").unwrap();
+        let easyconfig = root.join(format!("resolved-{kind}"));
+        match kind {
+            "fifo" => common::make_fifo(&easyconfig),
+            "dir" => std::fs::create_dir(&easyconfig).unwrap(),
+            _ => unreachable!(),
+        }
+        let shown = easyconfig.display().to_string();
+        let output = output_within(
+            &mut tree.command(
+                &[
+                    "plan",
+                    "--site",
+                    root.join("site.toml").to_str().unwrap(),
+                    "--list",
+                    root.join("list.txt").to_str().unwrap(),
+                    "--target",
+                    "cpu",
+                    "--build-type",
+                    "production",
+                    "--run-id",
+                    "R",
+                    "--log-stamp",
+                    "20260101_000000",
+                ],
+                &[("STUB_EASYCONFIG", shown.as_str())],
+            ),
+            Duration::from_secs(5),
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(eb_pipeline::exit::REFUSED),
+            "{kind}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty(), "{kind}");
+        let err = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            err.contains(&format!("cannot read {shown}")),
+            "{kind}: {err}"
+        );
+        let expected = if kind == "fifo" {
+            "not a regular file"
+        } else {
+            "Is a directory"
+        };
+        assert!(err.contains(expected), "{kind}: {err}");
+    }
 }
 
 #[test]

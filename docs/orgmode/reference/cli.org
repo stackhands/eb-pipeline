@@ -260,6 +260,7 @@ It shows =<run-id>= and =<log-stamp>= where a run puts its own.
 =status= reads the directories under =filesystems.log_root= whose names are log stamps, newest first, and leaves out every other entry.
 With =--problems-only=, =--last= counts runs after filtering.
 With =--target=, the selected target's exit code decides whether a run is problematic.
+A run directory whose =summary.json= has another =kind= or an unsupported =schema_version= counts as a run without a readable summary: =status= names the reason on that run's line and exits 0.
 [[file:run-summary.org][The run summary]] shows what it prints.
 
 *** metrics
@@ -284,7 +285,8 @@ With =--target=, the selected target's exit code decides whether a run is proble
 A status the run did not use is 0.
 Log paths stay in the result file.
 Exit 0 means the file was read, including when the run's own exit code is not 0.
-Exit 2 means the file is missing, is not JSON, or its =kind= is not =result=.
+Exit 2 means the file is missing, is not JSON, its =kind= is not =result=, or it has a =schema_version= that is not the integer 1.
+A result without a =schema_version= key is read as version 1.
 
 *** plan
 
