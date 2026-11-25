@@ -25,14 +25,19 @@ looks site-specific.
 
 ## When EasyBuild or the EESSI bot is enough
 
-You do not need eb-pipeline to build a list on one kind of node.
-`eb --easystack LIST --robot --job` hands each easyconfig to the scheduler as a job of its own, in dependency order, and `--job-backend=Slurm` names Slurm.
+On one machine, `eb --easystack LIST --robot --keep-going` builds a list in dependency order, skips what is installed and goes on past a failure.
+On a cluster, `--job --job-backend=Slurm` hands each easyconfig to the scheduler as a job of its own.
+For EESSI itself, the [EESSI build-and-deploy bot](https://github.com/EESSI/eessi-bot-software-layer) builds a pull request's easystack for each CPU target in the build container and stages the tarballs for CernVM-FS, where a publish is a transaction.
 
-You do not need it to build for EESSI either.
-The [EESSI build-and-deploy bot](https://github.com/EESSI/eessi-bot-software-layer) builds a pull request's easystack for each CPU target in the build container and stages the tarballs for CernVM-FS, where a publish is a transaction.
+eb-pipeline adds what those leave to a script around them.
+On a workstation, a lab server or a CI runner, `eb-pipeline init --template workstation` writes a site file with no scheduler, and a run gives:
 
-eb-pipeline is for the stack a site installs itself, on a shared file system that jobs read during the build.
-There the same list builds on several node types, some lines on some of them only; scratch has an inode quota that a build can exhaust; a failed build's logs live in a directory the job loses; and a rebuild must not empty an installation in use.
+- a log directory per line, a result file and exit codes a caller can branch on, and a JUnit report for CI ([publish a JUnit report](docs/orgmode/howto/publish-a-junit-report.org));
+- a check that the machine has the memory a line needs before it starts ([check memory before building](docs/orgmode/howto/check-oom-before-building.org));
+- a rebuild that does not empty an installation programs are using ([staged rebuilds](docs/orgmode/howto/staged-rebuilds.org));
+- a rebuild of what an EESSI update reaches ([rebuild when EESSI changes](docs/orgmode/howto/rebuild-when-eessi-changes.org)).
+
+On a site's own stack on a shared file system, the same list also builds on several node types, some lines on some of them only; scratch has an inode quota that a build can exhaust; and a failed build's logs live in a directory the job loses.
 Each of those is a phase the site file turns on, and `plan` prints every command of a run before one starts.
 
 ## Documentation
