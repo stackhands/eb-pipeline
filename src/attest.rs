@@ -193,13 +193,13 @@ pub fn verify(req: &Request<'_>, stored: &InputAttestation) -> Result<(), Fail> 
     let proof_text = serde_json::to_string_pretty(&stored.proof)
         .map_err(|e| Fail::new(exit::FAILED, format!("cannot write the stored proof: {e}")))?
         + "\n";
-    fs::write(&proof_path, proof_text).map_err(|e| {
+    crate::util::write_atomic(&proof_path, proof_text.as_bytes()).map_err(|e| {
         Fail::new(
             exit::FAILED,
             format!("cannot write {}: {e}", proof_path.display()),
         )
     })?;
-    fs::write(&blob_path, &bytes).map_err(|e| {
+    crate::util::write_atomic(&blob_path, &bytes).map_err(|e| {
         Fail::new(
             exit::FAILED,
             format!("cannot write {}: {e}", blob_path.display()),
@@ -947,6 +947,7 @@ impl Drop for RemoveDir {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::{easyblock_literal, find_easyblock, index_files, patch_literals, run};
     use crate::exit;

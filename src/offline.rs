@@ -338,6 +338,7 @@ pub fn write(root: &Path, scope: &Scope<'_>, assets: &[OfflineAsset]) -> Result<
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::{sha256, store, validate_locators, write, Entry};
     use crate::resolve::Scope;

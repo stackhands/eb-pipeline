@@ -1,4 +1,5 @@
 //! `eb-shard-weights` builds an `eb-stack stack shard --weights` TSV from run durations.
+#![allow(clippy::disallowed_methods)]
 
 use std::process::Command;
 

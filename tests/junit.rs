@@ -1,4 +1,5 @@
 //! `eb-junit` turns `eb-pipeline run --result` files into a JUnit report.
+#![allow(clippy::disallowed_methods)]
 
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;

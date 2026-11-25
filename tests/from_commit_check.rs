@@ -1,4 +1,5 @@
 //! Opt-in `check --check-from-commit` delegation to `eb-stack`.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 

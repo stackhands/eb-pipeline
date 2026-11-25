@@ -1,4 +1,5 @@
 //! `audit` shells out to eb-stack and copies its rebuild lists.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 

@@ -1,4 +1,5 @@
 //! `init` templates and configuration from the environment.
+#![allow(clippy::disallowed_methods)]
 
 use std::fs::OpenOptions;
 use std::path::PathBuf;

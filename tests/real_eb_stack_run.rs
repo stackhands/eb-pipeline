@@ -1,6 +1,7 @@
 //! `run` with sharding, admission and resume against an unmodified eb-stack
 //! binary. The stub programs of the other run tests answer in the shape their
 //! authors expect; this file reads what eb-stack prints and writes.
+#![allow(clippy::disallowed_methods)]
 
 #[path = "common/exec_stub.rs"]
 mod exec_stub;

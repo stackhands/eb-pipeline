@@ -1,4 +1,5 @@
 //! Opt-in `check --stack-checks` delegation to an eb-stack subprocess.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 

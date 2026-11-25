@@ -1,4 +1,5 @@
 //! `eb-pipeline metrics` against a result file on disk.
+#![allow(clippy::disallowed_methods)]
 
 use serde_json::Value;
 use std::process::Command;

@@ -1,6 +1,7 @@
 //! A run with `[watch]` records what each install it built was built
 //! against in EESSI: the EESSI version, and the identity and class of each
 //! EESSI module eb-stack says it depends on.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 

@@ -1,4 +1,5 @@
 //! `run` against stub tool binaries written into a temporary directory.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 

@@ -1,5 +1,6 @@
 //! Every `run` merges its target into `summary.json` and `summary.html` in
 //! its run directory.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 use common::{code, eb_pipeline, eessi_vars, run, setup, stderr, stdout, STAMP, T};

@@ -1,6 +1,7 @@
 //! `watch` compares what runs recorded with the EESSI the module
 //! environment loads now, and rebuilds only the installs a change reaches,
 //! in the order eb-stack gives.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 
