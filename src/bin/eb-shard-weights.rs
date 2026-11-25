@@ -6,7 +6,7 @@
 
 use eb_pipeline::plan::module_rel;
 use eb_pipeline::summary::{self, Summary};
-use eb_pipeline::{exit, util};
+use eb_pipeline::{exit, run, util};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -43,7 +43,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(msg) => {
-            eprintln!("eb-shard-weights: {msg}");
+            run::log_line(&format!("eb-shard-weights: {msg}"));
             ExitCode::from(2)
         }
     }

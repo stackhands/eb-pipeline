@@ -79,12 +79,8 @@ pub fn run(site: Option<&Site>, list: &Path, opts: &Options<'_>) -> Result<i32, 
         .status
         .code()
         .unwrap_or_else(|| 128 + output.status.signal().unwrap_or(0));
-    util::write_stdout(&output.stdout).map_err(|error| {
-        Fail::new(
-            exit::FAILED,
-            format!("cannot print eb-stack output: {error}"),
-        )
-    })?;
+    util::write_stdout_checked(&output.stdout)
+        .map_err(|message| Fail::new(exit::FAILED, message))?;
     if output.status.success() {
         exit::parse_json_output(
             &output.stdout,

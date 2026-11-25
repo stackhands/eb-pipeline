@@ -418,8 +418,7 @@ fn to_sorted<T: Serialize>(v: &T) -> serde_json::Value {
 }
 
 fn write_stdout_text(text: &str) -> Result<(), Fail> {
-    util::write_stdout(text.as_bytes())
-        .map_err(|e| Fail::new(exit::FAILED, format!("cannot write stdout: {e}")))
+    util::write_stdout_checked(text.as_bytes()).map_err(|e| Fail::new(exit::FAILED, e))
 }
 
 fn write_stderr_text(text: &str) -> Result<(), Fail> {
@@ -1750,8 +1749,8 @@ fn main() {
         Err(error) => match error.kind() {
             clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => {
                 let text = error.to_string();
-                if let Err(write_error) = util::write_stdout(text.as_bytes()) {
-                    eprintln!("ERROR [main] -: cannot write stdout: {write_error}");
+                if let Err(message) = util::write_stdout_checked(text.as_bytes()) {
+                    log("ERROR", "main", "-", &message);
                     std::process::exit(exit::FAILED);
                 }
                 std::process::exit(exit::OK);

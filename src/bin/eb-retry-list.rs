@@ -6,6 +6,7 @@
 use eb_pipeline::classify;
 use eb_pipeline::easystack;
 use eb_pipeline::exit;
+use eb_pipeline::run;
 use eb_pipeline::util::{self, ListLine};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -58,7 +59,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(msg) => {
-            eprintln!("eb-retry-list: {msg}");
+            run::log_line(&format!("eb-retry-list: {msg}"));
             ExitCode::from(2)
         }
     }
@@ -747,7 +748,7 @@ fn filter_oom(
         }
     }
     for hit in &hits {
-        eprintln!("eb-retry-list: {}", hit.line);
+        run::log_line(&format!("eb-retry-list: {}", hit.line));
     }
     Ok(lines
         .into_iter()

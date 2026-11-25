@@ -207,7 +207,7 @@ fn from_commit_reports_a_stdout_write_failure() {
 
     assert_eq!(code(&output), 1, "{}", stderr(&output));
     assert!(
-        stderr(&output).contains("cannot print eb-stack output"),
+        stderr(&output).contains("cannot write stdout:"),
         "{}",
         stderr(&output)
     );

@@ -103,9 +103,15 @@ fn sleep_interruptible(secs: u64) -> bool {
 
 /// Print a log line on stderr: `<level> [<phase>] <target>: <msg>`.
 pub fn log(level: &str, phase: &str, target: &str, msg: &str) {
+    log_line(&format!("{level} [{phase}] {target}: {msg}"));
+}
+
+/// Print one line on stderr, as [`log`] does. A closed or full stderr is
+/// ignored, so a diagnostic never panics or changes the exit status.
+pub fn log_line(line: &str) {
     use std::io::Write;
     let mut stderr = std::io::stderr().lock();
-    let _ = writeln!(stderr, "{level} [{phase}] {target}: {msg}");
+    let _ = writeln!(stderr, "{line}");
 }
 
 /// Seconds, to the millisecond.
@@ -777,8 +783,8 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                 writeln!(output, "[{}] {}", ph.name, shell_line(c)).expect("writing to a string");
             }
         }
-        if let Err(e) = util::write_stdout(output.as_bytes()) {
-            st.res.message = Some(format!("cannot write stdout: {e}"));
+        if let Err(e) = util::write_stdout_checked(output.as_bytes()) {
+            st.res.message = Some(e);
             return finish(st, Some(exit::FAILED));
         }
         log("INFO", "run", &target, "dry run: nothing executed");
