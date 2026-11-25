@@ -138,6 +138,39 @@ fn a_record_keeps_content_digests_of_its_site_file_and_easyconfig_trees() {
             .len(),
         64
     );
+
+    // The same length and modification time, deep in the tree: only the
+    // content tells the two apart.
+    let mtime = std::fs::metadata(&recipe).unwrap().modified().unwrap();
+    std::fs::write(&recipe, "name = 'Fox'\n").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&recipe)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(mtime))
+        .unwrap();
+    let o = run(
+        &t,
+        "cpu",
+        "20260102_000000",
+        "Foo-1.0-GCCcore-13.2.0.eb --rebuild\n",
+        &with(&vars),
+    );
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    let again = &t.watch_state("cpu")["inputs"];
+    assert_eq!(again["site_file"], inputs["site_file"]);
+    let (before, after) = (
+        &inputs["easyconfig_trees"][0],
+        &again["easyconfig_trees"][0],
+    );
+    assert_eq!(after["path"], before["path"]);
+    assert_eq!(after["size"], before["size"]);
+    assert_ne!(
+        after["sha256"],
+        before["sha256"],
+        "a rewrite of {} changes the digest of its tree",
+        recipe.display()
+    );
 }
 
 #[test]
