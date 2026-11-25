@@ -1,8 +1,10 @@
 //! `eb-junit` turns `eb-pipeline run --result` files into a JUnit report.
 
+use std::ffi::CString;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
-use std::process::Command;
-use std::process::Stdio;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 fn bin() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_eb-junit"));
@@ -63,6 +65,43 @@ fn malformed_inputs_name_their_producers_and_paths() {
             format!(
                 "eb-junit: {producer} wrote invalid JSON to {}: EOF while parsing an object at line 1 column 1\n",
                 path.display()
+            )
+        );
+    }
+}
+
+#[test]
+fn special_report_inputs_are_refused_promptly() {
+    let dir = tempfile::tempdir().unwrap();
+    let named_pipe = dir.path().join("input.pipe");
+    let raw = CString::new(named_pipe.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+    for flag in ["--result", "--reframe-report"] {
+        let mut child = bin()
+            .arg(flag)
+            .arg(&named_pipe)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while child.try_wait().unwrap().is_none() {
+            if Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("eb-junit {flag} blocked on a named pipe");
+            }
+            std::thread::yield_now();
+        }
+        let output = child.wait_with_output().unwrap();
+
+        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(output.stdout, b"");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            format!(
+                "eb-junit: cannot read {}: not a regular file\n",
+                named_pipe.display()
             )
         );
     }
