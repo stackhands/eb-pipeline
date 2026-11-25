@@ -189,3 +189,55 @@ fn report_marks_shared_command_path_failures_as_systemic_infrastructure() {
         "{report}"
     );
 }
+
+/// A result file holding `lines`, a JSON array, at `path`.
+fn write_result(path: &std::path::Path, lines: &str) {
+    std::fs::write(
+        path,
+        format!(
+            r#"{{"kind":"result","site":"eessi","target":"zen4","build_type":"production","run_id":"run","exit_code":1,"lines":{lines}}}"#
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_result_path_that_is_not_utf8_is_read() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = tempfile::tempdir().unwrap();
+    let result = dir
+        .path()
+        .join(std::ffi::OsStr::from_bytes(b"res\xffult.json"));
+    write_result(
+        &result,
+        r#"[{"easyconfig":"A.eb","phase":"build","unit":"all","status":"success"}]"#,
+    );
+    let mut joined = std::ffi::OsString::from("--result=");
+    joined.push(&result);
+    for output in [
+        output_within(bin().arg("--result").arg(&result), LIMIT),
+        output_within(bin().arg(&joined), LIMIT),
+    ] {
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report = String::from_utf8_lossy(&output.stdout);
+        assert!(report.contains("All lines succeeded."), "{report}");
+    }
+}
+
+#[test]
+fn an_argument_that_is_not_utf8_is_refused_without_a_panic() {
+    use std::os::unix::ffi::OsStrExt;
+    let output = output_within(bin().arg(std::ffi::OsStr::from_bytes(b"--b\xffd")), LIMIT);
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{err}");
+    assert!(
+        err.contains("eb-admin-report: argument is not valid UTF-8: `--b\u{fffd}d`"),
+        "{err}"
+    );
+    assert!(!err.contains("panicked"), "{err}");
+}

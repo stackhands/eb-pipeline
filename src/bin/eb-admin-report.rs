@@ -3,13 +3,13 @@
 use eb_pipeline::{classify, exit, util};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
-use std::env;
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 struct Args {
-    result: String,
-    out: Option<String>,
+    result: PathBuf,
+    out: Option<PathBuf>,
     max_lines: usize,
     log_tail_lines: usize,
 }
@@ -57,28 +57,27 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<ExitCode, String> {
-    let args = parse(env::args().skip(1))?;
+    let args = parse(util::os_args().into_iter())?;
     util::refuse_output_alias(
         "--out",
-        args.out.as_deref().map(Path::new),
-        &[("--result", Some(Path::new(&args.result)))],
+        args.out.as_deref(),
+        &[("--result", Some(args.result.as_path()))],
     )?;
-    let (_, value) =
-        exit::read_json_output(Path::new(&args.result), "eb-pipeline run", exit::USAGE)
-            .map_err(|error| error.msg)?;
+    let (_, value) = exit::read_json_output(&args.result, "eb-pipeline run", exit::USAGE)
+        .map_err(|error| error.msg)?;
     let parsed = parse_result(&value)?;
     let analysis = analyze(&parsed);
     let report = render_report(
-        Path::new(&args.result),
+        &args.result,
         &parsed,
         &analysis,
         args.max_lines,
         args.log_tail_lines,
     );
     match args.out.as_deref() {
-        Some(path) if path != "-" => {
-            util::write_atomic(Path::new(path), report.as_bytes())
-                .map_err(|e| format!("cannot write {path}: {e}"))?;
+        Some(path) if path != Path::new("-") => {
+            util::write_atomic(path, report.as_bytes())
+                .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
         }
         _ => util::write_stdout(report.as_bytes())
             .map_err(|e| format!("cannot write the report: {e}"))?,
@@ -86,13 +85,33 @@ fn run() -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
-    let mut result = util::env_value("EB_PIPELINE_RESULT");
+fn parse(words: impl Iterator<Item = OsString>) -> Result<Args, String> {
+    let mut result = util::env_value("EB_PIPELINE_RESULT").map(PathBuf::from);
     let mut out = None;
     let mut max_lines = 20usize;
     let mut log_tail_lines = 1usize;
     let mut words = words.peekable();
     while let Some(word) = words.next() {
+        if let Some((flag, value)) = util::split_os_flag_value(word.as_os_str()) {
+            if matches!(
+                flag.as_str(),
+                "--result" | "--out" | "--max-lines" | "--log-tail-lines"
+            ) {
+                if value.is_empty() {
+                    return Err(format!("{flag} needs a value"));
+                }
+                assign(
+                    &flag,
+                    value,
+                    &mut result,
+                    &mut out,
+                    &mut max_lines,
+                    &mut log_tail_lines,
+                )?;
+                continue;
+            }
+        }
+        let word = util::os_to_string(word)?;
         match word.as_str() {
             "-h" | "--help" => {
                 util::write_stdout(include_str!("eb-admin-report-help.txt").as_bytes())
@@ -106,7 +125,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                 std::process::exit(0);
             }
             "--result" | "--out" | "--max-lines" | "--log-tail-lines" => {
-                let value = util::separate_value(&mut words, &format!("{word} needs a value"))?;
+                let value = util::separate_os_value(&mut words, &format!("{word} needs a value"))?;
                 assign(
                     &word,
                     value,
@@ -116,28 +135,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                     &mut log_tail_lines,
                 )?;
             }
-            _ => {
-                if let Some((flag, value)) = word.split_once('=') {
-                    if matches!(
-                        flag,
-                        "--result" | "--out" | "--max-lines" | "--log-tail-lines"
-                    ) {
-                        if value.is_empty() {
-                            return Err(format!("{flag} needs a value"));
-                        }
-                        assign(
-                            flag,
-                            value.to_string(),
-                            &mut result,
-                            &mut out,
-                            &mut max_lines,
-                            &mut log_tail_lines,
-                        )?;
-                        continue;
-                    }
-                }
-                return Err(format!("does not know `{word}`"));
-            }
+            _ => return Err(format!("does not know `{word}`")),
         }
     }
     let result = result.ok_or("--result is required")?;
@@ -151,25 +149,26 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
 
 fn assign(
     flag: &str,
-    value: String,
-    result: &mut Option<String>,
-    out: &mut Option<String>,
+    value: OsString,
+    result: &mut Option<PathBuf>,
+    out: &mut Option<PathBuf>,
     max_lines: &mut usize,
     log_tail_lines: &mut usize,
 ) -> Result<(), String> {
     match flag {
-        "--result" => *result = Some(value),
+        "--result" => *result = Some(PathBuf::from(value)),
         "--out" => {
             if out.is_some() {
                 return Err("--out given twice".into());
             }
-            *out = Some(value);
+            *out = Some(PathBuf::from(value));
         }
         "--max-lines" => {
-            *max_lines = parse_positive_usize(&value, "--max-lines")?;
+            *max_lines = parse_positive_usize(&util::os_to_string(value)?, "--max-lines")?;
         }
         "--log-tail-lines" => {
-            *log_tail_lines = parse_positive_usize(&value, "--log-tail-lines")?;
+            *log_tail_lines =
+                parse_positive_usize(&util::os_to_string(value)?, "--log-tail-lines")?;
         }
         _ => unreachable!(),
     }
