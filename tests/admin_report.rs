@@ -241,3 +241,34 @@ fn an_argument_that_is_not_utf8_is_refused_without_a_panic() {
     );
     assert!(!err.contains("panicked"), "{err}");
 }
+
+#[test]
+fn a_line_log_that_is_a_fifo_is_noted_and_not_waited_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("line.log");
+    common::make_fifo(&log);
+    let result = dir.path().join("result.json");
+    write_result(
+        &result,
+        &format!(
+            r#"[{{"easyconfig":"A.eb","phase":"build","unit":"all","status":"failed","exit_code":1,"log":"{}"}}]"#,
+            log.display()
+        ),
+    );
+    let output = output_within(bin().arg("--result").arg(&result), Duration::from_secs(10));
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        report.contains(&format!(
+            "- A.eb: cannot read `{}`: not a regular file",
+            log.display()
+        )),
+        "{report}"
+    );
+    assert!(!report.contains("log tail"), "{report}");
+}

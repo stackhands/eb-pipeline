@@ -384,7 +384,7 @@ fn analyze(parsed: &Parsed) -> Analysis {
             continue;
         };
         let log = Path::new(raw_log);
-        let text = match std::fs::read_to_string(log) {
+        let text = match util::read_text_file(log) {
             Ok(text) => text,
             Err(error) => {
                 classify_errors.push(format!(
@@ -447,7 +447,7 @@ fn dominant_exit_code(lines: &[&Line]) -> Option<(i64, usize)> {
 }
 
 fn log_tail(path: &Path, lines: usize) -> Option<String> {
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = util::read_text_file(path).ok()?;
     let tail = text
         .lines()
         .rev()
