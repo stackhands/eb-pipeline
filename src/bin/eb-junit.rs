@@ -3,7 +3,7 @@
 //! Each recorded line keeps the status the result file already has. This
 //! tool does not classify failures and does not call eb-stack.
 
-use eb_pipeline::{exit, util};
+use eb_pipeline::{exit, run, util};
 use serde_json::{Map, Number, Value};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -47,7 +47,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(msg) => {
-            util::write_stderr_line(&format!("eb-junit: {msg}"));
+            run::log_line(&format!("eb-junit: {msg}"));
             ExitCode::from(2)
         }
     }

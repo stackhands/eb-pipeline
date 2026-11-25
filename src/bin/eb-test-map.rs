@@ -8,6 +8,7 @@
 //! `--setvar modules=Name/Version,...` argument for the applications in
 //! the list.
 
+use eb_pipeline::run;
 use eb_pipeline::util;
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -58,7 +59,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(msg) => {
-            util::write_stderr_line(&format!("eb-test-map: {msg}"));
+            run::log_line(&format!("eb-test-map: {msg}"));
             ExitCode::from(2)
         }
     }
@@ -98,7 +99,7 @@ fn text_names(args: &Args) -> Result<ExitCode, String> {
     }
     if !missing.is_empty() && !args.allow_unmapped {
         for name in &missing {
-            util::write_stderr_line(&format!(
+            run::log_line(&format!(
                 "eb-test-map: {name} has no test in {}",
                 map_path.display()
             ));
@@ -107,7 +108,7 @@ fn text_names(args: &Args) -> Result<ExitCode, String> {
     }
     if args.allow_unmapped {
         for name in &missing {
-            util::write_stderr_line(&format!(
+            run::log_line(&format!(
                 "eb-test-map: {name} has no test in {}; allowed",
                 map_path.display()
             ));

@@ -103,9 +103,15 @@ fn sleep_interruptible(secs: u64) -> bool {
 
 /// Print a log line on stderr: `<level> [<phase>] <target>: <msg>`.
 pub fn log(level: &str, phase: &str, target: &str, msg: &str) {
+    log_line(&format!("{level} [{phase}] {target}: {msg}"));
+}
+
+/// Print one line on stderr, as [`log`] does. A closed or full stderr is
+/// ignored, so a diagnostic never panics or changes the exit status.
+pub fn log_line(line: &str) {
     use std::io::Write;
     let mut stderr = std::io::stderr().lock();
-    let _ = writeln!(stderr, "{level} [{phase}] {target}: {msg}");
+    let _ = writeln!(stderr, "{line}");
 }
 
 /// Seconds, to the millisecond.
