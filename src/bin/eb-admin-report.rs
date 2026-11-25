@@ -42,8 +42,22 @@ struct Analysis {
     failed: Vec<usize>,
     dominant_failed_exit: Option<(i64, usize)>,
     signature_counts: BTreeMap<String, usize>,
-    infrastructure: Option<(String, usize)>,
+    systemic: Systemic,
     classify_errors: Vec<String>,
+}
+
+/// Whether every line of a run failed for one infrastructure cause, decided
+/// as `eb-retry-list --refuse-systemic-failure` decides it.
+#[derive(Debug, PartialEq)]
+enum Systemic {
+    /// Fewer than two lines failed, a line did not fail, a failed line has
+    /// no log or another cause, or two failed lines have different classes.
+    No,
+    /// Every line failed and every failed line's log shows this class.
+    Yes(String, usize),
+    /// Nothing seen rules it out, but a failed line's log could not be read
+    /// or classified; eb-retry-list stops on such a log.
+    Unknown,
 }
 
 fn main() -> ExitCode {
@@ -238,7 +252,6 @@ fn render_report(
         .iter()
         .map(|index| &parsed.lines[*index])
         .collect();
-    let systemic = analysis.infrastructure.is_some();
     let mut out = String::new();
     out.push_str("# eb-admin-report\n\n");
     out.push_str(&format!("- Result: `{}`\n", result_path.display()));
@@ -282,17 +295,23 @@ fn render_report(
     ));
     out.push_str(&format!(
         "- Systemic infrastructure failure: `{}`\n",
-        if systemic { "yes" } else { "no" }
-    ));
-    if systemic {
-        if let Some((kind, count)) = &analysis.infrastructure {
-            out.push_str(&format!(
-                "- Infrastructure class: `{kind}` on `{count}` line(s)\n"
-            ));
-            out.push_str(
-                "- Suggested action: resolve the shared infrastructure issue before producing a retry list.\n",
-            );
+        match analysis.systemic {
+            Systemic::No => "no",
+            Systemic::Yes(..) => "yes",
+            Systemic::Unknown => "unknown",
         }
+    ));
+    if let Systemic::Yes(kind, count) = &analysis.systemic {
+        out.push_str(&format!(
+            "- Infrastructure class: `{kind}` on `{count}` line(s)\n"
+        ));
+        out.push_str(
+            "- Suggested action: resolve the shared infrastructure issue before producing a retry list.\n",
+        );
+    } else if analysis.systemic == Systemic::Unknown {
+        out.push_str(
+            "- Suggested action: make the logs in the classifier notes readable; `eb-retry-list --refuse-systemic-failure` stops on them too.\n",
+        );
     } else if unfinished.is_empty() {
         out.push_str("- Suggested action: no retry needed.\n");
     } else {
@@ -379,8 +398,11 @@ fn analyze(parsed: &Parsed) -> Analysis {
     let mut signature_counts = BTreeMap::<String, usize>::new();
     let mut infrastructure_counts = BTreeMap::<String, usize>::new();
     let mut classify_errors = Vec::new();
+    let mut every_infrastructure = true;
+    let mut undecided = false;
     for line in &failed_lines {
         let Some(raw_log) = line.log.as_deref() else {
+            every_infrastructure = false;
             continue;
         };
         let log = Path::new(raw_log);
@@ -392,6 +414,7 @@ fn analyze(parsed: &Parsed) -> Analysis {
                     line.easyconfig,
                     log.display()
                 ));
+                undecided = true;
                 continue;
             }
         };
@@ -399,30 +422,38 @@ fn analyze(parsed: &Parsed) -> Analysis {
             Ok(job) => job,
             Err(error) => {
                 classify_errors.push(format!("{}: {error}", line.easyconfig));
+                undecided = true;
                 continue;
             }
         };
         let signature = signature(&job.class, &job.sub_class);
         *signature_counts.entry(signature).or_default() += 1;
-        if let Some(kind) = classify::infrastructure_class(&job, &text) {
-            *infrastructure_counts.entry(kind.to_string()).or_default() += 1;
+        match classify::infrastructure_class(&job, &text) {
+            Some(kind) => *infrastructure_counts.entry(kind.to_string()).or_default() += 1,
+            None => every_infrastructure = false,
         }
     }
-    let infrastructure = if !failed.is_empty()
-        && unfinished.len() == parsed.lines.len()
-        && failed.len() == parsed.lines.len()
-        && infrastructure_counts.len() == 1
+    let systemic = if failed.len() < 2
+        || failed.len() != parsed.lines.len()
+        || !every_infrastructure
+        || infrastructure_counts.len() > 1
     {
-        infrastructure_counts.into_iter().next()
+        Systemic::No
+    } else if undecided {
+        Systemic::Unknown
     } else {
-        None
+        let (kind, _) = infrastructure_counts
+            .into_iter()
+            .next()
+            .expect("two or more failed lines, each with a class");
+        Systemic::Yes(kind, failed.len())
     };
     Analysis {
         unfinished,
         failed,
         dominant_failed_exit,
         signature_counts,
-        infrastructure,
+        systemic,
         classify_errors,
     }
 }
@@ -573,7 +604,7 @@ mod tests {
             failed: vec![0, 1],
             dominant_failed_exit: Some((127, 2)),
             signature_counts: BTreeMap::from([("infra/command-path".into(), 2usize)]),
-            infrastructure: Some(("command-path".into(), 2usize)),
+            systemic: Systemic::Yes("command-path".into(), 2),
             classify_errors: Vec::new(),
         };
         let report = render_report(Path::new("result.json"), &parsed, &analysis, 20, 1);

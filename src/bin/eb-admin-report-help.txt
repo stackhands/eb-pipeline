@@ -9,7 +9,10 @@ report for incident triage:
 - run metadata (site, target, build type, run id, exit code)
 - per-status counts
 - failure signatures from `eb-stack stack bot-classify --json`
-- systemic infrastructure detection from shared failure signatures
+- whether the failure is systemic: `yes` when two or more lines ran, every
+  line failed and every failed line's log shows one infrastructure class, as
+  `eb-retry-list --refuse-systemic-failure` decides; `unknown` when no line
+  rules it out but a failed line's log cannot be read or classified
 - actionable unfinished lines with notes and log tails
 
 Options:

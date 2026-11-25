@@ -272,3 +272,94 @@ fn a_line_log_that_is_a_fifo_is_noted_and_not_waited_on() {
     );
     assert!(!report.contains("log tail"), "{report}");
 }
+
+/// The report on a run whose lines all failed, each with the log text
+/// given or, for `None`, no log recorded; `Some(None)` names a log that
+/// does not exist.
+fn report_on_failures(lines: &[Option<Option<&str>>]) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    let bin_dir = dir.path().join("bin");
+    std::fs::create_dir(&bin_dir).unwrap();
+    classifier_stub(&bin_dir);
+    let mut json = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        let log = dir.path().join(format!("line-{index}.log"));
+        let field = match line {
+            None => String::new(),
+            Some(text) => {
+                if let Some(text) = text {
+                    std::fs::write(&log, text).unwrap();
+                }
+                format!(r#","log":"{}""#, log.display())
+            }
+        };
+        json.push(format!(
+            r#"{{"easyconfig":"L{index}.eb","phase":"build","unit":"all","status":"failed","exit_code":1{field}}}"#
+        ));
+    }
+    let result = dir.path().join("result.json");
+    write_result(&result, &format!("[{}]", json.join(",")));
+    let path = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = output_within(bin().arg("--result").arg(&result).env("PATH", path), LIMIT);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+const NOT_FOUND: Option<Option<&str>> = Some(Some("bash: eb: command not found\n"));
+
+#[test]
+fn a_run_where_one_failed_line_has_another_cause_is_not_systemic() {
+    let report = report_on_failures(&[
+        NOT_FOUND,
+        NOT_FOUND,
+        Some(Some(
+            "== ERROR: Checksum verification failed for source file zlib-1.3.1.tar.gz\n",
+        )),
+    ]);
+    assert!(
+        report.contains("Systemic infrastructure failure: `no`"),
+        "{report}"
+    );
+    assert!(!report.contains("Infrastructure class"), "{report}");
+}
+
+#[test]
+fn a_failed_line_without_a_log_makes_the_run_not_systemic() {
+    let report = report_on_failures(&[NOT_FOUND, NOT_FOUND, None]);
+    assert!(
+        report.contains("Systemic infrastructure failure: `no`"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_failed_line_whose_log_cannot_be_read_leaves_the_verdict_unknown() {
+    let report = report_on_failures(&[NOT_FOUND, Some(None)]);
+    assert!(
+        report.contains("Systemic infrastructure failure: `unknown`"),
+        "{report}"
+    );
+    assert!(report.contains("L1.eb: cannot read"), "{report}");
+    assert!(
+        report.contains("`eb-retry-list --refuse-systemic-failure` stops on them too"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_single_failed_line_is_not_systemic() {
+    let report = report_on_failures(&[NOT_FOUND]);
+    assert!(
+        report.contains("Systemic infrastructure failure: `no`"),
+        "{report}"
+    );
+}
