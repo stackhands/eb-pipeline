@@ -522,6 +522,13 @@ pub fn make_fifo(path: &Path) {
     assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
 }
 
+/// Kill `child` if it still runs and reap it, so that a failed check after
+/// this leaves no process behind.
+pub fn kill_and_reap(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// Spawn `cmd` and collect its output. A child still running after `limit`
 /// is killed so the caller does not wait on a blocked read.
 pub fn output_within(cmd: &mut Command, limit: Duration) -> Output {

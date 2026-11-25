@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{hold_lock, write_exec};
+use common::{hold_lock, kill_and_reap, write_exec};
 use serde_json::Value;
 use std::io::Write;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -114,9 +114,13 @@ if [ -n "${STUB_EB_DELAY:-}" ]; then sleep "$STUB_EB_DELAY"; fi
 if [ -n "${STUB_EB_SLEEP:-}" ]; then
   echo started > "$D/started"
   trap 'echo term > "$D/termed"; kill $pid 2>/dev/null; exit 0' TERM
-  sleep 30 &
-  pid=$!
-  wait $pid
+  i=0
+  while [ -d "$D" ] && [ $i -lt 300 ]; do
+    sleep 0.1 &
+    pid=$!
+    wait $pid
+    i=$((i + 1))
+  done
   exit 0
 fi
 case ",${STUB_EB_FAIL:-}," in *",$stem,"*) echo "ERROR: $stem failed"; exit 1;; esac
@@ -1087,17 +1091,22 @@ fn the_release_waits_for_the_admission_lock() {
                 child.try_wait().unwrap().is_none(),
                 "{kind}: the run ended before the reservation appeared"
             );
-            assert!(
-                Instant::now() < deadline,
-                "{kind}: reservation never appeared"
-            );
+            let late = Instant::now() >= deadline;
+            if late {
+                kill_and_reap(&mut child);
+            }
+            assert!(!late, "{kind}: reservation never appeared");
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(
             child.try_wait().unwrap().is_none(),
             "{kind}: the run ended while the lock was held"
         );
-        assert!(held.exists(), "{kind}");
+        let reserved = held.exists();
+        if !reserved {
+            kill_and_reap(&mut child);
+        }
+        assert!(reserved, "{kind}");
         drop(lock);
         let o = finish(&env, child);
         assert_eq!(o.code, 0, "{kind}: {}", o.stderr);
@@ -1557,7 +1566,11 @@ fn sigterm_is_forwarded_and_exit_is_143() {
     let started = env.dir.path().join("started");
     let t0 = Instant::now();
     while !started.exists() {
-        assert!(t0.elapsed() < Duration::from_secs(20), "stub never started");
+        let late = t0.elapsed() >= Duration::from_secs(20);
+        if late {
+            kill_and_reap(&mut child);
+        }
+        assert!(!late, "stub never started");
         std::thread::sleep(Duration::from_millis(20));
     }
     // SAFETY: the pid is the driver child this test started.
@@ -1569,10 +1582,11 @@ fn sigterm_is_forwarded_and_exit_is_143() {
         if let Some(s) = child.try_wait().unwrap() {
             break s;
         }
-        assert!(
-            t0.elapsed() < Duration::from_secs(20),
-            "driver did not exit"
-        );
+        let late = t0.elapsed() >= Duration::from_secs(20);
+        if late {
+            kill_and_reap(&mut child);
+        }
+        assert!(!late, "driver did not exit");
         std::thread::sleep(Duration::from_millis(20));
     };
     assert_eq!(status.code(), Some(143));
@@ -1594,11 +1608,15 @@ fn sigterm_is_forwarded_and_exit_is_143() {
 fn a_result_that_cannot_be_written_does_not_replace_the_signal_exit() {
     let env = setup("");
     std::fs::create_dir(env.dir.path().join("result.json")).unwrap();
-    let child = driver(&env, LIST, &[("STUB_EB_SLEEP", "1")], &[]);
+    let mut child = driver(&env, LIST, &[("STUB_EB_SLEEP", "1")], &[]);
     let started = env.dir.path().join("started");
     let t0 = Instant::now();
     while !started.exists() {
-        assert!(t0.elapsed() < Duration::from_secs(20), "stub never started");
+        let late = t0.elapsed() >= Duration::from_secs(20);
+        if late {
+            kill_and_reap(&mut child);
+        }
+        assert!(!late, "stub never started");
         std::thread::sleep(Duration::from_millis(20));
     }
     // SAFETY: the pid is the driver child this test started.
@@ -1626,7 +1644,11 @@ fn sigterm_during_source_prefetch_records_every_line() {
     let started = env.dir.path().join("started");
     let t0 = Instant::now();
     while !started.exists() {
-        assert!(t0.elapsed() < Duration::from_secs(20), "stub never started");
+        let late = t0.elapsed() >= Duration::from_secs(20);
+        if late {
+            kill_and_reap(&mut child);
+        }
+        assert!(!late, "stub never started");
         std::thread::sleep(Duration::from_millis(20));
     }
     // SAFETY: the pid is the driver child this test started.
@@ -1656,17 +1678,18 @@ fn sigterm_reaches_descendants_of_the_running_command() {
         r#"#!/bin/sh
 trap 'echo term > "$STUB_DIR/descendant.termed"; exit 0' TERM
 echo ready > "$STUB_DIR/descendant.ready"
-while :; do sleep 1; done
+while [ -d "$STUB_DIR" ]; do sleep 1; done
 "#,
     );
     let mut child = driver(&env, LIST, &[("STUB_EB_DESCENDANT", "1")], &[]);
     let ready = env.dir.path().join("descendant.ready");
     let t0 = Instant::now();
     while !ready.exists() {
-        assert!(
-            t0.elapsed() < Duration::from_secs(20),
-            "descendant never started"
-        );
+        let late = t0.elapsed() >= Duration::from_secs(20);
+        if late {
+            kill_and_reap(&mut child);
+        }
+        assert!(!late, "descendant never started");
         std::thread::sleep(Duration::from_millis(20));
     }
 
@@ -1679,10 +1702,11 @@ while :; do sleep 1; done
         if let Some(s) = child.try_wait().unwrap() {
             break s;
         }
-        assert!(
-            t0.elapsed() < Duration::from_secs(20),
-            "driver did not exit"
-        );
+        let late = t0.elapsed() >= Duration::from_secs(20);
+        if late {
+            kill_and_reap(&mut child);
+        }
+        assert!(!late, "driver did not exit");
         std::thread::sleep(Duration::from_millis(20));
     };
     assert_eq!(status.code(), Some(143));
@@ -2299,8 +2323,8 @@ fn a_run_waits_to_start_while_another_run_rotates() {
     let lock = format!("{r}/logs/.eb-pipeline-rotate.lock");
     std::fs::create_dir(env.dir.path().join("logs")).unwrap();
     let rotating = hold_lock(Path::new(&lock), false);
-    let mut child = driver(&env, LIST, &[], &[]);
     let lock_path = std::fs::canonicalize(&lock).unwrap();
+    let mut child = driver(&env, LIST, &[], &[]);
     let fds = format!("/proc/{}/fd", child.id());
     let opened = || {
         std::fs::read_dir(&fds)
@@ -2312,11 +2336,19 @@ fn a_run_waits_to_start_while_another_run_rotates() {
     let deadline = Instant::now() + Duration::from_secs(20);
     while !opened() {
         assert!(child.try_wait().unwrap().is_none(), "the run ended");
-        assert!(Instant::now() < deadline, "the rotation lock never opened");
+        let late = Instant::now() >= deadline;
+        if late {
+            kill_and_reap(&mut child);
+        }
+        assert!(!late, "the rotation lock never opened");
         std::thread::sleep(Duration::from_millis(20));
     }
     assert!(child.try_wait().unwrap().is_none(), "the run ended");
-    assert!(calls(&env, "eb.calls").is_empty(), "a line started");
+    let idle = calls(&env, "eb.calls").is_empty();
+    if !idle {
+        kill_and_reap(&mut child);
+    }
+    assert!(idle, "a line started");
     drop(rotating);
     let o = finish(&env, child);
     assert_eq!(o.code, 0, "{}", o.stderr);
@@ -2350,10 +2382,11 @@ fn a_signal_stops_a_run_that_waits_for_a_rotation() {
     let t0 = Instant::now();
     while !opened() {
         assert!(child.try_wait().unwrap().is_none(), "the run ended");
-        assert!(
-            t0.elapsed() < Duration::from_secs(20),
-            "the lock never opened"
-        );
+        let late = t0.elapsed() >= Duration::from_secs(20);
+        if late {
+            kill_and_reap(&mut child);
+        }
+        assert!(!late, "the lock never opened");
         std::thread::sleep(Duration::from_millis(20));
     }
     // SAFETY: the pid is the driver child this test started.
@@ -2453,8 +2486,12 @@ fn a_signal_while_waiting_for_the_summary_lock_preserves_signal_exit() {
             }
         }
         assert!(child.try_wait().unwrap().is_none(), "the run ended");
+        let late = t0.elapsed() >= Duration::from_secs(20);
+        if late {
+            kill_and_reap(&mut child);
+        }
         assert!(
-            t0.elapsed() < Duration::from_secs(20),
+            !late,
             "the run never reached a flock wait on the summary lock"
         );
         std::thread::yield_now();
@@ -2508,7 +2545,7 @@ D="${STUB_DIR:?}"
 echo "$*" >> "$D/eb.calls"
 echo "$EB_PIPELINE_TARGET" >> "$D/eb.targets"
 i=0
-while [ "$(sort -u "$D/eb.targets" | wc -l)" -lt 2 ] && [ $i -lt 200 ]; do sleep 0.1; i=$((i + 1)); done
+while [ "$(sort -u "$D/eb.targets" | wc -l)" -lt 2 ] && [ $i -lt 200 ] && [ -d "$D" ]; do sleep 0.1; i=$((i + 1)); done
 exit 0
 "#,
     );
@@ -2524,7 +2561,7 @@ echo "$*" >> "$D/keeplogs.calls"
 case "$EB_PIPELINE_TARGET" in cpu) other=gpu;; *) other=cpu;; esac
 reason=timeout
 i=0
-while [ $i -lt 1000 ]; do
+while [ $i -lt 1000 ] && [ -d "$D" ]; do
   if [ -e "$D/keeplogs.inflight.$other" ]; then reason=overlap; break; fi
   if [ -e "$D/result-$other.json" ]; then reason=sibling-finished; break; fi
   sleep 0.01
@@ -2567,9 +2604,13 @@ rm -f "$D/rotating" "$me"
             (t, c.spawn().unwrap())
         })
         .collect();
+    let outputs: Vec<_> = kids
+        .into_iter()
+        .map(|(t, kid)| (t, kid.wait_with_output()))
+        .collect();
     let mut status = Vec::new();
-    for (t, kid) in kids {
-        let o = kid.wait_with_output().unwrap();
+    for (t, o) in outputs {
+        let o = o.unwrap();
         let stderr = String::from_utf8_lossy(&o.stderr);
         assert_eq!(o.status.code(), Some(0), "{t}: {stderr}");
         let text = std::fs::read_to_string(root.join(format!("result-{t}.json"))).unwrap();
@@ -2682,7 +2723,7 @@ fn a_run_leaves_its_rotation_at_once_to_a_rotate_that_holds_the_tree() {
     let t0 = Instant::now();
     while child.try_wait().unwrap().is_none() {
         if t0.elapsed() > Duration::from_secs(30) {
-            child.kill().unwrap();
+            kill_and_reap(&mut child);
             panic!("the run still waits for {r}/logs/.eb-keep-logs-rotate.lock");
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -3397,7 +3438,8 @@ echo "$*" >> "$D/check.calls"
 env | grep '^EB_PIPELINE_CHECK_' | sort > "$D/check.env"
 if [ -n "${STUB_CHECK_SLEEP:-}" ]; then
   echo started > "$D/check.started"
-  sleep 30
+  i=0
+  while [ -d "$D" ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
 fi
 exit "${STUB_CHECK_CODE:-0}"
 "#;
@@ -3493,10 +3535,11 @@ fn sigterm_during_the_check_command_records_the_phase_once() {
     let started = env.dir.path().join("check.started");
     let t0 = Instant::now();
     while !started.exists() {
-        assert!(
-            t0.elapsed() < Duration::from_secs(20),
-            "check never started"
-        );
+        let late = t0.elapsed() >= Duration::from_secs(20);
+        if late {
+            kill_and_reap(&mut child);
+        }
+        assert!(!late, "check never started");
         std::thread::sleep(Duration::from_millis(20));
     }
     // SAFETY: the pid is the driver child this test started.
