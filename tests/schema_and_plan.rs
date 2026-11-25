@@ -47,7 +47,7 @@ init = []
 
 #[test]
 fn examples_round_trip() {
-    for f in ["small-cluster.toml", "eessi-site.toml"] {
+    for f in ["workstation.toml", "small-cluster.toml", "eessi-site.toml"] {
         let text = std::fs::read_to_string(example(f)).unwrap();
         let a: Site = site::parse(&text).unwrap();
         let again = toml::to_string(&a).unwrap();
@@ -564,6 +564,42 @@ fn plan_shows_job_id_placeholder_and_default_footprint() {
         .as_str()
         .unwrap()
         .ends_with("/<log-stamp>/cpu-a"));
+}
+
+#[test]
+fn workstation_template_plans_no_scheduler_command() {
+    let d = tempfile::tempdir().unwrap();
+    let list = d.path().join("l.txt");
+    std::fs::write(&list, "Foo-1.0-foss-2025a.eb\n").unwrap();
+    let o = bin()
+        .args(["plan", "--site"])
+        .arg(example("workstation.toml"))
+        .arg("--list")
+        .arg(&list)
+        .args(["--target", "cpu", "--build-type", "production"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    let phases = v["phases"].as_array().unwrap();
+    assert!(phases.iter().any(|p| p["name"] == "build"));
+    for p in phases {
+        for c in p["commands"].as_array().unwrap() {
+            let argv = argv_of(c);
+            assert!(
+                !argv
+                    .iter()
+                    .any(|a| a == "srun" || a == "sbatch" || a == "salloc"),
+                "{}: {argv:?}",
+                p["name"]
+            );
+        }
+    }
 }
 
 #[test]

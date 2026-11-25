@@ -1,0 +1,30 @@
+# One machine with no scheduler: a workstation, a lab server or a CI runner.
+# Every phase starts on this host as a plain process. No EESSI, inode quota or
+# licences. Every value is a placeholder; /home/user stands for a directory
+# the build account owns.
+schema_version = 1
+kind = "site"
+
+[site]
+name = "workstation"
+
+[scheduler]
+kind = "local"
+
+[[targets]]
+name = "cpu"
+build_lists = ["software.list"]
+default = true
+
+[filesystems]
+scratch = "/home/user/eb/scratch"
+tmp = "/home/user/eb/scratch/tmp"
+build_path = "/home/user/eb/scratch/build"
+source_paths = ["/home/user/eb/sources"]
+install_root = "/home/user/eb/software"
+log_root = "/home/user/eb/logs"
+
+# `eb` comes from PATH, for example a pip install of EasyBuild, so no module
+# is loaded before a build.
+[modules]
+init = []

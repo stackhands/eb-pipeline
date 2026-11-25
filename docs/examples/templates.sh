@@ -6,9 +6,10 @@
 
 run 'eb-pipeline init --list'
 expect_status 0
+expect_line 'workstation      One machine, no scheduler: every phase runs on this host; no EESSI, quota or licences'
 expect_line 'small-cluster    Slurm, one CPU target; no EESSI, inode quota or licences'
 
-for name in small-cluster eessi-site; do
+for name in workstation small-cluster eessi-site; do
     run "eb-pipeline init --template $name --out $name.toml"
     expect_status 0
     expect_line "INFO [init] -: wrote template $name to $name.toml"
