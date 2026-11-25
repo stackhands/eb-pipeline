@@ -1,12 +1,12 @@
 //! `eb-cvmfs` brackets one configured synchronization in a CVMFS transaction.
 
-#[path = "common/exec_stub.rs"]
-mod exec_stub;
+mod common;
 
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::time::Duration;
 
 const CVMFS_SERVER: &str = r#"#!/bin/sh
 echo "$*" >> "$CALLS"
@@ -52,7 +52,7 @@ exit 99
 "#;
 
 fn write_exec(path: &Path, text: &str) {
-    exec_stub::write_exec(path, text);
+    common::write_exec(path, text);
 }
 
 struct Fixture {
@@ -1669,6 +1669,8 @@ fn faulty_stderr(fault: StderrFault) -> std::process::Stdio {
 
 type Scenario = (&'static str, i32, fn(&Fixture) -> Command);
 
+const LIMIT: Duration = Duration::from_secs(60);
+
 /// Every place eb-cvmfs reports on stderr, with the exit status it must keep.
 fn diagnostic_scenarios() -> Vec<Scenario> {
     vec![
@@ -1734,7 +1736,13 @@ fn diagnostics_keep_the_exit_status_when_stderr_is_unwritable() {
     let mut failures = Vec::new();
     for (name, expected, build) in diagnostic_scenarios() {
         let fixture = Fixture::new();
-        let output = build(&fixture).sync_output();
+        let output = common::output_within(
+            build(&fixture)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+            LIMIT,
+        );
         if code(&output) != expected || stderr(&output).is_empty() {
             failures.push(format!(
                 "{name}: exited {} with stderr {:?}, expected {expected} and a diagnostic",
@@ -1745,7 +1753,13 @@ fn diagnostics_keep_the_exit_status_when_stderr_is_unwritable() {
         }
         for fault in [StderrFault::Full, StderrFault::ClosedPipe] {
             let fixture = Fixture::new();
-            let output = build(&fixture).stderr(faulty_stderr(fault)).sync_output();
+            let output = common::output_within(
+                build(&fixture)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stderr(faulty_stderr(fault)),
+                LIMIT,
+            );
             if code(&output) != expected {
                 failures.push(format!(
                     "{name} with stderr {fault:?}: exited {}, expected {expected}",
