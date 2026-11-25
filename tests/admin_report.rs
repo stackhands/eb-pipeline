@@ -1,14 +1,20 @@
 //! Integration tests for `eb-admin-report`.
 
-#[path = "common/exec_stub.rs"]
-mod exec_stub;
+mod common;
 
-use exec_stub::{write_exec, CommandSyncExt};
-use std::process::Command;
+use common::{output_within, write_exec};
+use std::process::{Command, Stdio};
+use std::time::Duration;
+
+const LIMIT: Duration = Duration::from_secs(30);
 
 fn bin() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_eb-admin-report"));
-    command.env_remove("EB_PIPELINE_RESULT");
+    command
+        .env_remove("EB_PIPELINE_RESULT")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     command
 }
 
@@ -103,11 +109,10 @@ fn report_uses_shared_classifier_signatures_for_real_failure_fixture() {
         bin_dir.display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    let output = bin()
-        .args(["--result"])
-        .arg(&result)
-        .env("PATH", path)
-        .sync_output();
+    let output = output_within(
+        bin().args(["--result"]).arg(&result).env("PATH", path),
+        LIMIT,
+    );
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -164,11 +169,10 @@ fn report_marks_shared_command_path_failures_as_systemic_infrastructure() {
         bin_dir.display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    let output = bin()
-        .args(["--result"])
-        .arg(&result)
-        .env("PATH", path)
-        .sync_output();
+    let output = output_within(
+        bin().args(["--result"]).arg(&result).env("PATH", path),
+        LIMIT,
+    );
     assert_eq!(
         output.status.code(),
         Some(0),
