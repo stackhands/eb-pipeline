@@ -77,8 +77,7 @@ impl LockHolder {
     }
 
     fn stop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        kill_and_reap(&mut self.child);
     }
 }
 
@@ -554,8 +553,7 @@ pub fn output_within(cmd: &mut Command, limit: Duration) -> Output {
     unsafe { libc::close(pidfd) };
     assert!(waited >= 0, "poll: {}", std::io::Error::last_os_error());
     if waited == 0 || child.try_wait().unwrap().is_none() {
-        let _ = child.kill();
-        let _ = child.wait();
+        kill_and_reap(&mut child);
         panic!("command still running after {limit:?}");
     }
     child.wait_with_output().unwrap()

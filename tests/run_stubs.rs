@@ -1678,7 +1678,13 @@ fn sigterm_reaches_descendants_of_the_running_command() {
         r#"#!/bin/sh
 trap 'echo term > "$STUB_DIR/descendant.termed"; exit 0' TERM
 echo ready > "$STUB_DIR/descendant.ready"
-while [ -d "$STUB_DIR" ]; do sleep 1; done
+i=0
+while [ -d "$STUB_DIR" ] && [ $i -lt 300 ]; do
+  sleep 0.1 &
+  pid=$!
+  wait $pid
+  i=$((i + 1))
+done
 "#,
     );
     let mut child = driver(&env, LIST, &[("STUB_EB_DESCENDANT", "1")], &[]);
@@ -2545,7 +2551,7 @@ D="${STUB_DIR:?}"
 echo "$*" >> "$D/eb.calls"
 echo "$EB_PIPELINE_TARGET" >> "$D/eb.targets"
 i=0
-while [ "$(sort -u "$D/eb.targets" | wc -l)" -lt 2 ] && [ $i -lt 200 ] && [ -d "$D" ]; do sleep 0.1; i=$((i + 1)); done
+while [ -d "$D" ] && [ "$(sort -u "$D/eb.targets" | wc -l)" -lt 2 ] && [ $i -lt 200 ]; do sleep 0.1; i=$((i + 1)); done
 exit 0
 "#,
     );
