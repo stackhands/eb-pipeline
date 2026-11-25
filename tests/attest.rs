@@ -593,6 +593,74 @@ fn an_enabled_plan_appends_a_record_and_verify_recomputes_it() {
 }
 
 #[test]
+fn the_list_variable_does_not_conflict_with_the_recorded_list() {
+    let tree = Tree::new();
+    let root = tree.path();
+    std::fs::create_dir_all(root.join("easyconfigs")).unwrap();
+    std::fs::create_dir_all(root.join("easyblocks")).unwrap();
+    std::fs::create_dir_all(root.join("patches")).unwrap();
+    let easyconfig = root.join("easyconfigs/Foo-1.0.eb");
+    std::fs::write(&easyconfig, "name = 'Foo'\neasyblock = 'EB_Foo'\n").unwrap();
+    std::fs::write(
+        root.join("easyblocks/eb_foo.py"),
+        "class EB_Foo(EasyBlock):\n    pass\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("key.pem"), "not-a-key\n").unwrap();
+    std::fs::write(root.join("site.toml"), attest_site(root)).unwrap();
+    std::fs::write(root.join("list.txt"), "Foo-1.0.eb\n").unwrap();
+    std::fs::write(root.join("other.txt"), "Bar-1.0.eb\n").unwrap();
+    let ec = easyconfig.display().to_string();
+    let stub = [
+        ("STUB_EASYCONFIG", ec.as_str()),
+        ("EB_IMAGE_DIGEST", "sha256:abc"),
+        ("EB_ROUTE_RECEIPT", "receipt-1"),
+    ];
+    let made = plan(&tree, &stub);
+    assert_eq!(
+        made.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    let plan_path = root.join("plan.json");
+    std::fs::write(&plan_path, &made.stdout).unwrap();
+
+    let site = root.join("site.toml");
+    let other = root.join("other.txt");
+    let verify = |extra: &[&str], vars: &[(&str, &str)]| {
+        let mut args = vec!["verify", "--site", site.to_str().unwrap()];
+        args.extend_from_slice(extra);
+        args.extend_from_slice(&[
+            "--target",
+            "cpu",
+            "--build-type",
+            "production",
+            "--from",
+            plan_path.to_str().unwrap(),
+        ]);
+        let mut all = stub.to_vec();
+        all.extend_from_slice(vars);
+        tree.run(&args, &all)
+    };
+
+    let recorded = verify(
+        &["--recorded-list"],
+        &[("EB_PIPELINE_LIST", other.to_str().unwrap())],
+    );
+    assert_eq!(
+        recorded.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&recorded.stderr)
+    );
+    assert!(String::from_utf8_lossy(&recorded.stdout).starts_with("verified input record "));
+
+    let typed = verify(&["--recorded-list", "--list", other.to_str().unwrap()], &[]);
+    assert_eq!(typed.status.code(), Some(2));
+}
+
+#[test]
 fn malformed_verify_input_names_the_producer_and_path() {
     let tree = Tree::new();
     let root = tree.path();

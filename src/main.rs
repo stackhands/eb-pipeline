@@ -248,8 +248,7 @@ enum Cmd {
         #[arg(
             long,
             env = "EB_PIPELINE_LIST",
-            required_unless_present = "recorded_list",
-            conflicts_with = "recorded_list"
+            required_unless_present = "recorded_list"
         )]
         list: Option<PathBuf>,
         /// Read the list path recorded in the plan or result.
@@ -1762,6 +1761,29 @@ fn refuse_target_without_checks(cli: &Cli, matches: &ArgMatches) {
     }
 }
 
+/// `verify --recorded-list` replaces the list, so an explicit list option
+/// conflicts with it. `EB_PIPELINE_LIST` is exported for a whole run and is
+/// only a fallback: the recorded path wins over it, as it does in
+/// `eb-retry-list`.
+fn refuse_list_with_recorded_list(cli: &Cli, matches: &ArgMatches) {
+    let Cmd::Verify {
+        list: Some(_),
+        recorded_list: true,
+        ..
+    } = &cli.command
+    else {
+        return;
+    };
+    if typed_on_command_line(matches, "verify", "list") {
+        Cli::command()
+            .error(
+                clap::error::ErrorKind::ArgumentConflict,
+                "the argument '--list <LIST>' cannot be used with '--recorded-list'",
+            )
+            .exit();
+    }
+}
+
 fn main() {
     let matches = match Cli::command().try_get_matches() {
         Ok(matches) => matches,
@@ -1779,6 +1801,7 @@ fn main() {
     };
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
     refuse_target_without_checks(&cli, &matches);
+    refuse_list_with_recorded_list(&cli, &matches);
     let r = match &cli.command {
         Cmd::Check {
             site,
