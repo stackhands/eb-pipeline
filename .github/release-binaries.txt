@@ -1,3 +1,4 @@
+eb-admin-report
 eb-cvmfs
 eb-junit
 eb-pipeline
