@@ -11,7 +11,7 @@ use std::io::BufRead;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Output, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub const STAMP: &str = "20260101_000000";
 
@@ -528,33 +528,59 @@ pub fn kill_and_reap(child: &mut Child) {
     let _ = child.wait();
 }
 
-/// Spawn `cmd` and collect its output. A child still running after `limit`
-/// is killed so the caller does not wait on a blocked read.
+/// Spawn `cmd` and collect its output. A child still running after `limit`,
+/// or when a system call of the wait fails, is killed so the caller does not
+/// wait on a blocked read.
 pub fn output_within(cmd: &mut Command, limit: Duration) -> Output {
     let mut child = cmd.spawn().unwrap();
-    let pid = libc::pid_t::try_from(child.id()).unwrap();
-    // SAFETY: `pid` is the live child just spawned, and `pidfd` is closed below.
-    let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
-    assert!(
-        pidfd >= 0,
-        "pidfd_open: {}",
-        std::io::Error::last_os_error()
-    );
-    let pidfd = libc::c_int::try_from(pidfd).unwrap();
-    let mut pollfd = libc::pollfd {
-        fd: pidfd,
-        events: libc::POLLIN,
-        revents: 0,
+    let mut exited = || -> Result<bool, String> {
+        let pid = libc::pid_t::try_from(child.id()).map_err(|e| format!("pid: {e}"))?;
+        // SAFETY: `pid` is the live child just spawned, and `pidfd` is closed below.
+        let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+        if pidfd < 0 {
+            return Err(format!("pidfd_open: {}", std::io::Error::last_os_error()));
+        }
+        let pidfd = libc::c_int::try_from(pidfd).map_err(|e| format!("pidfd: {e}"))?;
+        let mut pollfd = libc::pollfd {
+            fd: pidfd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let start = Instant::now();
+        let mut left = limit;
+        let waited = loop {
+            let timeout = libc::c_int::try_from(left.as_nanos().div_ceil(1_000_000))
+                .unwrap_or(libc::c_int::MAX);
+            // SAFETY: `pollfd` is a valid one-element list and `pidfd` stays open.
+            let waited = unsafe { libc::poll(&mut pollfd, 1, timeout) };
+            if waited >= 0 {
+                break Ok(waited > 0);
+            }
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                break Err(format!("poll: {error}"));
+            }
+            left = limit.saturating_sub(start.elapsed());
+            if left.is_zero() {
+                break Ok(false);
+            }
+        };
+        // SAFETY: `pidfd` is the descriptor opened above and is not used again.
+        unsafe { libc::close(pidfd) };
+        Ok(waited?
+            && child
+                .try_wait()
+                .map_err(|e| format!("try_wait: {e}"))?
+                .is_some())
     };
-    let timeout = i32::try_from(limit.as_millis()).unwrap_or(i32::MAX);
-    // SAFETY: `pollfd` is a valid one-element list and `pidfd` stays open.
-    let waited = unsafe { libc::poll(&mut pollfd, 1, timeout) };
-    // SAFETY: `pidfd` is the descriptor opened above and is not used again.
-    unsafe { libc::close(pidfd) };
-    assert!(waited >= 0, "poll: {}", std::io::Error::last_os_error());
-    if waited == 0 || child.try_wait().unwrap().is_none() {
-        kill_and_reap(&mut child);
-        panic!("command still running after {limit:?}");
+    match exited() {
+        Ok(true) => child.wait_with_output().unwrap(),
+        result => {
+            kill_and_reap(&mut child);
+            let message = result
+                .err()
+                .unwrap_or_else(|| format!("command still running after {limit:?}"));
+            panic!("{message}");
+        }
     }
-    child.wait_with_output().unwrap()
 }
