@@ -1247,7 +1247,7 @@ fn watch_does_not_drop_an_install_recorded_while_it_rebuilds() {
 case " $* " in
   *" Foo-1.0-GCCcore-13.2.0.eb "*)
     : > "$STUB_DIR/watch-paused"
-    while [ ! -e "$STUB_DIR/watch-continue" ]; do sleep 0.01; done
+    while [ ! -e "$STUB_DIR/watch-continue" ] && [ -d "$STUB_DIR" ]; do sleep 0.01; done
     ;;
 esac
 exec "{}" "$@"
@@ -1285,7 +1285,7 @@ exec "{}" "$@"
     for (key, value) in &vars {
         command.env(key, value);
     }
-    let child = command.spawn().unwrap();
+    let mut child = command.spawn().unwrap();
     let paused = t.root().join("watch-paused");
     for _ in 0..1000 {
         if paused.is_file() {
@@ -1293,22 +1293,31 @@ exec "{}" "$@"
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    assert!(paused.is_file(), "watch did not reach the paused rebuild");
+    let reached = paused.is_file();
+    let rerun = reached.then(|| {
+        run(
+            &t,
+            "cpu",
+            "20260103_000003",
+            "Bar-2.0-GCCcore-13.2.0.eb\n",
+            &with(&vars),
+        )
+    });
+    let recorded = std::fs::read_to_string(t.root().join("install/.eb-pipeline-watch/cpu.json"));
 
-    let rerun = run(
-        &t,
-        "cpu",
-        "20260103_000003",
-        "Bar-2.0-GCCcore-13.2.0.eb\n",
-        &with(&vars),
-    );
-    assert_eq!(code(&rerun), 0, "{}", stderr(&rerun));
-    assert!(t.watch_state("cpu")["installs"]
-        .get("Bar/2.0-GCCcore-13.2.0")
-        .is_some());
-
-    std::fs::write(t.root().join("watch-continue"), "").unwrap();
+    // The stub eb runs in a process group of its own, out of reach of a kill
+    // of watch, and waits until watch-continue exists or STUB_DIR is gone.
+    let released = std::fs::write(t.root().join("watch-continue"), "");
+    if !reached || released.is_err() {
+        let _ = child.kill();
+    }
     let output = child.wait_with_output().unwrap();
+    assert!(reached, "watch did not reach the paused rebuild");
+    let rerun = rerun.unwrap();
+    assert_eq!(code(&rerun), 0, "{}", stderr(&rerun));
+    let recorded: Value = serde_json::from_str(&recorded.unwrap()).unwrap();
+    assert!(recorded["installs"].get("Bar/2.0-GCCcore-13.2.0").is_some());
+    released.unwrap();
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(t.watch_state("cpu")["installs"]
         .get("Bar/2.0-GCCcore-13.2.0")
