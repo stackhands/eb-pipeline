@@ -57,6 +57,22 @@ pub fn signal_exit() -> Option<i32> {
     })
 }
 
+/// If a SIGINT or SIGTERM is pending, apply its exit code and label.
+pub fn apply_pending_signal(exit_code: &mut i32, interrupted_by: &mut Option<String>) {
+    let Some(code) = signal_exit() else {
+        return;
+    };
+    if interrupted_by.is_none() {
+        let name = if code == exit::SIGINT {
+            "SIGINT"
+        } else {
+            "SIGTERM"
+        };
+        *interrupted_by = Some(name.into());
+    }
+    *exit_code = code;
+}
+
 /// The wait before the next admission attempt. It starts at `wait_seconds`
 /// and is never longer than `max_wait_seconds`, including when that maximum
 /// is the smaller of the two.
@@ -87,7 +103,15 @@ fn sleep_interruptible(secs: u64) -> bool {
 
 /// Print a log line on stderr: `<level> [<phase>] <target>: <msg>`.
 pub fn log(level: &str, phase: &str, target: &str, msg: &str) {
-    eprintln!("{level} [{phase}] {target}: {msg}");
+    log_line(&format!("{level} [{phase}] {target}: {msg}"));
+}
+
+/// Print one line on stderr, as [`log`] does. A closed or full stderr is
+/// ignored, so a diagnostic never panics or changes the exit status.
+pub fn log_line(line: &str) {
+    use std::io::Write;
+    let mut stderr = std::io::stderr().lock();
+    let _ = writeln!(stderr, "{line}");
 }
 
 /// Seconds, to the millisecond.
@@ -242,12 +266,17 @@ fn exec(
             )
         })?;
     }
-    let out = File::create(log).map_err(|e| {
-        Fail::new(
-            exit::FAILED,
-            format!("cannot create {}: {e}", log.display()),
-        )
-    })?;
+    let out = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(log)
+        .map_err(|e| {
+            Fail::new(
+                exit::FAILED,
+                format!("cannot create {}: {e}", log.display()),
+            )
+        })?;
     let err = out
         .try_clone()
         .map_err(|e| Fail::new(exit::FAILED, format!("cannot duplicate log handle: {e}")))?;
@@ -275,7 +304,8 @@ fn exec(
     let mut child = match c.spawn() {
         Ok(ch) => ch,
         Err(e) => {
-            let _ = std::fs::write(log, format!("cannot start {}: {e}\n", cmd.argv[0]));
+            let start_error = format!("cannot start {}: {e}\n", cmd.argv[0]);
+            let _ = crate::util::write_atomic(log, start_error.as_bytes());
             return Ok(Exec {
                 code: 127,
                 log: log.to_path_buf(),
@@ -599,7 +629,7 @@ fn oom_preflight(p: &Planner, units: &[Unit], node: &str, log_dir: &Path) -> Res
         )
     })?;
     let plan = log_dir.join("oom-preflight.yml");
-    std::fs::write(&plan, text).map_err(|e| {
+    crate::util::write_atomic(&plan, text.as_bytes()).map_err(|e| {
         Fail::new(
             exit::FAILED,
             format!("cannot write {}: {e}", plan.display()),
@@ -614,7 +644,7 @@ fn oom_preflight(p: &Planner, units: &[Unit], node: &str, log_dir: &Path) -> Res
         .output()
         .map_err(|e| Fail::new(exit::FAILED, format!("cannot run `{bin} stack oom`: {e}")))?;
     let stdout = String::from_utf8_lossy(&out.stdout);
-    std::fs::write(log_dir.join("oom-preflight.log"), &out.stdout).map_err(|e| {
+    crate::util::write_atomic(&log_dir.join("oom-preflight.log"), &out.stdout).map_err(|e| {
         Fail::new(
             exit::FAILED,
             format!(
@@ -759,8 +789,8 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                 writeln!(output, "[{}] {}", ph.name, shell_line(c)).expect("writing to a string");
             }
         }
-        if let Err(e) = util::write_stdout(output.as_bytes()) {
-            st.res.message = Some(format!("cannot write stdout: {e}"));
+        if let Err(e) = util::write_stdout_checked(output.as_bytes()) {
+            st.res.message = Some(e);
             return finish(st, Some(exit::FAILED));
         }
         log("INFO", "run", &target, "dry run: nothing executed");
@@ -1813,6 +1843,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                     &unset_env,
                     &log_dir.join("checks.log"),
                 ) {
+                    Ok(_) if interrupted().is_some() => {}
                     Ok(ex) => {
                         if ex.code == 0 {
                             st.phase("checks", "ok", Some(0), None);
@@ -1865,6 +1896,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                         &unset_env,
                         &log_dir.join(format!("verification-{}.log", index + 1)),
                     ) {
+                        Ok(_) if interrupted().is_some() => {}
                         Ok(ex) if ex.code == 0 => {
                             log(
                                 "INFO",
@@ -1920,6 +1952,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                     &unset_env,
                     &log_dir.join("caches.log"),
                 ) {
+                    Ok(_) if interrupted().is_some() => {}
                     Ok(ex) => {
                         if ex.code == 0 {
                             st.phase("caches", "ok", Some(0), None);
@@ -1994,6 +2027,7 @@ pub fn run(planner: &Planner, lines: &[ListLine], opts: &Options<'_>) -> RunResu
                     }
                 };
                 match st.exec("logs", &cmd, &env, &unset_env, &log_dir.join("rotate.log")) {
+                    Ok(_) if interrupted().is_some() => {}
                     Ok(ex) => match map_rotate(ex.code) {
                         RotateOutcome::Ok => st.phase("logs", "ok", Some(0), note),
                         RotateOutcome::Locked => {

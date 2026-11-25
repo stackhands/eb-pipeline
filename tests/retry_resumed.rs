@@ -1,4 +1,5 @@
 //! Resume-aware defaults for `eb-retry-list`.
+#![allow(clippy::disallowed_methods)]
 
 use std::process::Command;
 

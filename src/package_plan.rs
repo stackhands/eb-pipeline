@@ -196,14 +196,18 @@ fn verification(bundle: &Path, recipes: &[PathBuf]) -> Result<Vec<Verification>,
             closure.display()
         ))
     })?;
+    let companions = match value.get("companions") {
+        None | Some(Value::Null) => &[][..],
+        Some(Value::Array(entries)) => entries.as_slice(),
+        Some(_) => {
+            return Err(Fail::usage(format!(
+                "{} companions must be an array",
+                closure.display()
+            )))
+        }
+    };
     let mut refs = vec![root];
-    refs.extend(
-        value
-            .get("companions")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten(),
-    );
+    refs.extend(companions);
     let mut out = Vec::new();
     for entry in refs {
         let manifest = entry
@@ -329,8 +333,30 @@ pub fn load(path: &Path) -> Result<Input, Fail> {
 pub const R_DESCRIPTION_CHECK: &str = r#"p <- commandArgs(TRUE)[1]; i <- installed.packages(); if (!(p %in% rownames(i))) stop(sprintf("package %s is not installed", p)); d <- tools::package_dependencies(p, db=i, which=c("Depends","Imports","LinkingTo"), recursive=FALSE)[[p]]; m <- setdiff(d, rownames(i)); if (length(m)) stop(sprintf("%s has missing DESCRIPTION dependencies: %s", p, paste(m, collapse=", ")))"#;
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::load;
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    #[test]
+    fn package_plan_reader_refuses_a_fifo_promptly() {
+        let root = tempfile::tempdir().unwrap();
+        let manifest = root.path().join("package.plan.json");
+        let raw = CString::new(manifest.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+        let path = root.path().to_path_buf();
+        let (send, receive) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            send.send(load(&path)).unwrap();
+        });
+        let error = receive
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("package-plan reader blocked")
+            .unwrap_err();
+        assert!(error.msg.contains("not a regular file"), "{error:?}");
+        reader.join().unwrap();
+    }
 
     #[test]
     fn closure_references_verify_each_recipe_once() {
@@ -360,6 +386,61 @@ mod tests {
 
         let input = load(root.path()).unwrap();
         assert_eq!(input.verification.len(), 1, "{:?}", input.verification);
+    }
+
+    #[test]
+    fn closure_companions_must_be_an_array_when_present() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("easyconfigs")).unwrap();
+        std::fs::write(
+            root.path().join("package.plan.json"),
+            r#"{"schema_version":1,"origin":"pypi","package":{"name":"demo"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join("companion.plan.json"),
+            r#"{"schema_version":1,"origin":"cran","package":{"name":"companion"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join("build-order.json"),
+            r#"{"schema_version":1,"recipes":["easyconfigs/demo-1.0.eb"]}"#,
+        )
+        .unwrap();
+        std::fs::write(root.path().join("easyconfigs/demo-1.0.eb"), "").unwrap();
+        let companion =
+            r#"{"manifest":"companion.plan.json","recipes":["easyconfigs/demo-1.0.eb"]}"#;
+        for companions in [companion.to_string(), "\"companion.plan.json\"".into()] {
+            std::fs::write(
+                root.path().join("closure.plan.json"),
+                format!(
+                    r#"{{"schema_version":1,"root":{{"manifest":"package.plan.json","recipes":["easyconfigs/demo-1.0.eb"]}},"companions":{companions}}}"#
+                ),
+            )
+            .unwrap();
+            let error = load(root.path()).unwrap_err();
+            assert!(
+                error.msg.contains("companions must be an array"),
+                "{companions}: {}",
+                error.msg
+            );
+        }
+
+        std::fs::write(
+            root.path().join("closure.plan.json"),
+            format!(
+                r#"{{"schema_version":1,"root":{{"manifest":"package.plan.json","recipes":["easyconfigs/demo-1.0.eb"]}},"companions":[{companion}]}}"#
+            ),
+        )
+        .unwrap();
+        assert_eq!(load(root.path()).unwrap().verification.len(), 2);
+
+        std::fs::write(
+            root.path().join("closure.plan.json"),
+            r#"{"schema_version":1,"root":{"manifest":"package.plan.json","recipes":["easyconfigs/demo-1.0.eb"]},"companions":null}"#,
+        )
+        .unwrap();
+        assert_eq!(load(root.path()).unwrap().verification.len(), 1);
     }
 
     #[test]

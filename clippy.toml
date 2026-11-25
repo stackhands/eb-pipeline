@@ -1,0 +1,4 @@
+disallowed-methods = [
+  { path = "std::fs::write", reason = "use util::write_atomic for user-visible output paths" },
+  { path = "std::fs::File::create", reason = "use util::write_atomic for user-visible output paths" },
+]

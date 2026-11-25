@@ -14,7 +14,9 @@ pub const FILE: &str = "sbom.cdx.json";
 /// Run `eb-stack stack sbom --lock LOCK --out RUN_DIR/sbom.cdx.json`.
 ///
 /// A non-zero status removes a partial file. The command's output is
-/// `sbom.log` in the same directory.
+/// `sbom.log` in the same directory. The failure ends with [`exit::FAILED`],
+/// or with 130 or 143 when the command ended that way, whatever other status
+/// the command returned.
 pub fn store(site: &Site, sbom: &Sbom, run_dir: &Path) -> Result<PathBuf, Fail> {
     let lock = sbom
         .lock
@@ -37,12 +39,17 @@ pub fn store(site: &Site, sbom: &Sbom, run_dir: &Path) -> Result<PathBuf, Fail> 
         }
     }
     let log_path = run_dir.join("sbom.log");
-    let log = std::fs::File::create(&log_path).map_err(|e| {
-        Fail::new(
-            exit::FAILED,
-            format!("cannot write {}: {e}", log_path.display()),
-        )
-    })?;
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&log_path)
+        .map_err(|e| {
+            Fail::new(
+                exit::FAILED,
+                format!("cannot write {}: {e}", log_path.display()),
+            )
+        })?;
     let err = log.try_clone().map_err(|e| {
         Fail::new(
             exit::FAILED,
@@ -70,8 +77,12 @@ pub fn store(site: &Site, sbom: &Sbom, run_dir: &Path) -> Result<PathBuf, Fail> 
             .code()
             .or_else(|| status.signal().map(|signal| 128 + signal))
             .unwrap_or(exit::FAILED);
+        let exit_code = match code {
+            exit::SIGINT | exit::SIGTERM => code,
+            _ => exit::FAILED,
+        };
         return Err(Fail::new(
-            code,
+            exit_code,
             format!(
                 "eb-stack stack sbom --lock {lock} exited {code}; its output is in {}",
                 log_path.display()

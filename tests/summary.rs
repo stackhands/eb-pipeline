@@ -1,9 +1,13 @@
 //! Every `run` merges its target into `summary.json` and `summary.html` in
 //! its run directory.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
-use common::{code, run, setup, stderr, STAMP};
+use common::{code, eb_pipeline, eessi_vars, run, setup, stderr, stdout, STAMP, T};
+use eb_pipeline::summary::{record, TargetSummary, JSON};
 use serde_json::Value;
+use std::collections::BTreeMap;
+use std::os::unix::fs::symlink;
 
 const LIST: &str = "Foo-1.0-foss-2025a.eb\nBar-2.0-foss-2025a.eb\n";
 
@@ -149,6 +153,228 @@ fn a_corrupt_summary_is_not_replaced_by_one_target() {
 }
 
 #[test]
+fn a_summary_with_another_kind_is_not_merged() {
+    let t = setup("");
+    let cpu = run(&t, "cpu", STAMP, LIST, &[]);
+    assert_eq!(code(&cpu), 0, "{}", stderr(&cpu));
+    let path = t.run_dir(STAMP).join("summary.json");
+    let mut artifact: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    artifact["kind"] = "result".into();
+    let foreign = serde_json::to_string_pretty(&artifact).unwrap() + "\n";
+    std::fs::write(&path, &foreign).unwrap();
+
+    let gpu = run(&t, "gpu", STAMP, LIST, &[]);
+
+    assert_eq!(code(&gpu), 0, "{}", stderr(&gpu));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), foreign);
+    assert!(
+        stderr(&gpu).contains("kind `result` is not `summary`"),
+        "{}",
+        stderr(&gpu)
+    );
+}
+
+const WATCH: &str = "[watch]\neasyconfigs = [\"@ROOT@/robot\"]\n";
+
+/// What the tool wrote for each artifact kind other than `summary`, as the
+/// kind and the file's text: a run's `result`, a `plan`, a `status` document,
+/// a `watch-plan` and the `watch-state` that a run records.
+fn real_artifacts() -> &'static [(&'static str, String)] {
+    static ARTIFACTS: std::sync::OnceLock<Vec<(&'static str, String)>> = std::sync::OnceLock::new();
+    ARTIFACTS.get_or_init(|| {
+        let t = setup(WATCH);
+        t.eessi_module("CMake", "3.27.6-GCCcore-13.2.0");
+        std::fs::create_dir_all(t.root().join("robot")).unwrap();
+        let vars = eessi_vars(&t, "2023.06");
+        let vars: Vec<(&str, &str)> = vars.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let o = run(&t, "cpu", STAMP, LIST, &vars);
+        assert_eq!(code(&o), 0, "{}", stderr(&o));
+        let read = |p: &std::path::Path| {
+            std::fs::read_to_string(p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
+        };
+
+        let result = read(&t.root().join("result-cpu.json"));
+        let state = read(&t.root().join("install/.eb-pipeline-watch/cpu.json"));
+
+        let site = t.site.display().to_string();
+        let list = t.root().join("list-cpu.txt").display().to_string();
+        let plan_path = t.root().join("plan.json");
+        let o = eb_pipeline(
+            &t,
+            &[
+                "plan",
+                "--site",
+                &site,
+                "--list",
+                &list,
+                "--target",
+                "cpu",
+                "--build-type",
+                "production",
+                "--out",
+                &plan_path.display().to_string(),
+            ],
+            &[],
+        );
+        assert_eq!(code(&o), 0, "{}", stderr(&o));
+        let plan = read(&plan_path);
+
+        let o = eb_pipeline(&t, &["status", "--site", &site, "--format", "json"], &[]);
+        assert_eq!(code(&o), 0, "{}", stderr(&o));
+        let status = stdout(&o);
+
+        let watch_path = t.root().join("watch-plan.json");
+        let o = eb_pipeline(
+            &t,
+            &[
+                "watch",
+                "--site",
+                &site,
+                "--target",
+                "cpu",
+                "--build-type",
+                "production",
+                "--log-stamp",
+                "20260102_000000",
+                "--dry-run",
+                "--plan-out",
+                &watch_path.display().to_string(),
+            ],
+            &vars,
+        );
+        assert_eq!(code(&o), 0, "{}", stderr(&o));
+        let watch_plan = read(&watch_path);
+
+        let artifacts = vec![
+            ("result", result),
+            ("plan", plan),
+            ("status", status),
+            ("watch-plan", watch_plan),
+            ("watch-state", state),
+        ];
+        for (kind, text) in &artifacts {
+            let v: Value = serde_json::from_str(text).unwrap();
+            assert_eq!(v["kind"], *kind, "{text}");
+            assert!(
+                v.get("tool").is_none(),
+                "{kind} has a summary's key: {text}"
+            );
+        }
+        artifacts
+    })
+}
+
+/// A site whose run directory `STAMP` holds `text` as `summary.json`.
+fn with_summary_file(text: &str) -> (T, std::path::PathBuf) {
+    let t = setup("");
+    let dir = t.run_dir(STAMP);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(JSON);
+    std::fs::write(&path, text).unwrap();
+    (t, path)
+}
+
+fn status_of_runs(t: &T) -> String {
+    let site = t.site.display().to_string();
+    let o = eb_pipeline(t, &["status", "--site", &site], &[]);
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    stdout(&o)
+}
+
+/// `record` and `status` on `text` as `summary.json`: both refuse it with
+/// `why`, and the run leaves the file as it was.
+fn assert_refused_and_kept(text: &str, why: &str) {
+    let (t, path) = with_summary_file(text);
+
+    let o = run(&t, "gpu", STAMP, LIST, &[]);
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    let err = stderr(&o);
+    let warning = err
+        .lines()
+        .find(|l| l.starts_with("WARN [summary] gpu: no summary written: "))
+        .unwrap_or_else(|| panic!("no summary warning in {err}"));
+    assert!(warning.contains(why), "{warning}");
+
+    let shown = status_of_runs(&t);
+    assert!(
+        shown.starts_with(&format!("{STAMP}  ")) && shown.contains(why),
+        "{shown}"
+    );
+}
+
+#[test]
+fn a_real_artifact_of_another_kind_is_named_by_run_and_status() {
+    for (kind, text) in real_artifacts() {
+        assert_refused_and_kept(text, &format!("kind `{kind}` is not `summary`"));
+    }
+}
+
+#[test]
+fn another_kind_is_named_before_its_schema_version() {
+    for (kind, text) in real_artifacts() {
+        let mut artifact: Value = serde_json::from_str(text).unwrap();
+        artifact["schema_version"] = 2.into();
+        let later = serde_json::to_string_pretty(&artifact).unwrap() + "\n";
+        assert_refused_and_kept(&later, &format!("kind `{kind}` is not `summary`"));
+    }
+}
+
+#[test]
+fn a_summary_without_a_string_kind_is_refused() {
+    let t = setup("");
+    let o = run(&t, "cpu", STAMP, LIST, &[]);
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    let summary = t.summary(STAMP);
+
+    let mut missing = summary.clone();
+    missing.as_object_mut().unwrap().remove("kind");
+    let missing = serde_json::to_string_pretty(&missing).unwrap() + "\n";
+    assert_refused_and_kept(&missing, "missing string `kind`");
+
+    let mut number = summary;
+    number["kind"] = 7.into();
+    let number = serde_json::to_string_pretty(&number).unwrap() + "\n";
+    assert_refused_and_kept(&number, "missing string `kind`");
+
+    assert_refused_and_kept("[]\n", "not a JSON object");
+}
+
+#[test]
+fn a_summary_of_a_later_schema_is_replaced_by_run_and_refused_by_status() {
+    let later = r#"{"schema_version": 2, "kind": "summary", "entries": ["gone"]}"#;
+
+    let (t, path) = with_summary_file(later);
+    let shown = status_of_runs(&t);
+    assert!(
+        shown.contains(&format!("{}: schema_version 2 is not 1", path.display())),
+        "{shown}"
+    );
+
+    let o = run(&t, "gpu", STAMP, LIST, &[]);
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    let s = t.summary(STAMP);
+    assert_eq!(s["schema_version"], 1);
+    assert_eq!(s["kind"], "summary");
+    let names: Vec<&str> = s["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["gpu"]);
+}
+
+#[test]
+fn a_summary_without_an_integer_schema_version_is_kept() {
+    for version in [r#""schema_version": "1","#, ""] {
+        let text = format!(r#"{{{version} "kind": "summary", "targets": []}}"#);
+        assert_refused_and_kept(&text, "missing integer `schema_version`");
+    }
+}
+
+#[test]
 fn a_dry_run_writes_no_summary() {
     let t = setup("");
     let list = t.root().join("list.txt");
@@ -190,5 +416,69 @@ fn a_summary_that_cannot_be_written_leaves_the_exit_code() {
         stderr(&o).contains("WARN [summary] cpu: no summary written: "),
         "{}",
         stderr(&o)
+    );
+}
+
+fn target(name: &str, code: i32) -> TargetSummary {
+    TargetSummary {
+        name: name.into(),
+        command: "run".into(),
+        build_type: "production".into(),
+        run_id: "r".into(),
+        list: "/srv/list.txt".into(),
+        log_dir: format!("/srv/logs/20260101_000000/{name}"),
+        result: None,
+        started_at: "2026-01-01T00:00:00+00:00".into(),
+        ended_at: "2026-01-01T00:00:01+00:00".into(),
+        duration_seconds: 1.0,
+        exit_code: code,
+        status: "failed".into(),
+        message: None,
+        interrupted_by: None,
+        counts: BTreeMap::new(),
+        phases: vec![],
+        packages: vec![],
+        deselected: vec![],
+        watch: None,
+    }
+}
+
+#[test]
+fn summary_record_refuses_a_symbolic_link_output_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let run_dir = dir.path().join("20260101_000000");
+    std::fs::create_dir_all(&run_dir).unwrap();
+    let dangling = dir.path().join("outside-summary.json");
+    symlink(&dangling, run_dir.join(JSON)).unwrap();
+
+    let error = record("t", target("cpu", 1), &run_dir).unwrap_err();
+    assert!(error.contains("output path is a symbolic link"), "{error}");
+    assert!(run_dir.join(JSON).is_symlink());
+}
+
+#[test]
+fn summary_record_refuses_a_fifo_summary_promptly() {
+    let dir = tempfile::tempdir().unwrap();
+    let run_dir = dir.path().join("20260101_000000");
+    std::fs::create_dir_all(&run_dir).unwrap();
+    let summary = run_dir.join(JSON);
+    let raw = std::ffi::CString::new(std::os::unix::ffi::OsStrExt::as_bytes(summary.as_os_str()))
+        .unwrap();
+    assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+
+    let (send, receive) = std::sync::mpsc::channel();
+    let recorder = std::thread::spawn({
+        let run_dir = run_dir.clone();
+        move || send.send(record("t", target("cpu", 1), &run_dir)).unwrap()
+    });
+    let error = receive
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("record blocked on a FIFO summary")
+        .unwrap_err();
+    recorder.join().unwrap();
+
+    assert_eq!(
+        error,
+        format!("cannot read {}: not a regular file", summary.display())
     );
 }

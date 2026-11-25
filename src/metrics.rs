@@ -55,6 +55,12 @@ pub fn from_result(v: &Value) -> Result<Status, Fail> {
             "metrics reads a result file, found kind `{kind}`"
         )));
     }
+    if obj
+        .get("schema_version")
+        .is_some_and(|version| version.as_u64() != Some(1))
+    {
+        return Err(Fail::usage("result.schema_version must be 1"));
+    }
     let exit_code = obj
         .get("exit_code")
         .and_then(Value::as_i64)
@@ -73,10 +79,11 @@ pub fn from_result(v: &Value) -> Result<Status, Fail> {
     let duration_seconds = obj
         .get("duration_seconds")
         .and_then(Value::as_f64)
-        .filter(|n| n.is_finite() && *n >= 0.0)
         .ok_or_else(|| {
             Fail::usage("result.duration_seconds must be a finite non-negative number")
         })?;
+    util::checked_duration_seconds(duration_seconds, None)
+        .map_err(|_| Fail::usage("result.duration_seconds must be a finite non-negative number"))?;
 
     let mut counts = BTreeMap::new();
     for name in LINE_STATUSES {
@@ -366,6 +373,7 @@ fn family(out: &mut String, name: &str, help: &str, samples: &[String]) {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 

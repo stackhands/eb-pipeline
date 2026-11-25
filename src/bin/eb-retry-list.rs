@@ -6,10 +6,12 @@
 use eb_pipeline::classify;
 use eb_pipeline::easystack;
 use eb_pipeline::exit;
+use eb_pipeline::run;
 use eb_pipeline::util::{self, ListLine};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
@@ -22,20 +24,20 @@ const RETRYABLE_CLASSES: &[&str] = &["interrupted", "resource", "timeout"];
 const OOM_MARK: &str = " may run out of memory on ";
 
 struct Args {
-    result: Option<String>,
-    summary: Option<String>,
+    result: Option<PathBuf>,
+    summary: Option<PathBuf>,
     target: Option<String>,
-    list: Option<String>,
+    list: Option<PathBuf>,
     recorded_list: bool,
     statuses: Option<BTreeSet<String>>,
-    out: Option<String>,
+    out: Option<PathBuf>,
     require_lines: bool,
     refuse_systemic_failure: bool,
     classify: bool,
     classes: Option<BTreeSet<String>>,
     node: Option<String>,
     drop_oom: bool,
-    easyconfigs: Vec<String>,
+    easyconfigs: Vec<PathBuf>,
     arches: Vec<String>,
 }
 
@@ -48,7 +50,7 @@ struct Outcome {
 
 struct RunOutcomes {
     exit_code: i64,
-    list: Option<String>,
+    list: Option<PathBuf>,
     outcomes: BTreeMap<String, VecDeque<Outcome>>,
     deselected: BTreeMap<String, usize>,
 }
@@ -57,14 +59,14 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(msg) => {
-            eprintln!("eb-retry-list: {msg}");
+            run::log_line(&format!("eb-retry-list: {msg}"));
             ExitCode::from(2)
         }
     }
 }
 
 fn run() -> Result<ExitCode, String> {
-    let args = parse(env::args().skip(1))?;
+    let args = parse(util::os_args().into_iter())?;
     check_output_alias(
         args.out.as_deref(),
         &[
@@ -74,8 +76,8 @@ fn run() -> Result<ExitCode, String> {
         ],
     )?;
     let read_recorded = || match (&args.result, &args.summary, &args.target) {
-        (Some(path), None, None) => read_result(Path::new(path)),
-        (None, Some(path), Some(target)) => read_summary(Path::new(path), target),
+        (Some(path), None, None) => read_result(path),
+        (None, Some(path), Some(target)) => read_summary(path, target),
         _ => unreachable!("validated in parse"),
     };
     let (lines, recorded, list_source) = if args.recorded_list {
@@ -84,11 +86,11 @@ fn run() -> Result<ExitCode, String> {
             .list
             .clone()
             .ok_or_else(|| "the selected record has no string `list`".to_string())?;
-        check_output_alias(args.out.as_deref(), &[("--list", Some(&list))])?;
+        check_output_alias(args.out.as_deref(), &[("--list", Some(list.as_path()))])?;
         (read_list(&list)?, recorded, list)
     } else {
         let list = args.list.as_deref().expect("validated in parse");
-        (read_list(list)?, read_recorded()?, list.to_string())
+        (read_list(list)?, read_recorded()?, list.to_path_buf())
     };
     if args.refuse_systemic_failure {
         if let Some((class, count)) = systemic_infrastructure_failure(&recorded)? {
@@ -119,13 +121,12 @@ fn run() -> Result<ExitCode, String> {
         text.push('\n');
     }
     match args.out.as_deref() {
-        Some(path) if path != "-" => {
-            util::write_atomic(Path::new(path), text.as_bytes())
-                .map_err(|e| format!("cannot write {path}: {e}"))?;
+        Some(path) if path != Path::new("-") => {
+            util::write_atomic(path, text.as_bytes())
+                .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
         }
         _ => {
-            util::write_stdout(text.as_bytes())
-                .map_err(|e| format!("cannot write retry list: {e}"))?;
+            util::write_stdout_checked(text.as_bytes())?;
         }
     }
     if args.require_lines && selected.is_empty() {
@@ -168,48 +169,43 @@ fn systemic_infrastructure_failure(
     Ok(shared.map(|class| (class, failed.len())))
 }
 
-fn check_output_alias(out: Option<&str>, inputs: &[(&str, Option<&str>)]) -> Result<(), String> {
-    let paths: Vec<_> = inputs
-        .iter()
-        .map(|(option, path)| (*option, path.map(Path::new)))
-        .collect();
-    util::refuse_output_alias("--out", out.map(Path::new), &paths)
+fn check_output_alias(out: Option<&Path>, inputs: &[(&str, Option<&Path>)]) -> Result<(), String> {
+    util::refuse_output_alias("--out", out, inputs)
 }
 
-fn read_list(path: &str) -> Result<Vec<ListLine>, String> {
-    let list_path = Path::new(path);
-    let lines = if easystack::is_easystack(list_path) {
-        easystack::read(list_path)?
+fn read_list(path: &Path) -> Result<Vec<ListLine>, String> {
+    let lines = if easystack::is_easystack(path) {
+        easystack::read(path)?
     } else {
-        let list_text =
-            fs::read_to_string(list_path).map_err(|e| format!("cannot read list {path}: {e}"))?;
+        let list_text = util::read_text_file(path)
+            .map_err(|e| format!("cannot read list {}: {e}", path.display()))?;
         util::parse_list(&list_text).map_err(|f| f.msg)?
     };
     if lines.is_empty() {
-        return Err(format!("list {path} holds no lines"));
+        return Err(format!("list {} holds no lines", path.display()));
     }
     Ok(lines)
 }
 
 struct Parsed {
-    result: Option<String>,
-    summary: Option<String>,
+    result: Option<PathBuf>,
+    summary: Option<PathBuf>,
     target: Option<String>,
-    list: Option<String>,
+    list: Option<PathBuf>,
     recorded_list: bool,
     statuses: Option<BTreeSet<String>>,
-    out: Option<String>,
+    out: Option<PathBuf>,
     require_lines: bool,
     refuse_systemic_failure: bool,
     classify: bool,
     classes: Option<BTreeSet<String>>,
     node: Option<String>,
     drop_oom: bool,
-    easyconfigs: Vec<String>,
+    easyconfigs: Vec<PathBuf>,
     arches: Vec<String>,
 }
 
-fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
+fn parse(words: impl Iterator<Item = OsString>) -> Result<Args, String> {
     let mut parsed = Parsed {
         result: None,
         summary: None,
@@ -230,16 +226,36 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut words = words.peekable();
 
     while let Some(word) = words.next() {
+        if let Some((flag, value)) = util::split_os_flag_value(word.as_os_str()) {
+            if matches!(
+                flag.as_str(),
+                "--result"
+                    | "--summary"
+                    | "--target"
+                    | "--list"
+                    | "--status"
+                    | "--out"
+                    | "--class"
+                    | "--node"
+                    | "--easyconfigs"
+                    | "--arch"
+            ) {
+                if value.as_os_str().is_empty() {
+                    return Err(format!("{flag} needs a value"));
+                }
+                assign_flag(&flag, value, &mut parsed)?;
+                continue;
+            }
+        }
+        let word = util::os_to_string(word)?;
         match word.as_str() {
             "-h" | "--help" => {
-                util::write_stdout(include_str!("eb-retry-list-help.txt").as_bytes())
-                    .map_err(|error| format!("cannot write help: {error}"))?;
+                util::write_stdout_checked(include_str!("eb-retry-list-help.txt").as_bytes())?;
                 std::process::exit(0);
             }
             "-V" | "--version" => {
                 let version = format!("eb-retry-list {}\n", env!("CARGO_PKG_VERSION"));
-                util::write_stdout(version.as_bytes())
-                    .map_err(|error| format!("cannot write version: {error}"))?;
+                util::write_stdout_checked(version.as_bytes())?;
                 std::process::exit(0);
             }
             "--classify" => parsed.classify = true,
@@ -249,44 +265,21 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
             "--drop-oom" => parsed.drop_oom = true,
             "--result" | "--summary" | "--target" | "--list" | "--status" | "--out" | "--class"
             | "--node" | "--easyconfigs" | "--arch" => {
-                let value = util::separate_value(&mut words, &format!("{word} needs a value"))?;
+                let value = util::separate_os_value(&mut words, &format!("{word} needs a value"))?;
                 assign_flag(&word, value, &mut parsed)?;
             }
-            _ => {
-                if let Some((flag, value)) = word.split_once('=') {
-                    if matches!(
-                        flag,
-                        "--result"
-                            | "--summary"
-                            | "--target"
-                            | "--list"
-                            | "--status"
-                            | "--out"
-                            | "--class"
-                            | "--node"
-                            | "--easyconfigs"
-                            | "--arch"
-                    ) {
-                        if value.is_empty() {
-                            return Err(format!("{flag} needs a value"));
-                        }
-                        assign_flag(flag, value.to_string(), &mut parsed)?;
-                        continue;
-                    }
-                }
-                return Err(format!("does not know `{word}`"));
-            }
+            _ => return Err(format!("does not know `{word}`")),
         }
     }
 
     if parsed.result.is_none() && parsed.summary.is_none() {
-        parsed.result = util::env_value("EB_PIPELINE_RESULT");
+        parsed.result = util::env_value("EB_PIPELINE_RESULT").map(PathBuf::from);
     }
     if parsed.target.is_none() && parsed.summary.is_some() {
         parsed.target = util::env_value("EB_PIPELINE_TARGET");
     }
     if parsed.list.is_none() && !parsed.recorded_list {
-        parsed.list = util::env_value("EB_PIPELINE_LIST");
+        parsed.list = util::env_value("EB_PIPELINE_LIST").map(PathBuf::from);
     }
 
     if parsed.result.is_some() && parsed.summary.is_some() {
@@ -354,7 +347,7 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     })
 }
 
-fn assign_once(slot: &mut Option<String>, flag: &str, value: String) -> Result<(), String> {
+fn assign_once<T>(slot: &mut Option<T>, flag: &str, value: T) -> Result<(), String> {
     if slot.is_some() {
         return Err(format!("{flag} was given twice"));
     }
@@ -362,17 +355,18 @@ fn assign_once(slot: &mut Option<String>, flag: &str, value: String) -> Result<(
     Ok(())
 }
 
-fn assign_flag(flag: &str, value: String, parsed: &mut Parsed) -> Result<(), String> {
+fn assign_flag(flag: &str, value: OsString, parsed: &mut Parsed) -> Result<(), String> {
     match flag {
-        "--result" => assign_once(&mut parsed.result, flag, value)?,
-        "--summary" => assign_once(&mut parsed.summary, flag, value)?,
-        "--target" => assign_once(&mut parsed.target, flag, value)?,
-        "--list" => assign_once(&mut parsed.list, flag, value)?,
-        "--out" => assign_once(&mut parsed.out, flag, value)?,
-        "--node" => assign_once(&mut parsed.node, flag, value)?,
-        "--easyconfigs" => parsed.easyconfigs.push(value),
-        "--arch" => parsed.arches.push(value),
+        "--result" => assign_once(&mut parsed.result, flag, PathBuf::from(value))?,
+        "--summary" => assign_once(&mut parsed.summary, flag, PathBuf::from(value))?,
+        "--target" => assign_once(&mut parsed.target, flag, util::os_to_string(value)?)?,
+        "--list" => assign_once(&mut parsed.list, flag, PathBuf::from(value))?,
+        "--out" => assign_once(&mut parsed.out, flag, PathBuf::from(value))?,
+        "--node" => assign_once(&mut parsed.node, flag, util::os_to_string(value)?)?,
+        "--easyconfigs" => parsed.easyconfigs.push(PathBuf::from(value)),
+        "--arch" => parsed.arches.push(util::os_to_string(value)?),
         "--class" => {
+            let value = util::os_to_string(value)?;
             let set = parsed.classes.get_or_insert_with(BTreeSet::new);
             let mut any = false;
             for part in value.split(',') {
@@ -388,6 +382,7 @@ fn assign_flag(flag: &str, value: String, parsed: &mut Parsed) -> Result<(), Str
             }
         }
         "--status" => {
+            let value = util::os_to_string(value)?;
             let set = parsed.statuses.get_or_insert_with(BTreeSet::new);
             for part in value.split(',') {
                 let s = part.trim();
@@ -476,7 +471,7 @@ fn read_result(path: &Path) -> Result<RunOutcomes, String> {
     }
     Ok(RunOutcomes {
         exit_code,
-        list: obj.get("list").and_then(Value::as_str).map(str::to_string),
+        list: obj.get("list").and_then(Value::as_str).map(PathBuf::from),
         outcomes,
         deselected,
     })
@@ -542,10 +537,7 @@ fn read_summary(path: &Path, target: &str) -> Result<RunOutcomes, String> {
     }
     Ok(RunOutcomes {
         exit_code,
-        list: t_obj
-            .get("list")
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        list: t_obj.get("list").and_then(Value::as_str).map(PathBuf::from),
         outcomes,
         deselected,
     })
@@ -701,9 +693,9 @@ fn filter_oom(
     lines: Vec<RetryLine>,
     node: &str,
     drop: bool,
-    easyconfigs: &[String],
+    easyconfigs: &[PathBuf],
     arches: &[String],
-    list_source: &str,
+    list_source: &Path,
 ) -> Result<Vec<String>, String> {
     if lines.is_empty() {
         return Ok(Vec::new());
@@ -736,7 +728,7 @@ fn filter_oom(
             .map_or_else(|| output.status.to_string(), |code| code.to_string());
         let stderr = String::from_utf8_lossy(&output.stderr);
         let generated = temp.0.to_string_lossy();
-        let source = format!("generated retry easystack from {list_source}");
+        let source = format!("generated retry easystack from {}", list_source.display());
         let detail = stderr.trim().replace(generated.as_ref(), &source);
         let detail = if detail.is_empty() {
             String::new()
@@ -756,7 +748,7 @@ fn filter_oom(
         }
     }
     for hit in &hits {
-        eprintln!("eb-retry-list: {}", hit.line);
+        run::log_line(&format!("eb-retry-list: {}", hit.line));
     }
     Ok(lines
         .into_iter()
@@ -788,7 +780,8 @@ fn write_easystack(path: &Path, lines: &[RetryLine]) -> Result<(), String> {
     );
     let value = serde_yaml::Value::Mapping(document);
     let text = serde_yaml::to_string(&value).map_err(|e| format!("cannot make easystack: {e}"))?;
-    fs::write(path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))
+    util::write_atomic(path, text.as_bytes())
+        .map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
 fn easystack_entry(name: &str, args: &[String]) -> Result<serde_yaml::Value, String> {
@@ -931,6 +924,7 @@ fn basename(path: &str) -> &str {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 
@@ -1068,6 +1062,26 @@ oom=2 fits=1 builds=3 nodes=1
                 "--try-amend=toolchain=foss,2025a"
             ]
         );
+    }
+
+    #[test]
+    fn write_easystack_refuses_a_symlink_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim.yaml");
+        std::fs::write(&victim, "sentinel\n").unwrap();
+        let out = dir.path().join("retry.yaml");
+        std::os::unix::fs::symlink(&victim, &out).unwrap();
+        let lines = vec![RetryLine {
+            raw: "Big-1.0.eb".into(),
+            easyconfig: "Big-1.0.eb".into(),
+            args: Vec::new(),
+            log: None,
+        }];
+
+        let error = write_easystack(&out, &lines).unwrap_err();
+
+        assert!(error.contains("cannot write"), "{error}");
+        assert_eq!(std::fs::read_to_string(victim).unwrap(), "sentinel\n");
     }
 
     fn outcome(status: &str) -> Outcome {

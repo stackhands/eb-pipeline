@@ -1,4 +1,5 @@
 //! After a clean build, `eb-stack stack sbom --lock` writes CycloneDX beside the summary.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 use common::{code, run, run_extra, setup, stderr, write_exec, STAMP};
@@ -77,6 +78,22 @@ fn an_sbom_command_that_fails_fails_the_run_and_leaves_no_document() {
     assert!(stderr(&o).contains("stack sbom"), "{}", stderr(&o));
     assert!(!t.run_dir(STAMP).join("sbom.cdx.json").exists());
     assert_eq!(t.summary(STAMP)["exit_code"], 1);
+}
+
+#[test]
+fn an_sbom_command_status_outside_the_contract_fails_the_run_with_1() {
+    for status in ["2", "3", "75", "78"] {
+        let t = setup("[sbom]\nlock = \"@ROOT@/stack.lock.json\"\n");
+        let o = run(&t, "cpu", STAMP, LIST, &[("STUB_SBOM_FAIL", status)]);
+        assert_eq!(code(&o), 1, "sbom exit {status}: {}", stderr(&o));
+        assert!(
+            stderr(&o).contains(&format!("exited {status}")),
+            "sbom exit {status}: {}",
+            stderr(&o)
+        );
+        assert!(!t.run_dir(STAMP).join("sbom.cdx.json").exists());
+        assert_eq!(t.summary(STAMP)["exit_code"], 1, "sbom exit {status}");
+    }
 }
 
 #[test]

@@ -88,6 +88,11 @@ pub fn run(args: Args<'_>) -> Result<i32, Fail> {
             out.display().to_string(),
         ]);
         let summary = run_eb_stack(&planner, &argv, &work.join("rebuild-set.log"))?;
+        let _ = exit::read_json_output(
+            &out.join("rebuild-set.json"),
+            "eb-stack rebuild-set",
+            exit::FAILED,
+        )?;
         strict_backports += parse_metric(&summary, "backport").unwrap_or(0);
         copy_rebuilds(&out.join("rebuilds"), &args.out_dir.join("rebuilds"))?;
     }

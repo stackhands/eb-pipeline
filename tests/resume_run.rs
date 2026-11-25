@@ -1,9 +1,9 @@
 //! `run --resume-result` against stub `eb` and `eb-stack` programs.
+#![allow(clippy::disallowed_methods)]
 
 #[path = "common/exec_stub.rs"]
 mod exec_stub;
 
-use exec_stub::CommandSyncExt;
 use serde_json::Value;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -178,7 +178,7 @@ fn invoke(w: &World, cmd: &str, list: Option<&str>, vars: &[(&str, &str)], extra
     for (k, v) in vars {
         c.env(k, v);
     }
-    let o = c.sync_output();
+    let o = c.output().unwrap();
     let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
     let stdout = String::from_utf8_lossy(&o.stdout).into_owned();
     let result = extra

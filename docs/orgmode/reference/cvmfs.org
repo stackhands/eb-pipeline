@@ -161,7 +161,7 @@ It changes a successful invocation to exit 1, but does not mask an existing tran
 |--------+---------|
 | =0= | Synchronization, optional verification, publish and optional check succeeded, or =--dry-run= printed the commands. |
 | =1= | The repository operation succeeded, but the requested metrics file could not be written. |
-| =2= | The arguments are invalid, the archive manifest is refused, =cvmfs_server list= cannot start or fails, or the repository is already in a transaction. |
+| =2= | The arguments are invalid, the archive manifest is refused, =cvmfs_server list= cannot start or fails, the repository is already in a transaction, or the metrics file cannot be prepared (its lock or temporary state) before any command runs. |
 | transaction status | =cvmfs_server transaction= failed. |
 | synchronization status | The synchronization failed; =eb-cvmfs= attempted =abort -f=. |
 | verification status | Verification failed; =eb-cvmfs= attempted =abort -f=. |

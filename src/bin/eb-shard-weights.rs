@@ -6,12 +6,11 @@
 
 use eb_pipeline::plan::module_rel;
 use eb_pipeline::summary::{self, Summary};
-use eb_pipeline::{exit, util};
+use eb_pipeline::{exit, run, util};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::env;
-use std::fs;
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -22,15 +21,15 @@ enum Mode {
 }
 
 struct Args {
-    results: Vec<String>,
-    summaries: Vec<String>,
-    log_root: Option<String>,
+    results: Vec<PathBuf>,
+    summaries: Vec<PathBuf>,
+    log_root: Option<PathBuf>,
     last: Option<usize>,
     target: Option<String>,
-    existing: Option<String>,
+    existing: Option<PathBuf>,
     min_samples: usize,
     mode: Mode,
-    out: Option<String>,
+    out: Option<PathBuf>,
 }
 
 struct Observation {
@@ -44,32 +43,32 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(msg) => {
-            eprintln!("eb-shard-weights: {msg}");
+            run::log_line(&format!("eb-shard-weights: {msg}"));
             ExitCode::from(2)
         }
     }
 }
 
 fn run() -> Result<ExitCode, String> {
-    let args = parse(env::args().skip(1))?;
+    let args = parse(util::os_args().into_iter())?;
     let inputs: Vec<_> = args
         .results
         .iter()
-        .map(|path| ("--result", Some(Path::new(path))))
+        .map(|path| ("--result", Some(path.as_path())))
         .chain(
             args.summaries
                 .iter()
-                .map(|path| ("--summary", Some(Path::new(path)))),
+                .map(|path| ("--summary", Some(path.as_path()))),
         )
         .chain(
             args.existing
                 .iter()
-                .map(|path| ("--existing", Some(Path::new(path)))),
+                .map(|path| ("--existing", Some(path.as_path()))),
         )
         .collect();
-    util::refuse_output_alias("--out", args.out.as_deref().map(Path::new), &inputs)?;
+    util::refuse_output_alias("--out", args.out.as_deref(), &inputs)?;
     let mut weights = match args.existing.as_deref() {
-        Some(path) => read_existing(Path::new(path))?,
+        Some(path) => read_existing(path)?,
         None => BTreeMap::new(),
     };
 
@@ -77,15 +76,10 @@ fn run() -> Result<ExitCode, String> {
     let mut seq = 0usize;
     let mut target_matched = args.target.is_none();
     for path in &args.results {
-        target_matched |= collect_result(
-            Path::new(path),
-            args.target.as_deref(),
-            &mut observations,
-            &mut seq,
-        )?;
+        target_matched |=
+            collect_result(path, args.target.as_deref(), &mut observations, &mut seq)?;
     }
     for path in &args.summaries {
-        let path = Path::new(path);
         let (_, value) = exit::read_json_output(path, "eb-pipeline run", exit::USAGE)
             .map_err(|error| error.msg)?;
         let s = parse_summary_json(value, path)?;
@@ -97,9 +91,9 @@ fn run() -> Result<ExitCode, String> {
             &mut seq,
         )?;
     }
-    if let Some(root) = &args.log_root {
+    if let Some(root) = args.log_root.as_deref() {
         let last = args.last.unwrap_or(10);
-        let entries = summary::runs(Path::new(root), args.target.as_deref(), last)?;
+        let entries = summary::runs(root, args.target.as_deref(), last)?;
         // `summary::runs` returns newest first; collect chronologically so `latest`
         // falls back cleanly when timestamps match.
         for entry in entries.into_iter().rev() {
@@ -144,19 +138,18 @@ fn run() -> Result<ExitCode, String> {
         text.push_str(&format!("{module}\t{secs}\n"));
     }
     match args.out.as_deref() {
-        Some(path) if path != "-" => {
-            util::write_atomic(Path::new(path), text.as_bytes())
-                .map_err(|e| format!("cannot write {path}: {e}"))?;
+        Some(path) if path != Path::new("-") => {
+            util::write_atomic(path, text.as_bytes())
+                .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
         }
         _ => {
-            util::write_stdout(text.as_bytes())
-                .map_err(|e| format!("cannot write weights: {e}"))?;
+            util::write_stdout_checked(text.as_bytes())?;
         }
     }
     Ok(ExitCode::SUCCESS)
 }
 
-fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
+fn parse(words: impl Iterator<Item = OsString>) -> Result<Args, String> {
     let mut results = Vec::new();
     let mut summaries = Vec::new();
     let mut log_root = None;
@@ -169,21 +162,52 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut words = words.peekable();
 
     while let Some(word) = words.next() {
+        if let Some((flag, value)) = util::split_os_flag_value(word.as_os_str()) {
+            if matches!(
+                flag.as_str(),
+                "--result"
+                    | "--summary"
+                    | "--log-root"
+                    | "--last"
+                    | "--target"
+                    | "--existing"
+                    | "--min-samples"
+                    | "--mode"
+                    | "--out"
+            ) {
+                if value.as_os_str().is_empty() {
+                    return Err(format!("{flag} needs a value"));
+                }
+                assign_flag(
+                    &flag,
+                    value,
+                    &mut results,
+                    &mut summaries,
+                    &mut log_root,
+                    &mut last,
+                    &mut target,
+                    &mut existing,
+                    &mut min_samples,
+                    &mut mode,
+                    &mut out,
+                )?;
+                continue;
+            }
+        }
+        let word = util::os_to_string(word)?;
         match word.as_str() {
             "-h" | "--help" => {
-                util::write_stdout(include_str!("eb-shard-weights-help.txt").as_bytes())
-                    .map_err(|error| format!("cannot write help: {error}"))?;
+                util::write_stdout_checked(include_str!("eb-shard-weights-help.txt").as_bytes())?;
                 std::process::exit(0);
             }
             "-V" | "--version" => {
                 let version = format!("eb-shard-weights {}\n", env!("CARGO_PKG_VERSION"));
-                util::write_stdout(version.as_bytes())
-                    .map_err(|error| format!("cannot write version: {error}"))?;
+                util::write_stdout_checked(version.as_bytes())?;
                 std::process::exit(0);
             }
             "--result" | "--summary" | "--log-root" | "--last" | "--target" | "--existing"
             | "--min-samples" | "--mode" | "--out" => {
-                let value = util::separate_value(&mut words, &format!("{word} needs a value"))?;
+                let value = util::separate_os_value(&mut words, &format!("{word} needs a value"))?;
                 assign_flag(
                     &word,
                     value,
@@ -198,47 +222,13 @@ fn parse(words: impl Iterator<Item = String>) -> Result<Args, String> {
                     &mut out,
                 )?;
             }
-            _ => {
-                if let Some((flag, value)) = word.split_once('=') {
-                    if matches!(
-                        flag,
-                        "--result"
-                            | "--summary"
-                            | "--log-root"
-                            | "--last"
-                            | "--target"
-                            | "--existing"
-                            | "--min-samples"
-                            | "--mode"
-                            | "--out"
-                    ) {
-                        if value.is_empty() {
-                            return Err(format!("{flag} needs a value"));
-                        }
-                        assign_flag(
-                            flag,
-                            value.to_string(),
-                            &mut results,
-                            &mut summaries,
-                            &mut log_root,
-                            &mut last,
-                            &mut target,
-                            &mut existing,
-                            &mut min_samples,
-                            &mut mode,
-                            &mut out,
-                        )?;
-                        continue;
-                    }
-                }
-                return Err(format!("does not know `{word}`"));
-            }
+            _ => return Err(format!("does not know `{word}`")),
         }
     }
 
     if results.is_empty() && summaries.is_empty() && log_root.is_none() {
         if let Some(result) = eb_pipeline::util::env_value("EB_PIPELINE_RESULT") {
-            results.push(result);
+            results.push(PathBuf::from(result));
         }
     }
     if target.is_none() {
@@ -275,27 +265,28 @@ fn assign_once<T>(slot: &mut Option<T>, flag: &str, value: T) -> Result<(), Stri
 #[allow(clippy::too_many_arguments)]
 fn assign_flag(
     flag: &str,
-    value: String,
-    results: &mut Vec<String>,
-    summaries: &mut Vec<String>,
-    log_root: &mut Option<String>,
+    value: OsString,
+    results: &mut Vec<PathBuf>,
+    summaries: &mut Vec<PathBuf>,
+    log_root: &mut Option<PathBuf>,
     last: &mut Option<usize>,
     target: &mut Option<String>,
-    existing: &mut Option<String>,
+    existing: &mut Option<PathBuf>,
     min_samples: &mut Option<usize>,
     mode: &mut Option<Mode>,
-    out: &mut Option<String>,
+    out: &mut Option<PathBuf>,
 ) -> Result<(), String> {
     match flag {
-        "--result" => results.push(value),
-        "--summary" => summaries.push(value),
-        "--log-root" => assign_once(log_root, flag, value)?,
-        "--target" => assign_once(target, flag, value)?,
-        "--existing" => assign_once(existing, flag, value)?,
+        "--result" => results.push(PathBuf::from(value)),
+        "--summary" => summaries.push(PathBuf::from(value)),
+        "--log-root" => assign_once(log_root, flag, PathBuf::from(value))?,
+        "--target" => assign_once(target, flag, util::os_to_string(value)?)?,
+        "--existing" => assign_once(existing, flag, PathBuf::from(value))?,
         "--min-samples" => {
             if min_samples.is_some() {
                 return Err(format!("{flag} was given twice"));
             }
+            let value = util::os_to_string(value)?;
             let n: u16 = value.parse().map_err(|_| {
                 format!("--min-samples `{value}` must be an integer from 1 to 65535")
             })?;
@@ -304,11 +295,12 @@ fn assign_flag(
             }
             *min_samples = Some(usize::from(n));
         }
-        "--out" => assign_once(out, flag, value)?,
+        "--out" => assign_once(out, flag, PathBuf::from(value))?,
         "--last" => {
             if last.is_some() {
                 return Err(format!("{flag} was given twice"));
             }
+            let value = util::os_to_string(value)?;
             let n: u16 = value
                 .parse()
                 .map_err(|_| format!("--last `{value}` must be an integer from 1 to 65535"))?;
@@ -321,6 +313,7 @@ fn assign_flag(
             if mode.is_some() {
                 return Err(format!("{flag} was given twice"));
             }
+            let value = util::os_to_string(value)?;
             let parsed = match value.as_str() {
                 "max" => Mode::Max,
                 "latest" => Mode::Latest,
@@ -340,7 +333,7 @@ fn assign_flag(
 
 fn read_existing(path: &Path) -> Result<BTreeMap<String, u64>, String> {
     let text =
-        fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        util::read_text_file(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let mut out = BTreeMap::new();
     let mut first_lines = BTreeMap::new();
     for (i, raw) in text.lines().enumerate() {
@@ -366,7 +359,7 @@ fn read_existing(path: &Path) -> Result<BTreeMap<String, u64>, String> {
                 value.trim()
             )
         })?;
-        if !secs.is_finite() || secs < 0.0 {
+        if util::checked_duration_seconds(secs, None).is_err() {
             return Err(format!(
                 "{} line {}: `{}` is not a number of seconds",
                 path.display(),
@@ -393,6 +386,7 @@ fn collect_result(
     out: &mut Vec<Observation>,
     seq: &mut usize,
 ) -> Result<bool, String> {
+    let max_weight_seconds = u64::MAX as f64;
     let (_, v) =
         exit::read_json_output(path, "eb-pipeline run", exit::USAGE).map_err(|error| error.msg)?;
     let obj = v
@@ -444,11 +438,21 @@ fn collect_result(
                     path.display()
                 )
             })?;
-        if !secs.is_finite() || secs < 0.0 {
-            return Err(format!(
-                "{}: lines[{i}].duration_seconds must be a non-negative number",
-                path.display()
-            ));
+        match util::checked_duration_seconds(secs, Some(max_weight_seconds)) {
+            Ok(_) => {}
+            Err(util::DurationError::Invalid) => {
+                return Err(format!(
+                    "{}: lines[{i}].duration_seconds must be a non-negative number",
+                    path.display()
+                ));
+            }
+            Err(util::DurationError::TooLarge) => {
+                return Err(format!(
+                    "{}: lines[{i}].duration_seconds exceeds {} seconds",
+                    path.display(),
+                    u64::MAX
+                ));
+            }
         }
         let ec = line
             .get("easyconfig")
@@ -487,6 +491,7 @@ fn collect_summary(
     out: &mut Vec<Observation>,
     seq: &mut usize,
 ) -> Result<bool, String> {
+    let max_weight_seconds = u64::MAX as f64;
     let mut matched = target_filter.is_none();
     for (target_index, t) in s.targets.iter().enumerate() {
         if let Some(want) = target_filter {
@@ -505,11 +510,21 @@ fn collect_summary(
                     path.display()
                 )
             })?;
-            if !secs.is_finite() || secs < 0.0 {
-                return Err(format!(
-                    "{}: targets[{target_index}].packages[{package_index}].duration_seconds must be a non-negative number",
-                    path.display()
-                ));
+            match util::checked_duration_seconds(secs, Some(max_weight_seconds)) {
+                Ok(_) => {}
+                Err(util::DurationError::Invalid) => {
+                    return Err(format!(
+                        "{}: targets[{target_index}].packages[{package_index}].duration_seconds must be a non-negative number",
+                        path.display()
+                    ));
+                }
+                Err(util::DurationError::TooLarge) => {
+                    return Err(format!(
+                        "{}: targets[{target_index}].packages[{package_index}].duration_seconds exceeds {} seconds",
+                        path.display(),
+                        u64::MAX
+                    ));
+                }
             }
             let module = module_key(p.module.as_deref(), &p.easyconfig);
             *seq += 1;
@@ -586,6 +601,27 @@ fn merge_weights(weights: &mut BTreeMap<String, u64>, obs: &[Observation], mode:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    #[test]
+    fn result_reader_refuses_a_fifo_promptly() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("result.json");
+        let raw = CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+        let (send, receive) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            send.send(collect_result(&path, None, &mut Vec::new(), &mut 0))
+                .unwrap();
+        });
+        let error = receive
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("result reader blocked")
+            .unwrap_err();
+        assert!(error.contains("not a regular file"), "{error}");
+        reader.join().unwrap();
+    }
 
     fn obs(module: &str, seconds: f64, ended_at: &str, seq: usize) -> Observation {
         Observation {

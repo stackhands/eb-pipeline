@@ -1,4 +1,5 @@
 //! End-to-end OOM preflight against an unmodified eb-stack build.
+#![allow(clippy::disallowed_methods)]
 
 use serde_json::Value;
 use std::path::Path;

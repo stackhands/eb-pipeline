@@ -1,4 +1,5 @@
 //! `eb-test-map` turns a build list into the tests that cover it.
+#![allow(clippy::disallowed_methods)]
 
 use std::process::Command;
 
@@ -699,4 +700,95 @@ fn plain_build_list_options_are_not_part_of_the_easyconfig_name() {
     assert_eq!(without_option.status.code(), Some(0));
     assert_eq!(without_option.stdout, with_option.stdout);
     assert_eq!(without_option.stderr, b"");
+}
+
+#[test]
+fn result_input_refuses_a_fifo_without_blocking() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let dir = tempfile::tempdir().unwrap();
+    let map = dir.path().join("map.tsv");
+    std::fs::write(&map, "G g\n").unwrap();
+    let fifo = dir.path().join("result.json");
+    let raw = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+
+    let mut child = bin()
+        .args(["--map"])
+        .arg(&map)
+        .args(["--result"])
+        .arg(&fifo)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("eb-test-map blocked while reading a FIFO result path");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("not a regular file"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn faulty_stderr(closed_pipe: bool) -> std::process::Stdio {
+    if closed_pipe {
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        std::process::Stdio::from(writer)
+    } else {
+        std::process::Stdio::from(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open("/dev/full")
+                .unwrap(),
+        )
+    }
+}
+
+#[test]
+fn unmapped_diagnostics_do_not_panic_when_stderr_is_unwritable() {
+    let dir = tempfile::tempdir().unwrap();
+    files(
+        dir.path(),
+        "GROMACS gromacs\n",
+        "GROMACS-2024.1-foss-2023b.eb\nMissing-1.0.eb\n",
+    );
+    for closed_pipe in [false, true] {
+        for (allow, expected, stdout) in [(false, 2, ""), (true, 0, "gromacs\n")] {
+            let mut command = bin();
+            command
+                .args(["--map"])
+                .arg(dir.path().join("map.tsv"))
+                .arg("--list")
+                .arg(dir.path().join("build.list"));
+            if allow {
+                command.arg("--allow-unmapped");
+            }
+            let o = command.stderr(faulty_stderr(closed_pipe)).output().unwrap();
+            assert_eq!(
+                o.status.code(),
+                Some(expected),
+                "allow-unmapped {allow}, closed pipe {closed_pipe}"
+            );
+            assert_eq!(String::from_utf8(o.stdout).unwrap(), stdout);
+        }
+    }
 }

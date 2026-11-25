@@ -1483,21 +1483,31 @@ fn shard_list_path(dir: &Path, file: &str) -> Result<PathBuf, Fail> {
 /// Read the units a `stack shard` run wrote into `dir`.
 pub fn read_units(dir: &Path) -> Result<Vec<Unit>, Fail> {
     let plan_path = dir.join("plan.json");
-    let text = std::fs::read_to_string(&plan_path).map_err(|e| {
-        Fail::new(
-            exit::FAILED,
-            format!("cannot read {}: {e}", plan_path.display()),
-        )
-    })?;
-    let v: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| Fail::new(exit::FAILED, format!("{}: {e}", plan_path.display())))?;
+    let (_, v) = exit::read_json_output(&plan_path, "eb-stack stack shard", exit::FAILED)?;
+    for (key, shape) in [
+        ("cpu_prerequisites", v["cpu_prerequisites"].is_object()),
+        ("prelude", v["prelude"].is_object()),
+        ("shards", v["shards"].is_array()),
+    ] {
+        if !shape && !v[key].is_null() {
+            let wanted = if key == "shards" {
+                "an array"
+            } else {
+                "an object"
+            };
+            return Err(Fail::new(
+                exit::FAILED,
+                format!("{}: {key} must be {wanted} or null", plan_path.display()),
+            ));
+        }
+    }
     let mut units = Vec::new();
     let mut add = |name: String, role: Role, entry: &serde_json::Value| -> Result<(), Fail> {
         let Some(file) = entry["file"].as_str() else {
             return Ok(());
         };
         let path = shard_list_path(dir, file)?;
-        let list = std::fs::read_to_string(&path)
+        let list = crate::util::read_text_file(&path)
             .map_err(|e| Fail::new(exit::FAILED, format!("cannot read {}: {e}", path.display())))?;
         let lines = parse_list(&list)?;
         if lines.is_empty() {
@@ -1555,6 +1565,7 @@ pub fn read_units(dir: &Path) -> Result<Vec<Unit>, Fail> {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod read_tests {
     use super::{push_eb_line, read_units};
 
@@ -1636,6 +1647,40 @@ mod read_tests {
     }
 
     #[test]
+    fn a_shard_plan_cannot_silently_drop_units_of_the_wrong_shape() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("one.list"), "Foo-1.0.eb\n").unwrap();
+        for (plan, key) in [
+            (
+                r#"{"prelude":{"file":"one.list"},"shards":{"name":"two","file":"one.list"}}"#,
+                "shards must be an array",
+            ),
+            (
+                r#"{"prelude":"one.list","shards":[{"name":"one","file":"one.list"}]}"#,
+                "prelude must be an object",
+            ),
+            (
+                r#"{"cpu_prerequisites":["one.list"],"shards":[{"name":"one","file":"one.list"}]}"#,
+                "cpu_prerequisites must be an object",
+            ),
+        ] {
+            std::fs::write(root.path().join("plan.json"), plan).unwrap();
+            let error = read_units(root.path()).unwrap_err();
+            assert!(error.msg.contains(key), "{plan}: {}", error.msg);
+        }
+
+        std::fs::write(root.path().join("plan.json"), "{").unwrap();
+        let error = read_units(root.path()).unwrap_err();
+        assert!(
+            error
+                .msg
+                .contains("eb-stack stack shard wrote invalid JSON"),
+            "{}",
+            error.msg
+        );
+    }
+
+    #[test]
     fn a_shard_plan_cannot_reuse_a_unit_name() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("one.list"), "Foo-1.0.eb\n").unwrap();
@@ -1656,6 +1701,7 @@ mod read_tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod generation_tests {
     use super::{build_plan, Planner};
     use crate::resolve::Scope;

@@ -1,0 +1,27 @@
+eb-admin-report: write a site-admin triage report from one run result.
+
+  eb-admin-report --result FILE [--out FILE]
+                  [--max-lines N] [--log-tail-lines N]
+
+Reads one JSON file from `eb-pipeline run --result` and prints a markdown
+report for incident triage:
+
+- run metadata (site, target, build type, run id, exit code)
+- per-status counts
+- failure signatures from `eb-stack stack bot-classify --json`
+- whether the failure is systemic: `yes` when two or more lines ran, every
+  line failed and every failed line's log shows one infrastructure class, as
+  `eb-retry-list --refuse-systemic-failure` decides; `unknown` when no line
+  rules it out but a failed line's log cannot be read or classified
+- actionable unfinished lines with notes and log tails
+
+Options:
+
+  --result FILE          Result JSON from `eb-pipeline run --result`.
+                         If omitted, `EB_PIPELINE_RESULT` is read.
+  --out FILE             Write the report to FILE. `-` means standard output.
+  --max-lines N          Show at most N unfinished lines. Default: 20.
+  --log-tail-lines N     Include N non-empty tail lines from each log path.
+                         Default: 1.
+  -h, --help             Show this help.
+  -V, --version          Show the version.

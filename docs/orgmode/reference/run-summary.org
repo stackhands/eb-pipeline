@@ -57,8 +57,10 @@ zen4
 
 Each run takes the lock =.summary.lock= of the run directory, reads =summary.json=, replaces the entry of its own target and keeps the others, and writes both files anew through a rename, so that a reader never sees half of one.
 A later run of the same target with the same stamp replaces that target's entry.
-A =summary.json= with another =schema_version= is replaced.
+A =summary.json= with another =schema_version= is replaced, whatever else it holds.
 One that does not parse is kept, and the run warns that no summary was written, so one target cannot erase the other target entries that may still be recoverable.
+A file whose =kind= is not =summary=, or that lacks a =kind= or an integer =schema_version=, is kept as well: it may be another artifact of the tool, such as a result, a plan or a status document, and the warning names the =kind= it found.
+The =kind= is read before the =schema_version=, and both before the other keys, so that a file of another kind is never mistaken for a summary of another version.
 
 A summary that cannot be written is a warning, and the run exits as it would have without it.
 Here a directory is in the way of =summary.json=:
@@ -71,7 +73,7 @@ eb-pipeline run --site site.toml --list example.list --target zen4 --build-type 
 #+begin_example
 INFO [licences] zen4: not configured
 ...
-WARN [summary] zen4: no summary written: $WORK/site/logs/20261117_100000/summary.json: Is a directory (os error 21)
+WARN [summary] zen4: no summary written: cannot read $WORK/site/logs/20261117_100000/summary.json: Is a directory (os error 21)
 exit 0
 #+end_example
 
@@ -276,7 +278,7 @@ eb-pipeline status --site site.toml
 #+end_example
 
 Each run is a line with its status, its exit status and its page, then a line for each target with its command, status, exit status and duration, the number of packages with each status, and the phases that came to neither =ok= nor =not configured=, such as =logs skipped (exit 75)= for a rotation left to another.
-A run directory without =summary.json=, of a run that is still going or that ended before it wrote one, is the line =LOG_STAMP  no summary.json: the run is still going, or ended before writing one=, and one whose summary cannot be read names the error.
+A run directory without =summary.json=, of a run that is still going or that ended before it wrote one, is the line =LOG_STAMP  no summary.json: the run is still going, or ended before writing one=, and one whose summary cannot be read names the error: that it is not JSON, that its =kind= is not =summary=, or that its =schema_version= is not 1.
 With =--target=, =status= shows only the runs that have a log directory for that target, and only its entry in each; the line of a run keeps the status of the whole run.
 When that target has not written its summary entry yet, =status= reports that the summary has no such target instead of showing another target's status.
 When the log root holds no run, =status= prints nothing on stdout, writes =INFO [status] -: no runs under LOG_ROOT= to stderr, and exits 0.

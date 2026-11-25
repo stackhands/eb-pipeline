@@ -5,7 +5,7 @@ use eb_pipeline::exit::{self, Fail};
 use eb_pipeline::package_plan;
 use eb_pipeline::plan::{build_plan, read_units, Planner};
 use eb_pipeline::resolve::{explain, Scope};
-use eb_pipeline::run::{install_handlers, log, run, Options, RunResult};
+use eb_pipeline::run::{apply_pending_signal, install_handlers, log, run, Options, RunResult};
 use eb_pipeline::{
     audit, easystack, eessi, from_commit, metrics, notify, sbom, schema, site, stack_checks,
     summary, templates, tools, util, watch,
@@ -417,8 +417,15 @@ fn to_sorted<T: Serialize>(v: &T) -> serde_json::Value {
 }
 
 fn write_stdout_text(text: &str) -> Result<(), Fail> {
-    util::write_stdout(text.as_bytes())
-        .map_err(|e| Fail::new(exit::FAILED, format!("cannot write stdout: {e}")))
+    util::write_stdout_checked(text.as_bytes()).map_err(|e| Fail::new(exit::FAILED, e))
+}
+
+fn write_stderr_text(text: &str) -> Result<(), Fail> {
+    use std::io::Write;
+    std::io::stderr()
+        .lock()
+        .write_all(text.as_bytes())
+        .map_err(|e| Fail::new(exit::FAILED, format!("cannot write stderr: {e}")))
 }
 
 fn write_json(v: &serde_json::Value, path: Option<&Path>) -> Result<(), Fail> {
@@ -709,34 +716,33 @@ fn cmd_init(
                     format!("cannot write {}: {e}", p.display()),
                 ));
             }
-            log(
-                "INFO",
-                "init",
-                "-",
-                &format!("wrote template {} to {}", t.name, p.display()),
-            );
+            write_stderr_text(&format!(
+                "INFO [init] -: wrote template {} to {}\n",
+                t.name,
+                p.display()
+            ))?;
             Some(p)
         }
     };
     if hints {
         if let Some(p) = wrote_path {
-            eprintln!(
-                "INFO [init] hint: check the site file with `eb-pipeline check --site {}`",
+            write_stderr_text(&format!(
+                "INFO [init] hint: check the site file with `eb-pipeline check --site {}`\n",
                 p.display()
-            );
+            ))?;
             if t.name == "eessi-site" || t.name == "small-cluster" {
-                eprintln!(
-                    "INFO [init] hint: list target names with `eb-pipeline targets --site {}` (needs a build from the main branch; release 0.3.0 has no targets command)",
+                write_stderr_text(&format!(
+                    "INFO [init] hint: list target names with `eb-pipeline targets --site {}` (needs a build from the main branch; release 0.3.0 has no targets command)\n",
                     p.display()
-                );
-                eprintln!(
-                    "INFO [init] hint: see docs/orgmode/howto/install.org to install from source"
-                );
+                ))?;
+                write_stderr_text(
+                    "INFO [init] hint: see docs/orgmode/howto/install.org to install from source\n",
+                )?;
             }
         } else {
-            eprintln!(
-                "INFO [init] hint: write the template with --out site.toml to print next steps"
-            );
+            write_stderr_text(
+                "INFO [init] hint: write the template with --out site.toml to print next steps\n",
+            )?;
         }
     }
     Ok(exit::OK)
@@ -793,7 +799,7 @@ fn cmd_man(out_dir: &Path) -> Result<i32, Fail> {
         )
     })?;
     let path = out_dir.join("eb-pipeline.1");
-    std::fs::write(&path, out).map_err(|e| {
+    util::write_atomic(&path, &out).map_err(|e| {
         Fail::new(
             exit::FAILED,
             format!("cannot write {}: {e}", path.display()),
@@ -964,7 +970,7 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         let lines = if easystack::is_easystack(list) {
             easystack::read(list).map_err(Fail::usage)?
         } else {
-            let list_text = std::fs::read_to_string(list)
+            let list_text = util::read_text_file(list)
                 .map_err(|e| Fail::usage(format!("cannot read list {}: {e}", list.display())))?;
             util::parse_list(&list_text)?
         };
@@ -1098,7 +1104,14 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         if let Some(before) = &before {
             watch::record_run(&planner, &lines, &res, before);
         }
-        write_summary(&s, &res, "run", result, None, &planner.offline_wrapper);
+        write_summary_with_pending_signal(
+            &s,
+            &mut res,
+            "run",
+            result,
+            None,
+            &planner.offline_wrapper,
+        );
         let value = to_sorted(&res);
         let mut output_errors = Vec::new();
         if let Some(p) = result {
@@ -1117,10 +1130,35 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
             }
         }
         if !output_errors.is_empty() {
-            return Err(Fail::new(exit::FAILED, output_errors.join("; ")));
+            return Err(signal_outranks(
+                res.exit_code,
+                Fail::new(exit::FAILED, output_errors.join("; ")),
+            ));
         }
     }
     Ok(res.exit_code)
+}
+
+/// A signal ends a run with 130 or 143 whatever else went wrong, an output
+/// file that could not be written included; the message is still printed.
+fn signal_outranks(run_code: i32, failure: Fail) -> Fail {
+    match run_code {
+        exit::SIGINT | exit::SIGTERM => Fail::new(run_code, failure.msg),
+        _ => failure,
+    }
+}
+
+fn write_summary_with_pending_signal(
+    s: &schema::Site,
+    res: &mut RunResult,
+    command: &str,
+    result: Option<&Path>,
+    watch: Option<serde_json::Value>,
+    offline_wrapper: &[String],
+) {
+    apply_pending_signal(&mut res.exit_code, &mut res.interrupted_by);
+    write_summary(s, res, command, result, watch, offline_wrapper);
+    apply_pending_signal(&mut res.exit_code, &mut res.interrupted_by);
 }
 
 /// Merge a target's run into its run directory's summary; a problem is a
@@ -1177,6 +1215,49 @@ struct WatchArgs<'a> {
     result: Option<&'a Path>,
 }
 
+/// Watch scratch removed on drop unless retention was requested.
+///
+/// A dry run that points at eb-stack's files, an interrupted rebuild, and an
+/// error that names a file in the directory keep it. Every other return,
+/// including a failed stdout write, removes it.
+struct ScratchDir {
+    path: PathBuf,
+    cited: String,
+    retain: bool,
+}
+
+impl ScratchDir {
+    fn new(path: &Path) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            cited: path.display().to_string(),
+            retain: false,
+        }
+    }
+
+    fn retain(&mut self) {
+        self.retain = true;
+    }
+
+    /// Keep the directory when `result` names a file inside it.
+    fn keep_cited<T>(&mut self, result: Result<T, Fail>) -> Result<T, Fail> {
+        if let Err(err) = &result {
+            if err.msg.contains(&self.cited) {
+                self.retain();
+            }
+        }
+        result
+    }
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        if !self.retain {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
 fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     validate_option_values(&[("--build-type", Some(w.build_type)), ("--run-id", w.run_id)])?;
     if let Some(stamp) = w.log_stamp.filter(|s| !util::is_log_stamp(s)) {
@@ -1224,10 +1305,9 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     install_handlers();
     let _lock = watch::hold(&state_dir, name)?;
     let work = watch::work_dir(&planner, "plan")?;
-    let drop_work = || {
-        let _ = std::fs::remove_dir_all(&work);
-    };
-    let (probe, env) = watch::probe(&planner, &work)?;
+    // Drop removes this directory unless a path below keeps it.
+    let mut scratch = ScratchDir::new(&work);
+    let (probe, env) = scratch.keep_cited(watch::probe(&planner, &work))?;
     let revision = watch::revision_of(&probe)?;
     watch::check_dirs(&probe)?;
     // A newer versions/YYYY.MM directory, while this module environment
@@ -1238,7 +1318,6 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             let versions = eessi::versions_dir(repo);
             match eessi::newer_generation(&versions, &probe.version) {
                 Ok(Some(newer)) => {
-                    drop_work();
                     return Err(Fail::new(
                         exit::TEMPFAIL,
                         format!(
@@ -1250,7 +1329,6 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                 }
                 Ok(None) => {}
                 Err(e) => {
-                    drop_work();
                     return Err(Fail::new(
                         exit::TEMPFAIL,
                         format!("cannot list {}: {e}", versions.display()),
@@ -1291,7 +1369,6 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                 out.push('\n');
             }
             write_stdout_text(&out)?;
-            drop_work();
             say(&format!(
                 "dry run: would adopt {} against {eessi_now}",
                 installs.len()
@@ -1299,8 +1376,9 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             return Ok(exit::OK);
         }
         watch::need_eb_stack(&s)?;
-        let names = watch::record(&planner, &work, &probe, revision, &installs, true)?;
-        drop_work();
+        let names = scratch.keep_cited(watch::record(
+            &planner, &work, &probe, revision, &installs, true,
+        ))?;
         say(&format!(
             "adopted {} against {eessi_now}: {}",
             names.len(),
@@ -1310,7 +1388,6 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     }
     let state = watch::load(&state_dir, name).map_err(|e| Fail::new(exit::FAILED, e))?;
     if state.installs.is_empty() {
-        drop_work();
         log(
             "WARN",
             "watch",
@@ -1333,9 +1410,8 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                     i.eessi_version, i.software_subdir
                 ));
             }
-            let _ = write_stdout_text(&out);
+            write_stdout_text(&out)?;
         }
-        drop_work();
         return Err(Fail::new(
             exit::REFUSED,
             format!(
@@ -1359,7 +1435,7 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     };
     let abi_conf = conf.abi_drift.as_ref().filter(|a| a.enabled);
     let (abi_now, abi_fields) = if let Some(a) = abi_conf {
-        let now = watch::abi_baseline(&planner, &work, a)?;
+        let now = scratch.keep_cited(watch::abi_baseline(&planner, &work, a))?;
         let changed = watch::abi_changes(a, &state, &now);
         (Some(now), changed)
     } else {
@@ -1373,7 +1449,6 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
         None => Ok(()),
     };
     if watch::unchanged_at(&state, &probe, revision) && abi_fields.is_empty() && !abi_needs_update {
-        drop_work();
         let doc = watch::PlanDoc::unchanged(name, &probe, revision, &state);
         write_plan(&doc)?;
         print(&doc)?;
@@ -1392,12 +1467,12 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
-        let u = watch::stage(
+        let u = scratch.keep_cited(watch::stage(
             &work,
             &eessi::scan(&probe.modules_dirs),
             &eessi::scan(std::slice::from_ref(&local_dir)),
-        )?;
-        watch::apply_abi_changes(
+        ))?;
+        scratch.keep_cited(watch::apply_abi_changes(
             &planner,
             &work,
             &u,
@@ -1405,7 +1480,7 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             &abi_fields,
             conf.rebuild_review,
             &probe.software_subdir,
-        )?;
+        ))?;
         staged = Some(u);
     }
     let mut doc;
@@ -1422,19 +1497,22 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                 ),
             ));
         }
-        let u = staged.take().unwrap_or(watch::stage(
-            &work,
-            &eessi::scan(&probe.modules_dirs),
-            &eessi::scan(std::slice::from_ref(&local_dir)),
-        )?);
-        watch::cascade(
+        let u = match staged.take() {
+            Some(u) => u,
+            None => scratch.keep_cited(watch::stage(
+                &work,
+                &eessi::scan(&probe.modules_dirs),
+                &eessi::scan(std::slice::from_ref(&local_dir)),
+            ))?,
+        };
+        scratch.keep_cited(watch::cascade(
             &planner,
             &work,
             &u,
             &mut verdicts,
             conf.rebuild_review,
             &probe.software_subdir,
-        )?;
+        ))?;
         let vanished = verdicts
             .iter()
             .any(|v| v.action == "rebuild" && v.changes.iter().any(|c| c.change == "vanished"));
@@ -1452,7 +1530,7 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                 "a dependency vanished from EESSI, and eb-stack has no easyconfig tree to plan its local build from: set [watch] easyconfigs, or load EasyBuild in [modules] init",
             ));
         }
-        let ordered = watch::order(&planner, &work, &u, &verdicts, &robot)?;
+        let ordered = scratch.keep_cited(watch::order(&planner, &work, &u, &verdicts, &robot))?;
         doc = watch::PlanDoc::new(name, &probe, revision, verdicts);
         doc.rebuild = ordered;
     } else {
@@ -1476,13 +1554,12 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     }
     print(&doc)?;
     if w.dry_run {
-        if doc.rebuild.is_empty() {
-            drop_work();
-        } else {
+        if !doc.rebuild.is_empty() {
             say(&format!(
                 "dry run: nothing rebuilt; eb-stack's files are in {}",
                 work.display()
             ));
+            scratch.retain();
         }
         return Ok(exit::OK);
     }
@@ -1502,7 +1579,6 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                 &format!("record not updated: {}", f.msg),
             );
         }
-        drop_work();
         return Ok(exit::OK);
     }
     let log_dir = PathBuf::from(planner.scope.log_dir());
@@ -1512,13 +1588,14 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             format!("cannot create {}: {e}", log_dir.display()),
         )
     })?;
-    std::fs::write(&list, doc.rebuild.join("\n") + "\n")
+    let rebuild_list = doc.rebuild.join("\n") + "\n";
+    util::write_atomic(Path::new(&list), rebuild_list.as_bytes())
         .map_err(|e| Fail::new(exit::FAILED, format!("cannot write {list}: {e}")))?;
     write_json(&to_sorted(&doc), Some(&log_dir.join("watch-plan.json")))?;
     let lines = util::parse_list(&(doc.rebuild.join("\n") + "\n"))?;
     tools::check_versions(&s, false)?;
     let before = watch::listings(&planner, &lines);
-    let res = run(
+    let mut res = run(
         &planner,
         &lines,
         &Options {
@@ -1533,7 +1610,9 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     if let Some(m) = &res.message {
         log("ERROR", "run", name, m);
     }
-    if res.interrupted_by.is_none() {
+    if res.interrupted_by.is_some() {
+        scratch.retain();
+    } else {
         let rebuild = Some((lines.as_slice(), &res, &before));
         match watch::settle(
             &planner,
@@ -1559,11 +1638,10 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                 ),
             ),
         }
-        drop_work();
     }
-    write_summary(&s, &res, "watch", w.result, Some(to_sorted(&doc)), &[]);
+    write_summary_with_pending_signal(&s, &mut res, "watch", w.result, Some(to_sorted(&doc)), &[]);
     if let Some(p) = w.result {
-        write_json(&to_sorted(&res), Some(p))?;
+        write_json(&to_sorted(&res), Some(p)).map_err(|f| signal_outranks(res.exit_code, f))?;
     }
     Ok(res.exit_code)
 }
@@ -1623,7 +1701,7 @@ fn cmd_verify(
     let lines = if easystack::is_easystack(list) {
         easystack::read(list).map_err(Fail::usage)?
     } else {
-        let list_text = std::fs::read_to_string(list)
+        let list_text = util::read_text_file(list)
             .map_err(|e| Fail::usage(format!("cannot read list {}: {e}", list.display())))?;
         util::parse_list(&list_text)?
     };
@@ -1657,7 +1735,7 @@ fn cmd_verify(
 fn typed_on_command_line(matches: &ArgMatches, sub: &str, arg: &str) -> bool {
     matches
         .subcommand_matches(sub)
-        .and_then(|m| m.value_source(arg))
+        .and_then(|matches| matches.value_source(arg))
         == Some(ValueSource::CommandLine)
 }
 
@@ -1707,7 +1785,20 @@ fn refuse_list_with_recorded_list(cli: &Cli, matches: &ArgMatches) {
 }
 
 fn main() {
-    let matches = Cli::command().get_matches();
+    let matches = match Cli::command().try_get_matches() {
+        Ok(matches) => matches,
+        Err(error) => match error.kind() {
+            clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => {
+                let text = error.to_string();
+                if let Err(message) = util::write_stdout_checked(text.as_bytes()) {
+                    log("ERROR", "main", "-", &message);
+                    std::process::exit(exit::FAILED);
+                }
+                std::process::exit(exit::OK);
+            }
+            _ => error.exit(),
+        },
+    };
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
     refuse_target_without_checks(&cli, &matches);
     refuse_list_with_recorded_list(&cli, &matches);

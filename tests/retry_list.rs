@@ -1,9 +1,9 @@
 //! `eb-retry-list` turns a run result or summary and its build list into the lines to retry.
+#![allow(clippy::disallowed_methods)]
 
 #[path = "common/exec_stub.rs"]
 mod exec_stub;
 
-use exec_stub::CommandSyncExt;
 use std::path::Path;
 use std::process::Command;
 
@@ -64,7 +64,8 @@ Tail-1.0-foss-2025a.eb --from-pr=123
         .env("EB_PIPELINE_RESULT", dir.path().join("wrong-result.json"))
         .env("EB_PIPELINE_LIST", dir.path().join("wrong-list.txt"))
         .env("EB_PIPELINE_TARGET", "wrong")
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(
         o.status.code(),
         Some(0),
@@ -103,7 +104,8 @@ fn an_unmatched_result_easyconfig_prevents_partial_retry_output() {
         .arg(&result)
         .args(["--list"])
         .arg(&list)
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(output.stdout, b"");
     assert!(
@@ -129,7 +131,8 @@ fn common_environment_variables_supply_result_and_list() {
     let o = bin()
         .env("EB_PIPELINE_RESULT", &result)
         .env("EB_PIPELINE_LIST", &list)
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(
         o.status.code(),
         Some(0),
@@ -192,7 +195,8 @@ easyconfigs:
         .arg(&stack)
         .args(["--status", "failed", "--out"])
         .arg(&out)
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(
         o.status.code(),
         Some(0),
@@ -214,7 +218,8 @@ easyconfigs:
         .args(["--status", "failed"])
         .env("EB_PIPELINE_TARGET", "zen2")
         .env("EB_PIPELINE_RESULT", dir.path().join("wrong-result.json"))
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(from_env.status.code(), Some(0));
     assert_eq!(from_env.stdout, b"GROMACS-2024.1-foss-2023b.eb --rebuild\n");
     assert!(from_env.stderr.is_empty());
@@ -226,7 +231,8 @@ easyconfigs:
         .arg(&stack)
         .args(["--out"])
         .arg(&out)
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(o.status.code(), Some(0));
     assert_eq!(o.stdout, b"");
     assert_eq!(o.stderr, b"");
@@ -252,7 +258,8 @@ fn output_aliases_are_refused_before_an_input_can_be_overwritten() {
         .arg(&result)
         .args(["--list"])
         .arg(&list)
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(default.status.code(), Some(0));
     assert_eq!(default.stdout, list_bytes);
     assert_eq!(default.stderr, b"");
@@ -264,7 +271,8 @@ fn output_aliases_are_refused_before_an_input_can_be_overwritten() {
         .arg(&list)
         .args(["--out"])
         .arg(&result)
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(result_alias.status.code(), Some(2));
     assert_eq!(result_alias.stdout, b"");
     assert!(
@@ -284,7 +292,8 @@ fn output_aliases_are_refused_before_an_input_can_be_overwritten() {
         .arg(&list)
         .args(["--out"])
         .arg(&list_link)
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(list_alias.status.code(), Some(2));
     assert_eq!(list_alias.stdout, b"");
     assert!(
@@ -304,7 +313,8 @@ fn output_aliases_are_refused_before_an_input_can_be_overwritten() {
         .arg(&list)
         .args(["--out"])
         .arg(&summary_link)
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(summary_alias.status.code(), Some(2));
     assert_eq!(summary_alias.stdout, b"");
     assert!(
@@ -328,7 +338,8 @@ fn output_aliases_are_refused_before_an_input_can_be_overwritten() {
         .arg("--recorded-list")
         .args(["--out"])
         .arg(&list)
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(recorded_alias.status.code(), Some(2));
     assert_eq!(recorded_alias.stdout, b"");
     assert!(
@@ -358,7 +369,8 @@ fn require_lines_reports_an_empty_selection_after_writing_it() {
         .arg(&result)
         .args(["--list"])
         .arg(&list)
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(default.status.code(), Some(0));
     assert_eq!(default.stdout, b"");
     assert_eq!(default.stderr, b"");
@@ -371,7 +383,8 @@ fn require_lines_reports_an_empty_selection_after_writing_it() {
         .args(["--out"])
         .arg(&out)
         .arg("--require-lines")
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(required.status.code(), Some(1));
     assert_eq!(required.stdout, b"");
     assert_eq!(required.stderr, b"");
@@ -396,7 +409,8 @@ fn require_lines_keeps_a_nonempty_retry_list_successful() {
         .args(["--list"])
         .arg(&list)
         .arg("--require-lines")
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(o.status.code(), Some(0));
     assert_eq!(o.stdout, b"Retry-1.0.eb --rebuild\n");
     assert_eq!(o.stderr, b"");
@@ -422,7 +436,8 @@ fn non_integer_exit_code_is_ignored_without_the_systemic_guard() {
         .arg(&result)
         .args(["--list"])
         .arg(&list)
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(o.status.code(), Some(0));
     assert_eq!(o.stdout, b"Retry-1.0.eb\n");
     assert_eq!(o.stderr, b"");
@@ -491,7 +506,8 @@ fi
         .arg(&list)
         .arg("--refuse-systemic-failure")
         .env("PATH", path)
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(
         o.status.code(),
         Some(0),
@@ -546,7 +562,8 @@ fn systemic_guard_refuses_shared_infrastructure_failures() {
         .arg(&list)
         .arg("--refuse-systemic-failure")
         .env("PATH", path)
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(o.status.code(), Some(2));
     assert_eq!(o.stdout, b"");
     assert!(
@@ -617,7 +634,7 @@ fn recorded_list_reads_the_path_from_a_result_or_summary_target() {
 
 #[test]
 fn explicit_list_defaults_keep_their_error_bytes() {
-    let o = bin().args(["--result", "result.json"]).sync_output();
+    let o = bin().args(["--result", "result.json"]).output().unwrap();
     assert_eq!(o.status.code(), Some(2));
     assert_eq!(o.stdout, b"");
     assert_eq!(o.stderr, b"eb-retry-list: --list is required\n");
@@ -641,7 +658,8 @@ fn recorded_list_refuses_an_explicit_list_or_a_record_without_one() {
         .args(["--list"])
         .arg(&list)
         .arg("--recorded-list")
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(o.status.code(), Some(2));
     assert_eq!(
         o.stderr,
@@ -652,7 +670,8 @@ fn recorded_list_refuses_an_explicit_list_or_a_record_without_one() {
         .args(["--result"])
         .arg(&result)
         .arg("--recorded-list")
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(o.status.code(), Some(2));
     assert_eq!(o.stdout, b"");
     assert_eq!(
@@ -699,7 +718,8 @@ SkipMe-1.0.eb --only-targets=other
         .arg(&result)
         .args(["--list"])
         .arg(&list)
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(o.status.code(), Some(0));
     assert_eq!(
         String::from_utf8(o.stdout).unwrap(),
@@ -723,7 +743,8 @@ SkipMe-1.0.eb --only-targets=other
         .arg(&result)
         .args(["--list"])
         .arg(&list)
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(o.status.code(), Some(0));
     assert_eq!(
         String::from_utf8(o.stdout).unwrap(),
@@ -788,7 +809,7 @@ fn invalid_inputs_are_refused_with_exit_2() {
             "bogus",
         ],
     ] {
-        let o = bin().args(&args).sync_output();
+        let o = bin().args(&args).output().unwrap();
         assert_eq!(
             o.status.code(),
             Some(2),
@@ -856,7 +877,8 @@ printf '{"jobs":[{"sub_class":"%s"}]}\n' "$class"
         .arg("--classify")
         .env("PATH", path)
         .env("CALLS", &calls)
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(
         o.status.code(),
         Some(0),
@@ -894,7 +916,8 @@ fn classify_reports_missing_logs_missing_eb_stack_and_eb_stack_failures() {
         .args(["--list"])
         .arg(&list)
         .arg("--classify")
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(o.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&o.stderr).contains("no log was recorded"));
     assert!(o.stdout.is_empty());
@@ -916,7 +939,8 @@ fn classify_reports_missing_logs_missing_eb_stack_and_eb_stack_failures() {
         .arg(&list)
         .arg("--classify")
         .env("PATH", &empty_path)
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(o.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&o.stderr).contains("cannot run eb-stack"));
     assert!(o.stdout.is_empty());
@@ -932,7 +956,8 @@ fn classify_reports_missing_logs_missing_eb_stack_and_eb_stack_failures() {
         .arg(&list)
         .arg("--classify")
         .env("PATH", &empty_path)
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(o.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&o.stderr);
     assert!(stderr.contains("eb-stack failed"), "{stderr}");
@@ -1106,7 +1131,8 @@ fn class_keeps_only_the_named_eb_stack_classes() {
         .args(["--classify", "--class", "source,checksum"])
         .env("PATH", &path)
         .env("CALLS", &calls)
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(
         o.status.code(),
         Some(0),
@@ -1157,7 +1183,8 @@ printf '{"jobs":[{"class":"infra","sub_class":"scheduler"}]}\n'
         .arg(&list)
         .args(["--classify", "--class", "infra"])
         .env("PATH", &bin_dir)
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(
         o.status.code(),
         Some(0),
@@ -1165,6 +1192,59 @@ printf '{"jobs":[{"class":"infra","sub_class":"scheduler"}]}\n'
         String::from_utf8_lossy(&o.stderr)
     );
     assert_eq!(String::from_utf8(o.stdout).unwrap(), "Infra.eb\n");
+}
+
+#[test]
+fn node_warnings_do_not_panic_when_stderr_is_unwritable() {
+    let dir = tempfile::tempdir().unwrap();
+    let (list, result) = class_fixture(
+        dir.path(),
+        &[("Big.eb", "timeout"), ("Small.eb", "timeout")],
+    );
+    let calls = dir.path().join("calls");
+    let bin_dir = dir.path().join("bin");
+    std::fs::create_dir(&bin_dir).unwrap();
+    stub_both(&bin_dir.join("eb-stack"));
+    let path = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let easyconfigs = dir.path().join("easyconfigs");
+    std::fs::create_dir(&easyconfigs).unwrap();
+    for closed_pipe in [false, true] {
+        let stderr = if closed_pipe {
+            let (reader, writer) = std::io::pipe().unwrap();
+            drop(reader);
+            std::process::Stdio::from(writer)
+        } else {
+            std::process::Stdio::from(
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open("/dev/full")
+                    .unwrap(),
+            )
+        };
+        let o = bin()
+            .args(["--result"])
+            .arg(&result)
+            .args(["--list"])
+            .arg(&list)
+            .args(["--classify", "--node", "8:1024:x86_64/amd/zen4"])
+            .args(["--easyconfigs"])
+            .arg(&easyconfigs)
+            .args(["--arch", "x86_64/amd/zen4"])
+            .env("PATH", &path)
+            .env("CALLS", &calls)
+            .stderr(stderr)
+            .output()
+            .unwrap();
+        assert_eq!(o.status.code(), Some(0), "closed pipe {closed_pipe}");
+        assert_eq!(
+            String::from_utf8(o.stdout).unwrap(),
+            "Big.eb --robot\nSmall.eb --robot\n"
+        );
+    }
 }
 
 #[test]
@@ -1289,7 +1369,8 @@ fn drop_oom_removes_a_line_that_requires_a_build_eb_stack_warns_about() {
         .args(["--classify", "--node", "4:2048", "--drop-oom"])
         .env("PATH", &path)
         .env("CALLS", dir.path().join("calls"))
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(
         o.status.code(),
         Some(0),
@@ -1335,7 +1416,8 @@ exit 64
         .arg(&list)
         .args(["--classify", "--node", "8:1024"])
         .env("PATH", path)
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(o.status.code(), Some(2));
     assert_eq!(o.stdout, b"");
     let stderr = String::from_utf8(o.stderr).unwrap();
@@ -1433,7 +1515,7 @@ fn node_options_without_classify_or_node_are_usage_errors() {
         ),
     ];
     for (args, message) in cases {
-        let o = bin().args(&args).sync_output();
+        let o = bin().args(&args).output().unwrap();
         assert_eq!(
             o.status.code(),
             Some(2),
@@ -1511,7 +1593,7 @@ fi
 
 #[test]
 fn help_names_class_and_node() {
-    let o = bin().arg("--help").sync_output();
+    let o = bin().arg("--help").output().unwrap();
     assert_eq!(o.status.code(), Some(0));
     let stdout = String::from_utf8(o.stdout).unwrap();
     assert!(stdout.contains("--class"));
@@ -1706,7 +1788,7 @@ fn duplicate_single_value_flags_are_refused() {
             ],
         ),
     ] {
-        let o = bin().args(&args).sync_output();
+        let o = bin().args(&args).output().unwrap();
         assert_eq!(
             o.status.code(),
             Some(2),
@@ -1744,7 +1826,8 @@ fn retry_list_succeeds_when_stdout_consumer_closes() {
         .args(["--list"])
         .arg(&list)
         .stdout(closed)
-        .sync_output();
+        .output()
+        .unwrap();
     assert_eq!(
         o.status.code(),
         Some(0),

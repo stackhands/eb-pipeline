@@ -1,4 +1,5 @@
 //! `targets`: the site file's target names, for a CI matrix or a shell loop.
+#![allow(clippy::disallowed_methods)]
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

@@ -12,6 +12,7 @@
 //! `pigz-2.8-GCCcore-15.2.0.eb:rebuild=1`, and `solve.build.list` and
 //! `solve.jenkins.list` by `stack solve --build-list-out` and
 //! `--jenkins-build-list-out`.
+#![allow(clippy::disallowed_methods)]
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};
