@@ -25,6 +25,8 @@ install_root = "/home/user/eb/software"
 log_root = "/home/user/eb/logs"
 
 # `eb` comes from PATH, for example a pip install of EasyBuild, so no module
-# is loaded before a build.
+# is loaded before a build. EasyBuild still needs a module tool: source
+# EESSI's init for its Lmod, or install Lmod, and set
+# EASYBUILD_MODULES_TOOL=Lmod.
 [modules]
 init = []
