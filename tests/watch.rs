@@ -169,6 +169,7 @@ fn a_signal_while_watch_waits_for_the_summary_lock_preserves_signal_exit() {
         ])
         .env("PATH", path)
         .env("STUB_DIR", t.root())
+        .env_remove("EB_PIPELINE_RUN_ID")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -187,11 +188,13 @@ fn a_signal_while_watch_waits_for_the_summary_lock_preserves_signal_exit() {
     };
     let start = Instant::now();
     while !opened() {
-        assert!(child.try_wait().unwrap().is_none(), "watch ended early");
-        assert!(
-            start.elapsed() < Duration::from_secs(20),
-            "watch never opened .summary.lock"
-        );
+        let ended = child.try_wait().unwrap().is_some();
+        if ended || start.elapsed() >= Duration::from_secs(20) {
+            let _ = child.kill();
+            let _ = child.wait();
+            assert!(!ended, "watch ended early");
+            panic!("watch never opened .summary.lock");
+        }
         std::thread::yield_now();
     }
     // SAFETY: the pid is the child this test started.
