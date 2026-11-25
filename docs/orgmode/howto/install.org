@@ -6,7 +6,7 @@
 
 Install the =eb-pipeline= command for the account that runs the builds, from a release or from source.
 
-These pages describe release 0.4.0.
+These pages describe the development branch. The latest release is 0.5.0.
 Release 0.3.1 is older: it has no =audit=, =verify=, =completions= or =man= command, no =check --stack-checks= or =check --check-from-commit=, no =aliases= or =exclude_option= in =[targets.select]=, and no offline source bundle.
 The [[https://github.com/stackhands/eb-pipeline/blob/main/CHANGELOG.md][changelog]] lists the rest.
 
@@ -27,11 +27,11 @@ The [[https://github.com/stackhands/eb-pipeline/blob/main/CHANGELOG.md][changelo
 
 ** Install a release
 
-1. Download the archive of release 0.3.0 and its checksum, and check the archive:
+1. Download the archive of release 0.5.0 and its checksum, and check the archive:
 
    #+begin_src bash
-   curl -fsSLO https://github.com/stackhands/eb-pipeline/releases/download/v0.3.0/eb-pipeline-x86_64-unknown-linux-musl.tar.xz
-   curl -fsSLO https://github.com/stackhands/eb-pipeline/releases/download/v0.3.0/eb-pipeline-x86_64-unknown-linux-musl.tar.xz.sha256
+   curl -fsSLO https://github.com/stackhands/eb-pipeline/releases/download/v0.5.0/eb-pipeline-x86_64-unknown-linux-musl.tar.xz
+   curl -fsSLO https://github.com/stackhands/eb-pipeline/releases/download/v0.5.0/eb-pipeline-x86_64-unknown-linux-musl.tar.xz.sha256
    sha256sum -c eb-pipeline-x86_64-unknown-linux-musl.tar.xz.sha256
    #+end_src
 
@@ -51,16 +51,22 @@ The [[https://github.com/stackhands/eb-pipeline/blob/main/CHANGELOG.md][changelo
    CHANGELOG.md
    LICENSE
    README.md
+   eb-cvmfs
+   eb-junit
    eb-pipeline
+   eb-retry-list
+   eb-shard-weights
+   eb-test-map
    #+end_example
 
-   Release 0.3.0 ships =eb-pipeline= alone; releases after 0.3.0 (and installing from source below) ship all six commands:
-   =eb-pipeline=, =eb-retry-list=, =eb-shard-weights=, =eb-test-map=, =eb-junit= and =eb-cvmfs=.
+   Release 0.3.0 ships =eb-pipeline= alone; later releases ship all six commands.
 
-3. Install the binary:
+3. Install the six commands:
 
    #+begin_src bash
-   install -D -m 755 "eb-pipeline-x86_64-unknown-linux-musl/eb-pipeline" "$HOME/.local/bin/eb-pipeline"
+   for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cvmfs; do
+     install -D -m 755 "eb-pipeline-x86_64-unknown-linux-musl/$cmd" "$HOME/.local/bin/$cmd"
+   done
    #+end_src
 
 ** Install from source
@@ -93,8 +99,10 @@ eb-pipeline --version
 
 #+begin_example
 $HOME/.local/bin/eb-pipeline
-eb-pipeline 0.4.0
+eb-pipeline 0.5.0
 #+end_example
+
+A build from source prints the version in its =Cargo.toml= instead.
 
 A build from source also has the =targets= command:
 
