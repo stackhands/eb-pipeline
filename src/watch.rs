@@ -13,8 +13,10 @@ use crate::schema::{AbiDrift, Site, Watch};
 use crate::tools::{self, Tool};
 use crate::util::{cmp_version, list_word, parse_version, write_atomic, ListLine};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// The `schema_version` of the state file.
@@ -38,6 +40,9 @@ pub struct State {
     /// against, when `[watch.abi_drift]` is enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub abi_baseline: Option<AbiBaseline>,
+    /// The site file and easyconfig trees that supplied this record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inputs: Option<Inputs>,
 }
 
 /// The host ABI fields a watch run measured.
@@ -45,6 +50,27 @@ pub struct State {
 pub struct AbiBaseline {
     /// Field name to measured value.
     pub fields: BTreeMap<String, String>,
+}
+
+/// A content-addressed input to the watch record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Input {
+    /// Absolute path of the file or tree.
+    pub path: String,
+    /// Total bytes of regular files in the input.
+    pub size: u64,
+    /// SHA-256 of the input's content.
+    pub sha256: String,
+}
+
+/// Inputs whose content determined the watch record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Inputs {
+    /// The site file passed to eb-pipeline.
+    pub site_file: Input,
+    /// The configured easyconfig trees, in site-file order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub easyconfig_trees: Vec<Input>,
 }
 
 /// One local install and the EESSI it was built against.
@@ -103,6 +129,7 @@ impl State {
             target: target.into(),
             installs: BTreeMap::new(),
             abi_baseline: None,
+            inputs: None,
         }
     }
 }
@@ -165,6 +192,245 @@ pub fn update(dir: &str, target: &str, f: impl FnOnce(&mut State)) -> Result<Sta
 /// `<modules_root>/all`, the target's module tree.
 pub fn local_modules_dir(p: &Planner) -> String {
     format!("{}/all", p.scope.modules_root().trim_end_matches('/'))
+}
+
+fn unreadable(path: &Path, error: impl std::fmt::Display) -> Fail {
+    Fail::new(
+        exit::FAILED,
+        format!("cannot read {}: {error}", path.display()),
+    )
+}
+
+/// What `stat` says of one entry of an input: a write to it, or its
+/// replacement by another file, moves at least one of these unless it
+/// keeps the size and lands within the file system's timestamp resolution.
+#[derive(Debug, PartialEq, Eq)]
+struct Stamp {
+    dev: u64,
+    ino: u64,
+    mode: u32,
+    size: u64,
+    mtime: (i64, i64),
+    ctime: (i64, i64),
+}
+
+impl Stamp {
+    fn of(meta: &std::fs::Metadata) -> Stamp {
+        use std::os::unix::fs::MetadataExt;
+        Stamp {
+            dev: meta.dev(),
+            ino: meta.ino(),
+            mode: meta.mode(),
+            size: meta.size(),
+            mtime: (meta.mtime(), meta.mtime_nsec()),
+            ctime: (meta.ctime(), meta.ctime_nsec()),
+        }
+    }
+}
+
+fn unstatable(path: &Path, error: std::io::Error) -> Fail {
+    Fail::new(
+        exit::FAILED,
+        format!("cannot stat {}: {error}", path.display()),
+    )
+}
+
+/// The stamp of `path` and, for a tree, of every entry under it that
+/// [`tree_content`] reads, in the order it reads them. A link carries the
+/// stamps of itself and of what it names.
+fn stamps(path: &Path, out: &mut Vec<(PathBuf, Stamp)>) -> Result<(), Fail> {
+    let link = std::fs::symlink_metadata(path).map_err(|error| unstatable(path, error))?;
+    let meta = std::fs::metadata(path).map_err(|error| unstatable(path, error))?;
+    if link.file_type().is_symlink() {
+        out.push((path.to_path_buf(), Stamp::of(&link)));
+        if meta.is_dir() {
+            return Ok(());
+        }
+    }
+    out.push((path.to_path_buf(), Stamp::of(&meta)));
+    if !meta.is_dir() {
+        return Ok(());
+    }
+    let mut entries: Vec<_> = std::fs::read_dir(path)
+        .map_err(|error| unreadable(path, error))?
+        .collect::<Result<_, _>>()
+        .map_err(|error| unreadable(path, error))?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        stamps(&entry.path(), out)?;
+    }
+    Ok(())
+}
+
+fn snapshot(path: &Path) -> Result<Vec<(PathBuf, Stamp)>, Fail> {
+    let mut out = Vec::new();
+    stamps(path, &mut out)?;
+    Ok(out)
+}
+
+#[cfg(test)]
+type Hook = Box<dyn FnMut(&str)>;
+
+#[cfg(test)]
+thread_local! {
+    static HOOK: std::cell::RefCell<Option<Hook>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Lets a test act at a named point of an input read.
+#[cfg(test)]
+fn hook(at: &str) {
+    HOOK.with(|h| {
+        if let Some(f) = h.borrow_mut().as_mut() {
+            f(at)
+        }
+    })
+}
+
+#[cfg(not(test))]
+fn hook(_: &str) {}
+
+/// Hash the content of one file in blocks, after its name and length.
+fn file_content(path: &Path, name: &str, hash: &mut Sha256, size: &mut u64) -> Result<(), Fail> {
+    let mut file = crate::util::open_regular_file(path).map_err(|error| unreadable(path, error))?;
+    let length = file
+        .metadata()
+        .map_err(|error| unreadable(path, error))?
+        .len();
+    hash.update(b"file\0");
+    hash.update(name.as_bytes());
+    hash.update(b"\0");
+    hash.update(length.to_le_bytes());
+    let mut block = [0u8; 65536];
+    let mut seen = 0u64;
+    loop {
+        let n = file
+            .read(&mut block)
+            .map_err(|error| unreadable(path, error))?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&block[..n]);
+        seen += n as u64;
+    }
+    if seen != length {
+        return Err(Fail::new(
+            exit::FAILED,
+            format!("{} changed while it was read", path.display()),
+        ));
+    }
+    *size += length;
+    Ok(())
+}
+
+fn tree_content(path: &Path, hash: &mut Sha256, size: &mut u64) -> Result<(), Fail> {
+    let mut entries: Vec<_> = std::fs::read_dir(path)
+        .map_err(|error| unreadable(path, error))?
+        .collect::<Result<_, _>>()
+        .map_err(|error| unreadable(path, error))?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let kind = entry
+            .file_type()
+            .map_err(|error| unreadable(&path, error))?;
+        if kind.is_dir() {
+            hash.update(b"directory\0");
+            hash.update(name.as_bytes());
+            hash.update(b"\0");
+            tree_content(&path, hash, size)?;
+        } else if kind.is_symlink() {
+            let target = std::fs::metadata(&path).map_err(|error| unreadable(&path, error))?;
+            if target.is_dir() {
+                let link = std::fs::read_link(&path).map_err(|error| unreadable(&path, error))?;
+                hash.update(b"link\0");
+                hash.update(name.as_bytes());
+                hash.update(b"\0");
+                hash.update(link.to_string_lossy().as_bytes());
+                hash.update(b"\0");
+            } else {
+                file_content(&path, &name, hash, size)?;
+            }
+        } else if kind.is_file() {
+            file_content(&path, &name, hash, size)?;
+        } else {
+            return Err(Fail::new(
+                exit::FAILED,
+                format!(
+                    "{} is neither a file, a directory nor a link",
+                    path.display()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Content identity of a file or easyconfig tree, named by its canonical
+/// path as `watch` names module trees.
+///
+/// Files are read in blocks, so the memory used does not grow with the
+/// input. The device, inode, mode, size, modification and change times of
+/// the input and of every entry under it are taken before and after the
+/// read; any that moved means a concurrent writer, so the read is
+/// repeated, three times at most. A write that keeps the size and lands
+/// within the file system's timestamp resolution moves none of them and
+/// goes unseen. None of this is stored or used to decide identity: the
+/// SHA-256 is the decision. A missing or unreadable input is an error.
+pub fn input(path: &Path) -> Result<Input, Fail> {
+    let path = std::fs::canonicalize(path).map_err(|error| {
+        Fail::new(
+            exit::FAILED,
+            format!("cannot resolve {}: {error}", path.display()),
+        )
+    })?;
+    for _ in 0..3 {
+        let before = snapshot(&path)?;
+        let mut hash = Sha256::new();
+        let mut size = 0;
+        if path.is_dir() {
+            hash.update(b"tree\0");
+            tree_content(&path, &mut hash, &mut size)?;
+        } else {
+            file_content(&path, "", &mut hash, &mut size)?;
+        }
+        hook("read");
+        if snapshot(&path)? == before {
+            return Ok(Input {
+                path: path.display().to_string(),
+                size,
+                sha256: format!("{:x}", hash.finalize()),
+            });
+        }
+    }
+    Err(Fail::new(
+        exit::FAILED,
+        format!("{} kept changing while it was read", path.display()),
+    ))
+}
+
+/// The site file and configured easyconfig trees that a record uses.
+pub fn inputs(planner: &Planner) -> Result<Inputs, Fail> {
+    hook("inputs");
+    let site_file = planner.scope.site_file.as_deref().ok_or_else(|| {
+        Fail::new(
+            exit::FAILED,
+            "cannot identify the site file of the watch record",
+        )
+    })?;
+    let easyconfig_trees = planner
+        .scope
+        .site
+        .watch_on()
+        .expect("[watch] is on")
+        .easyconfigs
+        .iter()
+        .map(|tree| input(Path::new(tree)))
+        .collect::<Result<_, _>>()?;
+    Ok(Inputs {
+        site_file: input(Path::new(site_file))?,
+        easyconfig_trees,
+    })
 }
 
 /// `<scratch>/eb-pipeline-watch/<target>/<log stamp>/<what>`, emptied.
@@ -491,6 +757,7 @@ pub fn record(
     installs: &[ToRecord],
     replace: bool,
 ) -> Result<Vec<String>, Fail> {
+    let inputs = inputs(p)?;
     let eessi = eessi::scan(&probe.modules_dirs);
     let local = eessi::scan(&[local_modules_dir(p)]);
     let u = stage(work, &eessi, &local)?;
@@ -525,6 +792,7 @@ pub fn record(
     let names: Vec<String> = entries.iter().map(|(m, _)| m.clone()).collect();
     let dir = p.scope.watch_state_dir().expect("[watch] is on");
     update(&dir, &p.scope.target.name, |s| {
+        s.inputs = Some(inputs);
         if replace {
             s.installs.clear();
         }
@@ -1378,20 +1646,40 @@ pub fn settle(
     rebuild: Option<Rebuild>,
     abi: Option<&AbiBaseline>,
 ) -> Result<Vec<String>, Fail> {
-    let dir = p.scope.watch_state_dir().expect("[watch] is on");
-    let target = &p.scope.target.name;
     let rebuilt = match rebuild {
         Some((lines, res, before)) => built_by(p, lines, res, before)?.0,
         None => Vec::new(),
     };
+    settle_built(p, probe, revision, verdicts, &rebuilt, abi)
+}
+
+/// [`settle`] once the installs the rebuild built are known.
+fn settle_built(
+    p: &Planner,
+    probe: &Probe,
+    revision: Option<u64>,
+    verdicts: &[Verdict],
+    rebuilt: &[ToRecord],
+    abi: Option<&AbiBaseline>,
+) -> Result<Vec<String>, Fail> {
+    let dir = p.scope.watch_state_dir().expect("[watch] is on");
+    let target = &p.scope.target.name;
     let mut recorded = Vec::new();
-    if !rebuilt.is_empty() {
+    // A record stores the inputs it read; a snapshot taken before it would
+    // be older than the record it replaced.
+    let inputs = if rebuilt.is_empty() {
+        Some(inputs(p)?)
+    } else {
         let work = work_dir(p, "record")?;
-        recorded = record(p, &work, probe, revision, &rebuilt, false)?;
+        recorded = record(p, &work, probe, revision, rebuilt, false)?;
         let _ = std::fs::remove_dir_all(&work);
-    }
+        None
+    };
     let local = vec![local_modules_dir(p)];
     update(&dir, target, |s| {
+        if let Some(i) = inputs {
+            s.inputs = Some(i);
+        }
         if let Some(a) = abi {
             s.abi_baseline = Some(a.clone());
         }
@@ -1617,6 +1905,196 @@ mod tests {
         };
 
         assert!(!unchanged_at(&state, &probe, Some(42)));
+    }
+
+    #[test]
+    fn input_digest_uses_content_not_size_or_mtime() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("input");
+        std::fs::write(&path, "one\n").unwrap();
+        let first = input(&path).unwrap();
+        let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::fs::write(&path, "two\n").unwrap();
+        File::open(&path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(mtime))
+            .unwrap();
+        let second = input(&path).unwrap();
+        assert_eq!(first.path, second.path);
+        assert_eq!(first.size, second.size);
+        assert_ne!(first.sha256, second.sha256);
+    }
+
+    #[test]
+    fn a_missing_input_is_an_error_and_a_tree_is_hashed_by_content() {
+        let d = tempfile::tempdir().unwrap();
+        let gone = input(&d.path().join("gone")).unwrap_err();
+        assert!(gone.msg.contains("cannot resolve"), "{}", gone.msg);
+        std::fs::create_dir(d.path().join("tree")).unwrap();
+        std::fs::write(d.path().join("tree/a.eb"), "one\n").unwrap();
+        let before = input(&d.path().join("tree")).unwrap();
+        std::fs::write(d.path().join("tree/a.eb"), "two\n").unwrap();
+        let after = input(&d.path().join("tree")).unwrap();
+        assert_eq!(before.size, after.size);
+        assert_ne!(before.sha256, after.sha256);
+    }
+
+    /// Runs `write` once, after the first read of the input is hashed and
+    /// before its stamps are taken again.
+    fn input_with_write_during_read(path: &Path, write: impl FnOnce() + 'static) -> Input {
+        let mut write = Some(write);
+        HOOK.with(|h| {
+            *h.borrow_mut() = Some(Box::new(move |at| {
+                if at == "read" {
+                    if let Some(w) = write.take() {
+                        w()
+                    }
+                }
+            }))
+        });
+        let got = input(path);
+        HOOK.with(|h| *h.borrow_mut() = None);
+        got.unwrap()
+    }
+
+    fn tree_with_recipe() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let d = tempfile::tempdir().unwrap();
+        let tree = d.path().join("tree");
+        std::fs::create_dir_all(tree.join("f/Foo")).unwrap();
+        let recipe = tree.join("f/Foo/Foo-1.0.eb");
+        std::fs::write(&recipe, "one\n").unwrap();
+        (d, tree, recipe)
+    }
+
+    #[test]
+    fn a_same_length_rewrite_of_a_file_deep_in_a_tree_during_the_read_is_read_again() {
+        let (_d, tree, recipe) = tree_with_recipe();
+        let root = std::fs::metadata(&tree).unwrap().modified().unwrap();
+        let mtime = std::fs::metadata(&recipe).unwrap().modified().unwrap();
+        let path = recipe.clone();
+        let got = input_with_write_during_read(&tree, move || {
+            std::fs::write(&path, "two\n").unwrap();
+            File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_times(
+                    std::fs::FileTimes::new()
+                        .set_modified(mtime + std::time::Duration::from_secs(1)),
+                )
+                .unwrap();
+        });
+        assert_eq!(std::fs::metadata(&tree).unwrap().modified().unwrap(), root);
+        assert_eq!(
+            got,
+            input(&tree).unwrap(),
+            "the digest is of the new content"
+        );
+    }
+
+    #[test]
+    fn a_file_deep_in_a_tree_replaced_during_the_read_with_its_old_times_is_read_again() {
+        let (_d, tree, recipe) = tree_with_recipe();
+        let mtime = std::fs::metadata(&recipe).unwrap().modified().unwrap();
+        let path = recipe.clone();
+        let got = input_with_write_during_read(&tree, move || {
+            let new = path.with_extension("new");
+            std::fs::write(&new, "two\n").unwrap();
+            File::options()
+                .write(true)
+                .open(&new)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(mtime))
+                .unwrap();
+            std::fs::rename(&new, &path).unwrap();
+        });
+        assert_eq!(
+            got,
+            input(&tree).unwrap(),
+            "the digest is of the new content"
+        );
+    }
+
+    #[test]
+    fn settle_keeps_the_inputs_the_record_of_a_rebuild_read() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().display().to_string();
+        let tree = d.path().join("robot");
+        std::fs::create_dir_all(&tree).unwrap();
+        let site_file = d.path().join("site.toml");
+        let text = format!(
+            r#"
+schema_version = 1
+kind = "site"
+[site]
+name = "example"
+[scheduler]
+kind = "local"
+[[targets]]
+name = "zen4"
+site_prefix = "{root}/site"
+default = true
+[filesystems]
+scratch = "{root}/scratch"
+tmp = "{root}/scratch/tmp"
+build_path = "{root}/scratch/build"
+install_root = "{root}/site"
+log_root = "{root}/logs"
+[modules]
+init = ["EESSI/2023.06"]
+[watch]
+easyconfigs = ["{tree}"]
+"#,
+            tree = tree.display()
+        );
+        std::fs::write(&site_file, &text).unwrap();
+        let site = crate::site::parse(&text).unwrap();
+        let scope = crate::resolve::Scope {
+            site: &site,
+            site_file: Some(site_file.display().to_string()),
+            target: site.target("zen4").unwrap(),
+            build_type: Some("production"),
+            run_id: "r".into(),
+            log_stamp: "20261117_140000".into(),
+        };
+        let planner = Planner::new(scope, "zen4.list".into());
+        let probe = Probe {
+            version: "2023.06".into(),
+            software_subdir: "x86_64/amd/zen4".into(),
+            repository: None,
+            modules_dirs: Vec::new(),
+            loaded_modules: None,
+            module_table_sha256: None,
+        };
+        let rebuilt = [ToRecord {
+            module: "Foo/1.0".into(),
+            easyconfig: "Foo-1.0.eb".into(),
+            args: Vec::new(),
+            how: "built",
+        }];
+
+        // Each snapshot of the inputs sees a site file no earlier one saw.
+        let mut reads = 0;
+        let path = site_file.clone();
+        HOOK.with(|h| {
+            *h.borrow_mut() = Some(Box::new(move |at| {
+                if at == "inputs" {
+                    reads += 1;
+                    std::fs::write(&path, format!("{text}# snapshot {reads}\n")).unwrap();
+                }
+            }))
+        });
+        let settled = settle_built(&planner, &probe, None, &[], &rebuilt, None);
+        HOOK.with(|h| *h.borrow_mut() = None);
+        settled.unwrap();
+
+        let dir = planner.scope.watch_state_dir().unwrap();
+        let state = load(&dir, "zen4").unwrap();
+        assert_eq!(
+            state.inputs.unwrap().site_file,
+            input(&site_file).unwrap(),
+            "the stored digest is of the site file as the record read it"
+        );
     }
 
     #[test]
