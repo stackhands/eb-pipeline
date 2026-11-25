@@ -151,7 +151,14 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: cli-assets
-          path: artifacts/cli-assets
+          path: cli-assets
+      # A release asset is a file: the completions and the man page go in one
+      # archive.
+      - name: archive the completions and the man page
+        run: |
+          tar -C cli-assets --sort=name --owner=0 --group=0 --numeric-owner --mtime=@0 \
+            -czf artifacts/eb-pipeline-cli-assets.tar.gz completions man
+          tar -tzf artifacts/eb-pipeline-cli-assets.tar.gz
       # dist's global step hashes only the files it builds itself (source.tar.gz),
       # so sha256.sum is written here over every asset, after each per-file
       # .sha256 has been checked.
@@ -164,13 +171,14 @@ jobs:
           done
           for f in *.sha256; do sha256sum --check "$f"; done
           rm -f sha256.sum
-          sha256sum --binary eb-pipeline-*.tar.xz source.tar.gz > sha256.sum
+          sha256sum --binary eb-pipeline-*.tar.xz eb-pipeline-cli-assets.tar.gz source.tar.gz > sha256.sum
           cat sha256.sum
-          test "$(wc -l < sha256.sum)" -eq 3
+          test "$(wc -l < sha256.sum)" -eq 4
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             artifacts/*.tar.xz
+            artifacts/eb-pipeline-cli-assets.tar.gz
             artifacts/source.tar.gz
       # A draft: release assets cannot change once a release is published,
       # so every asset is attached before a person publishes it.
