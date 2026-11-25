@@ -5,7 +5,7 @@
 
 use crate::exit;
 use crate::plan::{module_rel, PHASES};
-use crate::run::RunResult;
+use crate::run::{self, RunResult};
 use crate::util;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -308,7 +308,16 @@ pub fn record(site: &str, entry: TargetSummary, run_dir: &Path) -> Result<Summar
         .map_err(|e| shown(&lock_path, e))?;
     #[cfg(test)]
     record_test_hook::notify_before_lock(&lock_path);
-    lock.lock().map_err(|e| shown(&lock_path, e))?;
+    loop {
+        match lock.lock() {
+            Ok(()) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(shown(&lock_path, e)),
+        }
+    }
+    let mut entry = entry;
+    run::apply_pending_signal(&mut entry.exit_code, &mut entry.interrupted_by);
+    entry.status = status_of(entry.exit_code).into();
     let path = run_dir.join(JSON);
     let earlier = match util::read_text_file(&path) {
         Ok(t) => match parse(&path, &t) {
