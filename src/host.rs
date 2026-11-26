@@ -89,7 +89,12 @@ mod tests {
     }
 
     fn env<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
-        move |k| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string())
+        move |k| {
+            pairs
+                .iter()
+                .find(|(n, _)| *n == k)
+                .map(|(_, v)| v.to_string())
+        }
     }
 
     #[test]
@@ -130,7 +135,11 @@ mod tests {
         let none = |_: &str| false;
         assert!(local_problems(&site("slurm", &[], None), &env(&[]), &none).is_empty());
         assert!(local_problems(&site("local", &["EasyBuild"], None), &env(&[]), &none).is_empty());
-        let s = site("local", &[], Some("/cvmfs/software.eessi.io/versions/2023.06/init/lmod/bash"));
+        let s = site(
+            "local",
+            &[],
+            Some("/cvmfs/software.eessi.io/versions/2023.06/init/lmod/bash"),
+        );
         assert!(local_problems(&s, &env(&[]), &none).is_empty());
     }
 }
