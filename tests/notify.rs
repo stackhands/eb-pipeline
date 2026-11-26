@@ -2,7 +2,7 @@
 //! server, and never prints the URL past its host.
 
 mod common;
-use common::{code, eb_pipeline, run, setup, stderr, stdout, STAMP};
+use common::{code, eb_pipeline, run, setup, stderr, stdout, write_exec, STAMP};
 use serde_json::Value;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -13,8 +13,6 @@ const LIST: &str = "Foo-1.0-foss-2025a.eb\n";
 const SECRET: &str = "s3cr3t-token";
 
 struct Request {
-    line: String,
-    headers: Vec<String>,
     body: Vec<u8>,
 }
 
@@ -52,9 +50,12 @@ fn read_request(s: &mut TcpStream) -> Request {
         buf.extend_from_slice(&chunk[..n]);
     };
     let head = String::from_utf8_lossy(&buf[..head_end]).into_owned();
-    let mut lines = head.split("\r\n").filter(|l| !l.is_empty());
-    let line = lines.next().unwrap_or_default().to_string();
-    let headers: Vec<String> = lines.map(str::to_string).collect();
+    let headers: Vec<String> = head
+        .split("\r\n")
+        .filter(|l| !l.is_empty())
+        .skip(1)
+        .map(str::to_string)
+        .collect();
     let len: usize = headers
         .iter()
         .find_map(|h| {
@@ -69,8 +70,6 @@ fn read_request(s: &mut TcpStream) -> Request {
         buf.extend_from_slice(&chunk[..n]);
     }
     Request {
-        line,
-        headers,
         body: buf[head_end..head_end + len].to_vec(),
     }
 }
@@ -92,33 +91,67 @@ fn assert_no_secret(t: &common::T, out: &std::process::Output) {
     }
 }
 
+const CURL_STUB: &str = r#"#!/bin/sh
+D="${STUB_DIR:?}"
+n=$(( $(cat "$D/curl.count" 2>/dev/null || echo 0) + 1 ))
+printf '%s\n' "$n" > "$D/curl.count"
+printf '%s\0' "$@" > "$D/curl.$n.args"
+cat > "$D/curl.$n.stdin"
+prev=
+for a in "$@"; do
+  if [ "$prev" = "--data-binary" ]; then
+    case "$a" in
+      @*) cp "${a#@}" "$D/curl.$n.body" ;;
+    esac
+  fi
+  prev=$a
+done
+exit "${STUB_CURL_EXIT:-0}"
+"#;
+
+fn install_curl(t: &common::T) {
+    write_exec(&t.stubs.join("curl"), CURL_STUB);
+}
+
+fn curl_count(t: &common::T) -> usize {
+    std::fs::read_to_string(t.root().join("curl.count"))
+        .ok()
+        .and_then(|text| text.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+fn curl_args(t: &common::T, n: usize) -> Vec<String> {
+    let bytes = std::fs::read(t.root().join(format!("curl.{n}.args"))).unwrap_or_default();
+    bytes
+        .split(|byte| *byte == 0)
+        .filter(|part| !part.is_empty())
+        .map(|part| String::from_utf8(part.to_vec()).unwrap())
+        .collect()
+}
+
 #[test]
 fn a_run_posts_its_summary_to_the_webhook() {
-    let (port, rx) = serve("200 OK");
     let t = setup("[notify]\nwebhook_env = \"EB_TEST_WEBHOOK\"\n");
-    let url = format!("http://hook:hunter2@127.0.0.1:{port}/hook/{SECRET}?key={SECRET}");
+    install_curl(&t);
+    let url = format!("http://hook:hunter2@hooks.example/hook/{SECRET}?key={SECRET}");
     let o = run(&t, "cpu", STAMP, LIST, &[("EB_TEST_WEBHOOK", &url)]);
     assert_eq!(code(&o), 0, "{}", stderr(&o));
-    let req = rx.recv_timeout(Duration::from_secs(10)).unwrap();
-    assert_eq!(
-        req.line,
-        format!("POST /hook/{SECRET}?key={SECRET} HTTP/1.1")
-    );
+    assert_eq!(curl_count(&t), 1);
+    let args = curl_args(&t, 1);
     assert!(
-        req.headers
-            .iter()
-            .any(|h| h.eq_ignore_ascii_case("content-type: application/json")),
-        "{:?}",
-        req.headers
+        args.iter()
+            .any(|arg| arg.eq_ignore_ascii_case("Content-Type: application/json")),
+        "{args:?}"
     );
-    let posted: Value = serde_json::from_slice(&req.body).unwrap();
+    let body = std::fs::read(t.root().join("curl.1.body")).unwrap();
+    let posted: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(posted, t.summary(STAMP));
     assert_eq!(posted["kind"], "summary");
     assert_eq!(posted["targets"][0]["name"], "cpu");
+    let stdin = std::fs::read_to_string(t.root().join("curl.1.stdin")).unwrap();
+    assert!(stdin.contains(&url), "{stdin}");
     assert!(
-        stderr(&o).contains(&format!(
-            "INFO [notify] cpu: summary.json posted to http://127.0.0.1:{port}/...\n"
-        )),
+        stderr(&o).contains("INFO [notify] cpu: summary.json posted to http://hooks.example/...\n"),
         "{}",
         stderr(&o)
     );
@@ -127,16 +160,22 @@ fn a_run_posts_its_summary_to_the_webhook() {
 
 #[test]
 fn a_webhook_that_fails_is_a_warning() {
-    let (port, rx) = serve("500 Internal Server Error");
     let t = setup("[notify]\nwebhook_env = \"EB_TEST_WEBHOOK\"\n");
-    let url = format!("http://127.0.0.1:{port}/hook/{SECRET}");
-    let o = run(&t, "cpu", STAMP, LIST, &[("EB_TEST_WEBHOOK", &url)]);
+    install_curl(&t);
+    let url = format!("http://hooks.example/hook/{SECRET}");
+    let o = run(
+        &t,
+        "cpu",
+        STAMP,
+        LIST,
+        &[("EB_TEST_WEBHOOK", &url), ("STUB_CURL_EXIT", "22")],
+    );
     assert_eq!(code(&o), 0, "{}", stderr(&o));
-    assert!(rx.recv_timeout(Duration::from_secs(10)).is_ok());
+    assert_eq!(curl_count(&t), 1);
     assert!(
-        stderr(&o).contains(&format!(
-            "WARN [notify] cpu: POST of summary.json to http://127.0.0.1:{port}/... failed: curl exited 22"
-        )),
+        stderr(&o).contains(
+            "WARN [notify] cpu: POST of summary.json to http://hooks.example/... failed: curl exited 22"
+        ),
         "{}",
         stderr(&o)
     );
@@ -145,25 +184,26 @@ fn a_webhook_that_fails_is_a_warning() {
 
 #[test]
 fn an_unreachable_webhook_is_a_warning() {
-    let port = {
-        let l = TcpListener::bind("127.0.0.1:0").unwrap();
-        l.local_addr().unwrap().port()
-    };
     let t = setup(&format!(
-        "[notify]\nwebhook = \"http://127.0.0.1:{port}/{SECRET}\"\ntimeout_seconds = 5\n"
+        "[notify]\nwebhook = \"http://hooks.example/{SECRET}\"\ntimeout_seconds = 5\n"
     ));
+    install_curl(&t);
     let o = run(
         &t,
         "cpu",
         STAMP,
         LIST,
-        &[("STUB_EB_FAIL", "Foo-1.0-foss-2025a")],
+        &[
+            ("STUB_EB_FAIL", "Foo-1.0-foss-2025a"),
+            ("STUB_CURL_EXIT", "7"),
+        ],
     );
     assert_eq!(code(&o), 1, "{}", stderr(&o));
+    assert_eq!(curl_count(&t), 1);
     assert!(
-        stderr(&o).contains(&format!(
-            "WARN [notify] cpu: POST of summary.json to http://127.0.0.1:{port}/... failed: curl exited 7"
-        )),
+        stderr(&o).contains(
+            "WARN [notify] cpu: POST of summary.json to http://hooks.example/... failed: curl exited 7"
+        ),
         "{}",
         stderr(&o)
     );
