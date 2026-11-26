@@ -106,6 +106,36 @@ fn yaml_diagnostic(text: &str, error: serde_yaml::Error) -> Diagnostic {
     Diagnostic { message, location }
 }
 
+/// Lines as libyaml counts them.
+///
+/// A break is LF, CRLF, a bare CR, U+0085, U+2028 or U+2029. `str::lines`
+/// does not split on the last four, which would leave a repeated key
+/// reported on the first key.
+fn yaml_lines(text: &str) -> Vec<&str> {
+    let mut lines = Vec::new();
+    let mut start = 0;
+    let mut chars = text.char_indices().peekable();
+    while let Some((index, ch)) = chars.next() {
+        let break_len = match ch {
+            '\r' if chars.peek().is_some_and(|(_, next)| *next == '\n') => {
+                chars.next();
+                2
+            }
+            '\n' | '\r' | '\u{0085}' | '\u{2028}' | '\u{2029}' => ch.len_utf8(),
+            _ => 0,
+        };
+        if break_len == 0 {
+            continue;
+        }
+        lines.push(&text[start..index]);
+        start = index + break_len;
+    }
+    if start < text.len() {
+        lines.push(&text[start..]);
+    }
+    lines
+}
+
 fn duplicate_key_location(text: &str, message: &str) -> Option<(usize, usize)> {
     let encoded = message
         .rsplit(": ")
@@ -114,7 +144,7 @@ fn duplicate_key_location(text: &str, message: &str) -> Option<(usize, usize)> {
     let key: String = serde_json::from_str(encoded).ok()?;
     let mut scopes = Vec::<(usize, usize)>::new();
     let mut seen = std::collections::BTreeSet::new();
-    for (index, line) in text.lines().enumerate() {
+    for (index, line) in yaml_lines(text).into_iter().enumerate() {
         let line = line.trim_end_matches('\r');
         let indent = line.len() - line.trim_start_matches(' ').len();
         let content = &line[indent..];
@@ -681,6 +711,39 @@ easyconfigs:
             ("yml", false),
         ] {
             assert_eq!(is_easystack(Path::new(p)), want, "{p}");
+        }
+    }
+
+    #[test]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "this seeds a temporary easystack, not a user-visible output path"
+    )]
+    fn a_duplicate_key_after_a_unicode_line_break_points_at_the_repeat() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("input.yml");
+        // An empty YAML line sits between the two keys when the gap is two breaks.
+        for (gap, line) in [
+            ("\u{2028}", 5),
+            ("\u{2029}", 5),
+            ("\u{0085}", 5),
+            ("\r", 5),
+            ("\u{2028}\u{2028}", 6),
+        ] {
+            let text = format!(
+                "easyconfigs:\n  - x.eb:\n      options:\n        rebuild: true{gap}        rebuild: false\n"
+            );
+            std::fs::write(&path, &text).unwrap();
+            let err = read(&path).unwrap_err();
+            assert_eq!(
+                err,
+                format!(
+                    "easystack {}:{}:9: easyconfigs[0].x.eb.options: duplicate entry with key \"rebuild\"",
+                    path.display(),
+                    line
+                ),
+                "{gap:?}"
+            );
         }
     }
 }
