@@ -58,6 +58,54 @@ pub fn local_problems(
     out
 }
 
+/// The problem `eb --version` shows on this host for a `local` site, if
+/// any. `eb` is a launcher that picks the first Python on PATH it accepts,
+/// so an `eb` that is on PATH can still fail to start, as when an init
+/// script puts a Python without EasyBuild ahead of the one that has it.
+/// None for another scheduler kind, with a module wrapper, or with no `eb`
+/// on PATH, which [`local_problems`] reports.
+pub fn eb_problem(site: &Site) -> Option<String> {
+    let m = &site.modules;
+    if site.scheduler.kind != "local"
+        || m.shell_init.is_some()
+        || !m.init.is_empty()
+        || !on_path("eb")
+    {
+        return None;
+    }
+    let out = std::process::Command::new("eb")
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .output();
+    let text = match out {
+        Ok(o) if o.status.success() => return None,
+        Ok(o) => {
+            let all = format!(
+                "{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            );
+            all.lines()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("no output")
+                .trim()
+                .to_string()
+        }
+        Err(e) => e.to_string(),
+    };
+    Some(eb_hint(&text))
+}
+
+/// The WARN text for an `eb --version` that failed with `first`.
+fn eb_hint(first: &str) -> String {
+    let hint = if first.contains("No compatible 'python'") {
+        "; set EB_PYTHON to the Python that has EasyBuild installed, or put its directory first on PATH"
+    } else {
+        ""
+    };
+    format!("`eb --version` fails on this host: {first}{hint}")
+}
+
 /// Whether `prog` names an executable file in a PATH entry.
 pub fn on_path(prog: &str) -> bool {
     use std::os::unix::fs::PermissionsExt;
@@ -128,6 +176,17 @@ mod tests {
         let s = site("local", &[], None);
         let e = [("EASYBUILD_MODULES_TOOL", "SomethingNew")];
         assert!(local_problems(&s, &env(&e), &|p| p == "eb").is_empty());
+    }
+
+    #[test]
+    fn python_launcher_failure_names_eb_python() {
+        let w = eb_hint("ERROR: No compatible 'python' command found via $PATH (EasyBuild requires Python 3.6+)");
+        assert!(
+            w.starts_with("`eb --version` fails on this host: ERROR"),
+            "{w}"
+        );
+        assert!(w.contains("EB_PYTHON"), "{w}");
+        assert!(!eb_hint("Traceback").contains("EB_PYTHON"));
     }
 
     #[test]

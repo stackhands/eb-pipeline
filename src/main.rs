@@ -533,6 +533,9 @@ fn cmd_check(
             ) {
                 log("WARN", "check", &s.site.name, &p);
             }
+            if let Some(p) = eb_pipeline::host::eb_problem(s) {
+                log("WARN", "check", &s.site.name, &p);
+            }
             tools::check_versions(s, true)?;
         }
         if !stack_checks.is_empty() {
