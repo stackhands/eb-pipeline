@@ -8,6 +8,7 @@
 //! `--setvar modules=Name/Version,...` argument for the applications in
 //! the list.
 
+use eb_pipeline::run;
 use eb_pipeline::util;
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -58,7 +59,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(msg) => {
-            eprintln!("eb-test-map: {msg}");
+            run::log_line(&format!("eb-test-map: {msg}"));
             ExitCode::from(2)
         }
     }
@@ -98,16 +99,19 @@ fn text_names(args: &Args) -> Result<ExitCode, String> {
     }
     if !missing.is_empty() && !args.allow_unmapped {
         for name in &missing {
-            eprintln!("eb-test-map: {name} has no test in {}", map_path.display());
+            run::log_line(&format!(
+                "eb-test-map: {name} has no test in {}",
+                map_path.display()
+            ));
         }
         return Ok(ExitCode::from(2));
     }
     if args.allow_unmapped {
         for name in &missing {
-            eprintln!(
+            run::log_line(&format!(
                 "eb-test-map: {name} has no test in {}; allowed",
                 map_path.display()
-            );
+            ));
         }
     }
     let mut out_text = String::new();
@@ -120,8 +124,7 @@ fn text_names(args: &Args) -> Result<ExitCode, String> {
         out_text.push_str(&line);
         out_text.push('\n');
     }
-    util::write_stdout(out_text.as_bytes())
-        .map_err(|e| format!("cannot write the test names: {e}"))?;
+    util::write_stdout_checked(out_text.as_bytes())?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -143,8 +146,7 @@ fn eessi_modules(args: &Args) -> Result<ExitCode, String> {
     }
     let joined = modules.into_iter().collect::<Vec<_>>().join(",");
     let line = format!("--setvar modules={joined}\n");
-    util::write_stdout(line.as_bytes())
-        .map_err(|e| format!("cannot write the module list: {e}"))?;
+    util::write_stdout_checked(line.as_bytes())?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -185,14 +187,12 @@ fn parse(words: impl Iterator<Item = OsString>) -> Result<Args, String> {
         let word = util::os_to_string(word)?;
         match word.as_str() {
             "-h" | "--help" => {
-                util::write_stdout(include_str!("eb-test-map-help.txt").as_bytes())
-                    .map_err(|error| format!("cannot write help: {error}"))?;
+                util::write_stdout_checked(include_str!("eb-test-map-help.txt").as_bytes())?;
                 std::process::exit(0);
             }
             "-V" | "--version" => {
                 let version = format!("eb-test-map {}\n", env!("CARGO_PKG_VERSION"));
-                util::write_stdout(version.as_bytes())
-                    .map_err(|error| format!("cannot write version: {error}"))?;
+                util::write_stdout_checked(version.as_bytes())?;
                 std::process::exit(0);
             }
             "--allow-unmapped" => allow_unmapped = true,

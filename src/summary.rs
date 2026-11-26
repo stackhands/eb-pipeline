@@ -5,7 +5,7 @@
 
 use crate::exit;
 use crate::plan::{module_rel, PHASES};
-use crate::run::RunResult;
+use crate::run::{self, RunResult};
 use crate::util;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -22,33 +22,44 @@ const LOCK: &str = ".summary.lock";
 
 #[cfg(test)]
 mod record_test_hook {
-    use std::sync::{mpsc::Sender, Mutex, OnceLock};
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Barrier, Mutex, OnceLock};
 
-    static LOCK_ACQUIRED_SENDER: OnceLock<Mutex<Option<Sender<()>>>> = OnceLock::new();
+    struct Hook {
+        lock_path: PathBuf,
+        before_lock: Arc<Barrier>,
+    }
 
-    pub(super) fn install(sender: Sender<()>) {
-        *LOCK_ACQUIRED_SENDER
+    static HOOK: OnceLock<Mutex<Option<Hook>>> = OnceLock::new();
+
+    pub(super) fn install(lock_path: PathBuf, before_lock: Arc<Barrier>) {
+        *HOOK
             .get_or_init(|| Mutex::new(None))
             .lock()
-            .expect("lock acquired sender mutex poisoned") = Some(sender);
+            .expect("record test hook mutex poisoned") = Some(Hook {
+            lock_path,
+            before_lock,
+        });
     }
 
     pub(super) fn clear() {
-        if let Some(slot) = LOCK_ACQUIRED_SENDER.get() {
-            *slot.lock().expect("lock acquired sender mutex poisoned") = None;
+        if let Some(slot) = HOOK.get() {
+            *slot.lock().expect("record test hook mutex poisoned") = None;
         }
     }
 
-    pub(super) fn notify_lock_acquired() {
-        let Some(slot) = LOCK_ACQUIRED_SENDER.get() else {
+    pub(super) fn notify_before_lock(lock_path: &Path) {
+        let Some(slot) = HOOK.get() else {
             return;
         };
-        if let Some(sender) = slot
+        let before_lock = slot
             .lock()
-            .expect("lock acquired sender mutex poisoned")
+            .expect("record test hook mutex poisoned")
             .as_ref()
-        {
-            let _ = sender.send(());
+            .filter(|hook| hook.lock_path == lock_path)
+            .map(|hook| Arc::clone(&hook.before_lock));
+        if let Some(before_lock) = before_lock {
+            before_lock.wait();
         }
     }
 }
@@ -283,7 +294,8 @@ pub fn run_dir(res: &RunResult) -> PathBuf {
 
 /// Merge `entry` into `run_dir`'s summary, replacing that target's earlier
 /// entry, and write `summary.json` and `summary.html`. Another writer's
-/// targets are kept; a file of another schema version is replaced.
+/// targets are kept. A file of another schema version is replaced. A file
+/// whose `kind` is not `summary` is left unchanged.
 pub fn record(site: &str, entry: TargetSummary, run_dir: &Path) -> Result<Summary, String> {
     let shown = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
     std::fs::create_dir_all(run_dir).map_err(|e| shown(run_dir, e))?;
@@ -294,20 +306,30 @@ pub fn record(site: &str, entry: TargetSummary, run_dir: &Path) -> Result<Summar
         .write(true)
         .open(&lock_path)
         .map_err(|e| shown(&lock_path, e))?;
-    lock.lock().map_err(|e| shown(&lock_path, e))?;
     #[cfg(test)]
-    record_test_hook::notify_lock_acquired();
+    record_test_hook::notify_before_lock(&lock_path);
+    loop {
+        match lock.lock() {
+            Ok(()) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(shown(&lock_path, e)),
+        }
+    }
+    let mut entry = entry;
+    run::apply_pending_signal(&mut entry.exit_code, &mut entry.interrupted_by);
+    entry.status = status_of(entry.exit_code).into();
     let path = run_dir.join(JSON);
-    let earlier = match std::fs::read_to_string(&path) {
-        Ok(t) => match serde_json::from_str::<Summary>(&t) {
-            Ok(summary) if summary.schema_version == SCHEMA_VERSION => Some(summary),
-            Ok(_) => None,
-            Err(error) => {
+    let earlier = match util::read_text_file(&path) {
+        Ok(t) => match parse(&path, &t) {
+            Ok(Parsed::Current(summary)) => Some(summary),
+            Ok(Parsed::OtherSchema(_)) => None,
+            Err(Unreadable::Content(error)) => {
                 return Err(format!("cannot parse {}: {error}", path.display()));
             }
+            Err(Unreadable::Kind(error)) => return Err(error),
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(shown(&path, e)),
+        Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
     };
     let mut targets = earlier.map(|s| s.targets).unwrap_or_default();
     targets.retain(|t| t.name != entry.name);
@@ -341,19 +363,69 @@ fn write_new(path: &Path, text: &str) -> Result<(), String> {
     util::write_atomic(path, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// What a `summary.json` holds, once it is known to be a summary.
+enum Parsed {
+    /// A summary of [`SCHEMA_VERSION`].
+    Current(Summary),
+    /// A summary of another schema version, which this version cannot read.
+    OtherSchema(u64),
+}
+
+/// Why a `summary.json` is not a summary this version can use.
+enum Unreadable {
+    /// It is not JSON, not an object, lacks a `kind` or `schema_version`, or
+    /// does not have the keys of a summary of this version.
+    Content(String),
+    /// Its `kind` names another artifact; the message names the file.
+    Kind(String),
+}
+
+/// Tell what `text`, the content of `path`, is. The object's `kind` and then
+/// its `schema_version` are read before its other keys, so that another
+/// artifact, or a summary of a later version whose keys have changed, is
+/// named for what it is and not for the key it lacks.
+fn parse(path: &Path, text: &str) -> Result<Parsed, Unreadable> {
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| Unreadable::Content(e.to_string()))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| Unreadable::Content("not a JSON object".into()))?;
+    let kind = object
+        .get("kind")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| Unreadable::Content("missing string `kind`".into()))?;
+    if kind != "summary" {
+        return Err(Unreadable::Kind(format!(
+            "{}: kind `{kind}` is not `summary`",
+            path.display()
+        )));
+    }
+    let version = object
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| Unreadable::Content("missing integer `schema_version`".into()))?;
+    if version != u64::from(SCHEMA_VERSION) {
+        return Ok(Parsed::OtherSchema(version));
+    }
+    serde_json::from_value(value)
+        .map(Parsed::Current)
+        .map_err(|e| Unreadable::Content(e.to_string()))
+}
+
 /// Read a run directory's summary.
 pub fn read(run_dir: &Path) -> Result<Summary, String> {
     let path = run_dir.join(JSON);
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let s: Summary = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-    if s.schema_version != SCHEMA_VERSION {
-        return Err(format!(
-            "{}: schema_version {} is not {SCHEMA_VERSION}",
-            path.display(),
-            s.schema_version
-        ));
+    let text =
+        util::read_text_file(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    match parse(&path, &text) {
+        Ok(Parsed::Current(summary)) => Ok(summary),
+        Ok(Parsed::OtherSchema(version)) => Err(format!(
+            "{}: schema_version {version} is not {SCHEMA_VERSION}",
+            path.display()
+        )),
+        Err(Unreadable::Content(error)) => Err(format!("{}: {error}", path.display())),
+        Err(Unreadable::Kind(error)) => Err(error),
     }
-    Ok(s)
 }
 
 /// A run directory and its summary, or why it has none to show.
@@ -741,8 +813,6 @@ pub fn html(s: &Summary, run_dir: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc;
-    use std::time::Duration;
 
     fn summary(easyconfig: &str, reason: &str) -> Summary {
         Summary {
@@ -827,23 +897,19 @@ mod tests {
             .unwrap();
         held.lock().unwrap();
 
-        let (acquired_tx, acquired_rx) = mpsc::channel();
-        record_test_hook::install(acquired_tx);
+        let before_lock = std::sync::Arc::new(std::sync::Barrier::new(2));
+        record_test_hook::install(lock_path, std::sync::Arc::clone(&before_lock));
         let run_dir_bg = run_dir.clone();
         let writer =
             std::thread::spawn(move || record("t", target("cpu", exit::FAILED), &run_dir_bg));
 
-        assert!(matches!(
-            acquired_rx.recv_timeout(Duration::from_millis(200)),
-            Err(mpsc::RecvTimeoutError::Timeout)
-        ));
+        before_lock.wait();
         assert!(
             !run_dir.join(JSON).exists(),
             "summary appeared while lock was held"
         );
 
         drop(held);
-        acquired_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         let written = writer.join().unwrap().unwrap();
         record_test_hook::clear();
 

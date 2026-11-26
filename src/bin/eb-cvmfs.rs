@@ -8,26 +8,18 @@ mod archive_manifest;
 
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
-use std::io::{self, Write};
+use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitCode, ExitStatus};
 use std::time::{Duration, Instant};
 
-use eb_pipeline::exit;
+use eb_pipeline::{exit, run, util};
 
 const TIMEOUT_EXIT: u8 = 124;
 const MAX_TIMEOUT_SECONDS: u64 = i32::MAX as u64;
 const TERMINATION_GRACE: Duration = Duration::from_secs(1);
-
-fn write_stdout(bytes: &[u8]) -> Result<(), String> {
-    match io::stdout().lock().write_all(bytes) {
-        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
-        Err(e) => Err(format!("cannot write stdout: {e}")),
-        Ok(()) => Ok(()),
-    }
-}
 
 struct Args {
     check: bool,
@@ -54,7 +46,7 @@ fn main() -> ExitCode {
     let args = match parse(eb_pipeline::util::os_args().into_iter()) {
         Ok(args) => args,
         Err(message) => {
-            eprintln!("eb-cvmfs: {message}");
+            run::log_line(&format!("eb-cvmfs: {message}"));
             return ExitCode::from(2);
         }
     };
@@ -66,10 +58,10 @@ fn main() -> ExitCode {
     {
         Ok(metrics) => metrics,
         Err(error) => {
-            eprintln!(
+            run::log_line(&format!(
                 "eb-cvmfs: cannot prepare metrics {}: {error}",
                 args.metrics_file.as_deref().unwrap().display()
-            );
+            ));
             return ExitCode::from(exit::USAGE as u8);
         }
     };
@@ -77,17 +69,17 @@ fn main() -> ExitCode {
     let code = match run(&args, &mut facts) {
         Ok(code) => code,
         Err(message) => {
-            eprintln!("eb-cvmfs: {message}");
+            run::log_line(&format!("eb-cvmfs: {message}"));
             2
         }
     };
     facts.exit_code = code;
     if let Some(metrics) = metrics {
         if let Err(error) = metrics.write(&args.repository, &facts) {
-            eprintln!(
+            run::log_line(&format!(
                 "eb-cvmfs: cannot write metrics {}: {error}",
                 metrics.path.display()
-            );
+            ));
             if code == 0 {
                 return ExitCode::from(1);
             }
@@ -218,11 +210,13 @@ fn parse(words: impl Iterator<Item = std::ffi::OsString>) -> Result<Args, String
         let word = eb_pipeline::util::os_to_string(word)?;
         match word.as_str() {
             "-h" | "--help" => {
-                write_stdout(include_str!("eb-cvmfs-help.txt").as_bytes())?;
+                util::write_stdout_checked(include_str!("eb-cvmfs-help.txt").as_bytes())?;
                 std::process::exit(0);
             }
             "-V" | "--version" => {
-                write_stdout(format!("eb-cvmfs {}\n", env!("CARGO_PKG_VERSION")).as_bytes())?;
+                util::write_stdout_checked(
+                    format!("eb-cvmfs {}\n", env!("CARGO_PKG_VERSION")).as_bytes(),
+                )?;
                 std::process::exit(0);
             }
             "--check" => check = true,
@@ -608,7 +602,7 @@ fn run(args: &Args, facts: &mut Facts) -> Result<u8, String> {
             "# on {failure}: {}\n",
             display_command(&["cvmfs_server", "abort", "-f", &args.repository])
         ));
-        write_stdout(plan.as_bytes())?;
+        util::write_stdout_checked(plan.as_bytes())?;
         return Ok(0);
     }
 
@@ -663,7 +657,9 @@ fn run(args: &Args, facts: &mut Facts) -> Result<u8, String> {
             return Ok(TIMEOUT_EXIT);
         }
         Err(error) => {
-            eprintln!("eb-cvmfs: cannot start sync command `{sync_name}`: {error}");
+            run::log_line(&format!(
+                "eb-cvmfs: cannot start sync command `{sync_name}`: {error}"
+            ));
             let completed = abort(&args.repository, facts);
             if completed {
                 facts.transaction_duration_seconds =
@@ -705,7 +701,9 @@ fn run(args: &Args, facts: &mut Facts) -> Result<u8, String> {
                 return Ok(TIMEOUT_EXIT);
             }
             Err(error) => {
-                eprintln!("eb-cvmfs: cannot start verification command `{verify_name}`: {error}");
+                run::log_line(&format!(
+                    "eb-cvmfs: cannot start verification command `{verify_name}`: {error}"
+                ));
                 let completed = abort(&args.repository, facts);
                 if completed {
                     facts.transaction_duration_seconds =
@@ -862,11 +860,11 @@ fn timeout_message(phase: &str, timeout: Duration) {
     } else {
         "seconds"
     };
-    eprintln!(
+    run::log_line(&format!(
         "eb-cvmfs: {phase} command timed out after {} {timeout_unit}; sent TERM, waited {} {grace_unit}, then sent KILL",
         timeout.as_secs(),
         TERMINATION_GRACE.as_secs()
-    );
+    ));
 }
 
 fn abort(repository: &str, facts: &mut Facts) -> bool {
@@ -877,12 +875,16 @@ fn abort(repository: &str, facts: &mut Facts) -> bool {
         Ok(status) => {
             facts.aborts = 1;
             if !status.success() {
-                eprintln!("eb-cvmfs: cvmfs_server abort failed with {status}");
+                run::log_line(&format!(
+                    "eb-cvmfs: cvmfs_server abort failed with {status}"
+                ));
             }
             true
         }
         Err(error) => {
-            eprintln!("eb-cvmfs: cannot start cvmfs_server abort: {error}");
+            run::log_line(&format!(
+                "eb-cvmfs: cannot start cvmfs_server abort: {error}"
+            ));
             false
         }
     }

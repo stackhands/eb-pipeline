@@ -1,9 +1,9 @@
 //! Observable behavior of opt-in offline bundles.
+#![allow(clippy::disallowed_methods)]
 
 #[path = "common/exec_stub.rs"]
 mod exec_stub;
 
-use exec_stub::CommandSyncExt;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -204,7 +204,8 @@ fn run(f: &Fixture, extra: &[&str]) -> Output {
         .current_dir(root)
         .env("PATH", path)
         .env("STUB_DIR", root)
-        .sync_output()
+        .output()
+        .unwrap()
 }
 
 fn plan(f: &Fixture) -> Output {
@@ -226,7 +227,8 @@ fn plan(f: &Fixture) -> Output {
             "-",
         ])
         .current_dir(f.dir.path())
-        .sync_output()
+        .output()
+        .unwrap()
 }
 
 fn calls(f: &Fixture, name: &str) -> String {
@@ -341,6 +343,45 @@ fn bundle_indexes_prefetched_and_runtime_assets_and_isolates_later_commands() {
         std::fs::read_to_string(f.bundle.join("manifest.json")).unwrap(),
         before
     );
+}
+
+#[test]
+fn a_bundle_manifest_is_not_taken_for_a_run_summary() {
+    let f = fixture(true, &digest(b"runtime data"));
+    let bundle = f.bundle.display().to_string();
+    let output = run(&f, &["--offline-bundle", &bundle, "--require-offline"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let manifest = std::fs::read_to_string(f.bundle.join("manifest.json")).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&manifest).unwrap()["kind"],
+        "offline-bundle"
+    );
+    let summary = f.dir.path().join("logs/20261117_220000/summary.json");
+    std::fs::write(&summary, &manifest).unwrap();
+    let why = "kind `offline-bundle` is not `summary`";
+
+    let again = run(&f, &[]);
+    let stderr = String::from_utf8_lossy(&again.stderr);
+    assert_eq!(again.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("no summary written: ") && stderr.contains(why),
+        "{stderr}"
+    );
+    assert_eq!(std::fs::read_to_string(&summary).unwrap(), manifest);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"))
+        .args(["status", "--site"])
+        .arg(&f.site)
+        .output()
+        .unwrap();
+    let shown = String::from_utf8_lossy(&status.stdout);
+    assert_eq!(status.status.code(), Some(0), "{shown}");
+    assert!(shown.contains(why), "{shown}");
 }
 
 #[test]

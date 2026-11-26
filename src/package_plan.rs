@@ -333,8 +333,30 @@ pub fn load(path: &Path) -> Result<Input, Fail> {
 pub const R_DESCRIPTION_CHECK: &str = r#"p <- commandArgs(TRUE)[1]; i <- installed.packages(); if (!(p %in% rownames(i))) stop(sprintf("package %s is not installed", p)); d <- tools::package_dependencies(p, db=i, which=c("Depends","Imports","LinkingTo"), recursive=FALSE)[[p]]; m <- setdiff(d, rownames(i)); if (length(m)) stop(sprintf("%s has missing DESCRIPTION dependencies: %s", p, paste(m, collapse=", ")))"#;
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::load;
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    #[test]
+    fn package_plan_reader_refuses_a_fifo_promptly() {
+        let root = tempfile::tempdir().unwrap();
+        let manifest = root.path().join("package.plan.json");
+        let raw = CString::new(manifest.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+        let path = root.path().to_path_buf();
+        let (send, receive) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            send.send(load(&path)).unwrap();
+        });
+        let error = receive
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("package-plan reader blocked")
+            .unwrap_err();
+        assert!(error.msg.contains("not a regular file"), "{error:?}");
+        reader.join().unwrap();
+    }
 
     #[test]
     fn closure_references_verify_each_recipe_once() {

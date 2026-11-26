@@ -55,6 +55,12 @@ pub fn from_result(v: &Value) -> Result<Status, Fail> {
             "metrics reads a result file, found kind `{kind}`"
         )));
     }
+    if obj
+        .get("schema_version")
+        .is_some_and(|version| version.as_u64() != Some(1))
+    {
+        return Err(Fail::usage("result.schema_version must be 1"));
+    }
     let exit_code = obj
         .get("exit_code")
         .and_then(Value::as_i64)
@@ -367,6 +373,7 @@ fn family(out: &mut String, name: &str, help: &str, samples: &[String]) {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 

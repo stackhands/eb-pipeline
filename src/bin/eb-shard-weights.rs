@@ -6,7 +6,7 @@
 
 use eb_pipeline::plan::module_rel;
 use eb_pipeline::summary::{self, Summary};
-use eb_pipeline::{exit, util};
+use eb_pipeline::{exit, run, util};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -43,7 +43,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(msg) => {
-            eprintln!("eb-shard-weights: {msg}");
+            run::log_line(&format!("eb-shard-weights: {msg}"));
             ExitCode::from(2)
         }
     }
@@ -143,8 +143,7 @@ fn run() -> Result<ExitCode, String> {
                 .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
         }
         _ => {
-            util::write_stdout(text.as_bytes())
-                .map_err(|e| format!("cannot write weights: {e}"))?;
+            util::write_stdout_checked(text.as_bytes())?;
         }
     }
     Ok(ExitCode::SUCCESS)
@@ -198,14 +197,12 @@ fn parse(words: impl Iterator<Item = OsString>) -> Result<Args, String> {
         let word = util::os_to_string(word)?;
         match word.as_str() {
             "-h" | "--help" => {
-                util::write_stdout(include_str!("eb-shard-weights-help.txt").as_bytes())
-                    .map_err(|error| format!("cannot write help: {error}"))?;
+                util::write_stdout_checked(include_str!("eb-shard-weights-help.txt").as_bytes())?;
                 std::process::exit(0);
             }
             "-V" | "--version" => {
                 let version = format!("eb-shard-weights {}\n", env!("CARGO_PKG_VERSION"));
-                util::write_stdout(version.as_bytes())
-                    .map_err(|error| format!("cannot write version: {error}"))?;
+                util::write_stdout_checked(version.as_bytes())?;
                 std::process::exit(0);
             }
             "--result" | "--summary" | "--log-root" | "--last" | "--target" | "--existing"
@@ -604,6 +601,27 @@ fn merge_weights(weights: &mut BTreeMap<String, u64>, obs: &[Observation], mode:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    #[test]
+    fn result_reader_refuses_a_fifo_promptly() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("result.json");
+        let raw = CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+        let (send, receive) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            send.send(collect_result(&path, None, &mut Vec::new(), &mut 0))
+                .unwrap();
+        });
+        let error = receive
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("result reader blocked")
+            .unwrap_err();
+        assert!(error.contains("not a regular file"), "{error}");
+        reader.join().unwrap();
+    }
 
     fn obs(module: &str, seconds: f64, ended_at: &str, seq: usize) -> Observation {
         Observation {

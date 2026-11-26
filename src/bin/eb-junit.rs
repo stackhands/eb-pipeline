@@ -3,7 +3,7 @@
 //! Each recorded line keeps the status the result file already has. This
 //! tool does not classify failures and does not call eb-stack.
 
-use eb_pipeline::{exit, util};
+use eb_pipeline::{exit, run, util};
 use serde_json::{Map, Number, Value};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -47,7 +47,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(msg) => {
-            eprintln!("eb-junit: {msg}");
+            run::log_line(&format!("eb-junit: {msg}"));
             ExitCode::from(2)
         }
     }
@@ -85,8 +85,7 @@ fn run() -> Result<ExitCode, String> {
                 .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
         }
         _ => {
-            util::write_stdout(report.as_bytes())
-                .map_err(|e| format!("cannot write the report: {e}"))?;
+            util::write_stdout_checked(report.as_bytes())?;
         }
     }
     if args.fail_on_failure && failures > 0 {
@@ -126,14 +125,12 @@ fn parse(words: impl Iterator<Item = OsString>) -> Result<Args, String> {
         let word = util::os_to_string(word)?;
         match word.as_str() {
             "-h" | "--help" => {
-                util::write_stdout(include_str!("eb-junit-help.txt").as_bytes())
-                    .map_err(|error| format!("cannot write help: {error}"))?;
+                util::write_stdout_checked(include_str!("eb-junit-help.txt").as_bytes())?;
                 std::process::exit(0);
             }
             "-V" | "--version" => {
                 let version = format!("eb-junit {}\n", env!("CARGO_PKG_VERSION"));
-                util::write_stdout(version.as_bytes())
-                    .map_err(|error| format!("cannot write version: {error}"))?;
+                util::write_stdout_checked(version.as_bytes())?;
                 std::process::exit(0);
             }
             "--fail-on-failure" => fail_on_failure = true,

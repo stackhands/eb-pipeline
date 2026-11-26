@@ -6,7 +6,7 @@
 
 Install the =eb-pipeline= command for the account that runs the builds, from a release or from source.
 
-These pages describe release 0.4.0.
+These pages describe the development branch. The latest release is 0.5.0.
 Release 0.3.1 is older: it has no =audit=, =verify=, =completions= or =man= command, no =check --stack-checks= or =check --check-from-commit=, no =aliases= or =exclude_option= in =[targets.select]=, and no offline source bundle.
 The [[https://github.com/stackhands/eb-pipeline/blob/main/CHANGELOG.md][changelog]] lists the rest.
 
@@ -27,11 +27,11 @@ The [[https://github.com/stackhands/eb-pipeline/blob/main/CHANGELOG.md][changelo
 
 ** Install a release
 
-1. Download the archive of release 0.3.0 and its checksum, and check the archive:
+1. Download the archive of release 0.5.0 and its checksum, and check the archive:
 
    #+begin_src bash
-   curl -fsSLO https://github.com/stackhands/eb-pipeline/releases/download/v0.3.0/eb-pipeline-x86_64-unknown-linux-musl.tar.xz
-   curl -fsSLO https://github.com/stackhands/eb-pipeline/releases/download/v0.3.0/eb-pipeline-x86_64-unknown-linux-musl.tar.xz.sha256
+   curl -fsSLO https://github.com/stackhands/eb-pipeline/releases/download/v0.5.0/eb-pipeline-x86_64-unknown-linux-musl.tar.xz
+   curl -fsSLO https://github.com/stackhands/eb-pipeline/releases/download/v0.5.0/eb-pipeline-x86_64-unknown-linux-musl.tar.xz.sha256
    sha256sum -c eb-pipeline-x86_64-unknown-linux-musl.tar.xz.sha256
    #+end_src
 
@@ -51,16 +51,22 @@ The [[https://github.com/stackhands/eb-pipeline/blob/main/CHANGELOG.md][changelo
    CHANGELOG.md
    LICENSE
    README.md
+   eb-cvmfs
+   eb-junit
    eb-pipeline
+   eb-retry-list
+   eb-shard-weights
+   eb-test-map
    #+end_example
 
-   Release 0.3.0 ships =eb-pipeline= alone; releases after 0.3.0 (and installing from source below) ship all six commands:
-   =eb-pipeline=, =eb-retry-list=, =eb-shard-weights=, =eb-test-map=, =eb-junit= and =eb-cvmfs=.
+   Release 0.3.0 ships =eb-pipeline= alone; releases 0.3.1 to 0.5.0 ship these six commands, and =eb-admin-report= comes from a source install.
 
-3. Install the binary:
+3. Install the six commands of the release:
 
    #+begin_src bash
-   install -D -m 755 "eb-pipeline-x86_64-unknown-linux-musl/eb-pipeline" "$HOME/.local/bin/eb-pipeline"
+   for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cvmfs; do
+     install -D -m 755 "eb-pipeline-x86_64-unknown-linux-musl/$cmd" "$HOME/.local/bin/$cmd"
+   done
    #+end_src
 
 ** Install from source
@@ -74,15 +80,58 @@ cargo +1.90 install --locked --path . --root ~/.local
 
 To install another commit, check it out first; to replace an eb-pipeline that is installed there, add =--force=.
 
-The install builds =eb-pipeline=, =eb-retry-list=, =eb-shard-weights=, =eb-test-map=, =eb-junit= and =eb-cvmfs=.
+The install builds =eb-pipeline=, =eb-retry-list=, =eb-shard-weights=, =eb-test-map=, =eb-junit=, =eb-cvmfs= and =eb-admin-report=.
 Check that each command is on =PATH=:
 
 #+begin_src bash
-for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cvmfs; do
+for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cvmfs eb-admin-report; do
   command -v "$cmd"
   "$cmd" --help >/dev/null
 done
 #+end_src
+
+** Install the companion tools
+
+Some phases start a companion tool: resume and the OOM preflight start =eb-stack=, =keep_failed= starts =eb-keep-logs=, and a staged rebuild starts =eb-staged-rebuild=.
+Install the ones the site file turns on; this installs all three from their releases into =~/.local/bin=, and checks each against its release's checksums:
+
+#+begin_src bash
+set -euo pipefail
+bin=$HOME/.local/bin arch=$(uname -m) gh_dl=https://github.com/stackhands
+mkdir -p "$bin"
+
+v=0.9.1
+case $arch in x86_64) t=x86_64-unknown-linux-musl ;; aarch64) t=aarch64-unknown-linux-gnu ;; esac
+curl -fsSLO "$gh_dl/eb-stack/releases/download/v$v/eb_stack-$t.tar.xz"
+curl -fsSLO "$gh_dl/eb-stack/releases/download/v$v/eb_stack-$t.tar.xz.sha256"
+sha256sum -c "eb_stack-$t.tar.xz.sha256"
+tar -xJf "eb_stack-$t.tar.xz"
+install -m 0755 "eb_stack-$t/eb-stack" "$bin/eb-stack"
+
+for tool in eb-keep-logs:0.3.1 eb-staged-rebuild:2.0.1; do
+  name=${tool%%:*} v=${tool#*:} f=${tool%%:*}-${tool#*:}-$arch-linux-musl
+  curl -fsSLO "$gh_dl/$name/releases/download/v$v/$f"
+  curl -fsSL -o "SHA256SUMS.$name" "$gh_dl/$name/releases/download/v$v/SHA256SUMS"
+  sha256sum -c --ignore-missing "SHA256SUMS.$name"
+  install -m 0755 "$f" "$bin/$name"
+done
+#+end_src
+
+#+begin_example
+eb_stack-x86_64-unknown-linux-musl.tar.xz: OK
+eb-keep-logs-0.3.1-x86_64-linux-musl: OK
+eb-staged-rebuild-2.0.1-x86_64-linux-musl: OK
+#+end_example
+
+eb-stack has no static aarch64 build, so on aarch64 it installs the glibc one, and the check prints:
+
+#+begin_example
+eb_stack-aarch64-unknown-linux-gnu.tar.xz: OK
+eb-keep-logs-0.3.1-aarch64-linux-musl: OK
+eb-staged-rebuild-2.0.1-aarch64-linux-musl: OK
+#+end_example
+
+Count the =OK= lines: =--ignore-missing= passes without a word over a file that =SHA256SUMS= does not name, so three lines mean three files checked.
 
 ** Check that it worked
 
@@ -93,8 +142,10 @@ eb-pipeline --version
 
 #+begin_example
 $HOME/.local/bin/eb-pipeline
-eb-pipeline 0.4.0
+eb-pipeline 0.5.0
 #+end_example
+
+A build from source prints the version in its =Cargo.toml= instead.
 
 A build from source also has the =targets= command:
 

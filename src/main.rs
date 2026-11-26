@@ -1,10 +1,11 @@
-use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::parser::ValueSource;
+use clap::{ArgMatches, Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use clap_complete::{generate_to, shells};
 use eb_pipeline::exit::{self, Fail};
 use eb_pipeline::package_plan;
 use eb_pipeline::plan::{build_plan, read_units, Planner};
 use eb_pipeline::resolve::{explain, Scope};
-use eb_pipeline::run::{install_handlers, log, run, signal_exit, Options, RunResult};
+use eb_pipeline::run::{apply_pending_signal, install_handlers, log, run, Options, RunResult};
 use eb_pipeline::{
     audit, easystack, eessi, from_commit, metrics, notify, sbom, schema, site, stack_checks,
     summary, templates, tools, util, watch,
@@ -32,6 +33,7 @@ Companion commands from this package:
   eb-test-map
   eb-junit
   eb-cvmfs
+  eb-admin-report
 
 Configuration: every flag above falls back to an EB_PIPELINE_<FLAG> variable
 (EB_PIPELINE_SITE, EB_PIPELINE_LIST, EB_PIPELINE_PACKAGE_PLAN,
@@ -98,14 +100,16 @@ enum Cmd {
         /// Directory that must hold every build list a target names.
         #[arg(long, env = "EB_PIPELINE_LISTS_DIR")]
         lists_dir: Option<PathBuf>,
-        /// Run each needed tool's `--version` and enforce min_version.
+        /// Run each needed tool's `--version` and enforce min_version. On a
+        /// `local` site, also warn when this host lacks `eb` or the module
+        /// tool EasyBuild uses.
         #[arg(long)]
         probe_tools: bool,
         /// Build list or easystack to pass to requested eb-stack checks.
         #[arg(long, env = "EB_PIPELINE_LIST")]
         list: Option<PathBuf>,
         /// Limit target-dependent settings to this target.
-        #[arg(long, env = "EB_PIPELINE_TARGET", requires = "stack_checks")]
+        #[arg(long, env = "EB_PIPELINE_TARGET")]
         target: Option<String>,
         /// Comma-separated eb-stack checks to run before any allocation.
         #[arg(long, value_delimiter = ',', requires = "list", value_enum)]
@@ -247,8 +251,7 @@ enum Cmd {
         #[arg(
             long,
             env = "EB_PIPELINE_LIST",
-            required_unless_present = "recorded_list",
-            conflicts_with = "recorded_list"
+            required_unless_present = "recorded_list"
         )]
         list: Option<PathBuf>,
         /// Read the list path recorded in the plan or result.
@@ -417,8 +420,7 @@ fn to_sorted<T: Serialize>(v: &T) -> serde_json::Value {
 }
 
 fn write_stdout_text(text: &str) -> Result<(), Fail> {
-    util::write_stdout(text.as_bytes())
-        .map_err(|e| Fail::new(exit::FAILED, format!("cannot write stdout: {e}")))
+    util::write_stdout_checked(text.as_bytes()).map_err(|e| Fail::new(exit::FAILED, e))
 }
 
 fn write_stderr_text(text: &str) -> Result<(), Fail> {
@@ -525,6 +527,16 @@ fn cmd_check(
             }
         }
         if probe {
+            for p in eb_pipeline::host::local_problems(
+                s,
+                &|k| std::env::var(k).ok(),
+                &eb_pipeline::host::on_path,
+            ) {
+                log("WARN", "check", &s.site.name, &p);
+            }
+            if let Some(p) = eb_pipeline::host::eb_problem(s) {
+                log("WARN", "check", &s.site.name, &p);
+            }
             tools::check_versions(s, true)?;
         }
         if !stack_checks.is_empty() {
@@ -800,7 +812,7 @@ fn cmd_man(out_dir: &Path) -> Result<i32, Fail> {
         )
     })?;
     let path = out_dir.join("eb-pipeline.1");
-    std::fs::write(&path, out).map_err(|e| {
+    util::write_atomic(&path, &out).map_err(|e| {
         Fail::new(
             exit::FAILED,
             format!("cannot write {}: {e}", path.display()),
@@ -1105,12 +1117,17 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         if let Some(before) = &before {
             watch::record_run(&planner, &lines, &res, before);
         }
-        apply_pending_signal(&mut res);
         let mut output_errors = Vec::new();
-        if let Err(f) = write_summary(&s, &res, "run", result, None, &planner.offline_wrapper) {
+        if let Err(f) = write_summary_with_pending_signal(
+            &s,
+            &mut res,
+            "run",
+            result,
+            None,
+            &planner.offline_wrapper,
+        ) {
             output_errors.push(f.msg);
         }
-        apply_pending_signal(&mut res);
         let value = to_sorted(&res);
         if let Some(p) = result {
             if let Err(f) = write_json(&value, Some(p)) {
@@ -1146,19 +1163,18 @@ fn signal_outranks(run_code: i32, failure: Fail) -> Fail {
     }
 }
 
-fn apply_pending_signal(res: &mut RunResult) {
-    let Some(code) = signal_exit() else {
-        return;
-    };
-    if res.interrupted_by.is_none() {
-        let name = if code == exit::SIGINT {
-            "SIGINT"
-        } else {
-            "SIGTERM"
-        };
-        res.interrupted_by = Some(name.into());
-    }
-    res.exit_code = code;
+fn write_summary_with_pending_signal(
+    s: &schema::Site,
+    res: &mut RunResult,
+    command: &str,
+    result: Option<&Path>,
+    watch: Option<serde_json::Value>,
+    offline_wrapper: &[String],
+) -> Result<(), Fail> {
+    apply_pending_signal(&mut res.exit_code, &mut res.interrupted_by);
+    let written = write_summary(s, res, command, result, watch, offline_wrapper);
+    apply_pending_signal(&mut res.exit_code, &mut res.interrupted_by);
+    written
 }
 
 /// Merge a target's run into its run directory's summary. A problem writing
@@ -1214,6 +1230,49 @@ struct WatchArgs<'a> {
     result: Option<&'a Path>,
 }
 
+/// Watch scratch removed on drop unless retention was requested.
+///
+/// A dry run that points at eb-stack's files, an interrupted rebuild, and an
+/// error that names a file in the directory keep it. Every other return,
+/// including a failed stdout write, removes it.
+struct ScratchDir {
+    path: PathBuf,
+    cited: String,
+    retain: bool,
+}
+
+impl ScratchDir {
+    fn new(path: &Path) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            cited: path.display().to_string(),
+            retain: false,
+        }
+    }
+
+    fn retain(&mut self) {
+        self.retain = true;
+    }
+
+    /// Keep the directory when `result` names a file inside it.
+    fn keep_cited<T>(&mut self, result: Result<T, Fail>) -> Result<T, Fail> {
+        if let Err(err) = &result {
+            if err.msg.contains(&self.cited) {
+                self.retain();
+            }
+        }
+        result
+    }
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        if !self.retain {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
 fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     validate_option_values(&[("--build-type", Some(w.build_type)), ("--run-id", w.run_id)])?;
     if let Some(stamp) = w.log_stamp.filter(|s| !util::is_log_stamp(s)) {
@@ -1261,10 +1320,9 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     install_handlers();
     let _lock = watch::hold(&state_dir, name)?;
     let work = watch::work_dir(&planner, "plan")?;
-    let drop_work = || {
-        let _ = std::fs::remove_dir_all(&work);
-    };
-    let (probe, env) = watch::probe(&planner, &work)?;
+    // Drop removes this directory unless a path below keeps it.
+    let mut scratch = ScratchDir::new(&work);
+    let (probe, env) = scratch.keep_cited(watch::probe(&planner, &work))?;
     let revision = watch::revision_of(&probe)?;
     watch::check_dirs(&probe)?;
     // A newer versions/YYYY.MM directory, while this module environment
@@ -1275,7 +1333,6 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             let versions = eessi::versions_dir(repo);
             match eessi::newer_generation(&versions, &probe.version) {
                 Ok(Some(newer)) => {
-                    drop_work();
                     return Err(Fail::new(
                         exit::TEMPFAIL,
                         format!(
@@ -1287,7 +1344,6 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                 }
                 Ok(None) => {}
                 Err(e) => {
-                    drop_work();
                     return Err(Fail::new(
                         exit::TEMPFAIL,
                         format!("cannot list {}: {e}", versions.display()),
@@ -1328,7 +1384,6 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                 out.push('\n');
             }
             write_stdout_text(&out)?;
-            drop_work();
             say(&format!(
                 "dry run: would adopt {} against {eessi_now}",
                 installs.len()
@@ -1336,8 +1391,9 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             return Ok(exit::OK);
         }
         watch::need_eb_stack(&s)?;
-        let names = watch::record(&planner, &work, &probe, revision, &installs, true)?;
-        drop_work();
+        let names = scratch.keep_cited(watch::record(
+            &planner, &work, &probe, revision, &installs, true,
+        ))?;
         say(&format!(
             "adopted {} against {eessi_now}: {}",
             names.len(),
@@ -1347,7 +1403,6 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     }
     let state = watch::load(&state_dir, name).map_err(|e| Fail::new(exit::FAILED, e))?;
     if state.installs.is_empty() {
-        drop_work();
         log(
             "WARN",
             "watch",
@@ -1370,9 +1425,8 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                     i.eessi_version, i.software_subdir
                 ));
             }
-            let _ = write_stdout_text(&out);
+            write_stdout_text(&out)?;
         }
-        drop_work();
         return Err(Fail::new(
             exit::REFUSED,
             format!(
@@ -1396,7 +1450,7 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     };
     let abi_conf = conf.abi_drift.as_ref().filter(|a| a.enabled);
     let (abi_now, abi_fields) = if let Some(a) = abi_conf {
-        let now = watch::abi_baseline(&planner, &work, a)?;
+        let now = scratch.keep_cited(watch::abi_baseline(&planner, &work, a))?;
         let changed = watch::abi_changes(a, &state, &now);
         (Some(now), changed)
     } else {
@@ -1410,7 +1464,6 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
         None => Ok(()),
     };
     if watch::unchanged_at(&state, &probe, revision) && abi_fields.is_empty() && !abi_needs_update {
-        drop_work();
         let doc = watch::PlanDoc::unchanged(name, &probe, revision, &state);
         write_plan(&doc)?;
         print(&doc)?;
@@ -1429,12 +1482,12 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
-        let u = watch::stage(
+        let u = scratch.keep_cited(watch::stage(
             &work,
             &eessi::scan(&probe.modules_dirs),
             &eessi::scan(std::slice::from_ref(&local_dir)),
-        )?;
-        watch::apply_abi_changes(
+        ))?;
+        scratch.keep_cited(watch::apply_abi_changes(
             &planner,
             &work,
             &u,
@@ -1442,7 +1495,7 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             &abi_fields,
             conf.rebuild_review,
             &probe.software_subdir,
-        )?;
+        ))?;
         staged = Some(u);
     }
     let mut doc;
@@ -1459,19 +1512,22 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                 ),
             ));
         }
-        let u = staged.take().unwrap_or(watch::stage(
-            &work,
-            &eessi::scan(&probe.modules_dirs),
-            &eessi::scan(std::slice::from_ref(&local_dir)),
-        )?);
-        watch::cascade(
+        let u = match staged.take() {
+            Some(u) => u,
+            None => scratch.keep_cited(watch::stage(
+                &work,
+                &eessi::scan(&probe.modules_dirs),
+                &eessi::scan(std::slice::from_ref(&local_dir)),
+            ))?,
+        };
+        scratch.keep_cited(watch::cascade(
             &planner,
             &work,
             &u,
             &mut verdicts,
             conf.rebuild_review,
             &probe.software_subdir,
-        )?;
+        ))?;
         let vanished = verdicts
             .iter()
             .any(|v| v.action == "rebuild" && v.changes.iter().any(|c| c.change == "vanished"));
@@ -1489,7 +1545,7 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                 "a dependency vanished from EESSI, and eb-stack has no easyconfig tree to plan its local build from: set [watch] easyconfigs, or load EasyBuild in [modules] init",
             ));
         }
-        let ordered = watch::order(&planner, &work, &u, &verdicts, &robot)?;
+        let ordered = scratch.keep_cited(watch::order(&planner, &work, &u, &verdicts, &robot))?;
         doc = watch::PlanDoc::new(name, &probe, revision, verdicts);
         doc.rebuild = ordered;
     } else {
@@ -1513,13 +1569,12 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     }
     print(&doc)?;
     if w.dry_run {
-        if doc.rebuild.is_empty() {
-            drop_work();
-        } else {
+        if !doc.rebuild.is_empty() {
             say(&format!(
                 "dry run: nothing rebuilt; eb-stack's files are in {}",
                 work.display()
             ));
+            scratch.retain();
         }
         return Ok(exit::OK);
     }
@@ -1539,7 +1594,6 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                 &format!("record not updated: {}", f.msg),
             );
         }
-        drop_work();
         return Ok(exit::OK);
     }
     let log_dir = PathBuf::from(planner.scope.log_dir());
@@ -1549,13 +1603,14 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             format!("cannot create {}: {e}", log_dir.display()),
         )
     })?;
-    std::fs::write(&list, doc.rebuild.join("\n") + "\n")
+    let rebuild_list = doc.rebuild.join("\n") + "\n";
+    util::write_atomic(Path::new(&list), rebuild_list.as_bytes())
         .map_err(|e| Fail::new(exit::FAILED, format!("cannot write {list}: {e}")))?;
     write_json(&to_sorted(&doc), Some(&log_dir.join("watch-plan.json")))?;
     let lines = util::parse_list(&(doc.rebuild.join("\n") + "\n"))?;
     tools::check_versions(&s, false)?;
     let before = watch::listings(&planner, &lines);
-    let res = run(
+    let mut res = run(
         &planner,
         &lines,
         &Options {
@@ -1570,7 +1625,9 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
     if let Some(m) = &res.message {
         log("ERROR", "run", name, m);
     }
-    if res.interrupted_by.is_none() {
+    if res.interrupted_by.is_some() {
+        scratch.retain();
+    } else {
         let rebuild = Some((lines.as_slice(), &res, &before));
         match watch::settle(
             &planner,
@@ -1596,9 +1653,15 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
                 ),
             ),
         }
-        drop_work();
     }
-    if let Err(f) = write_summary(&s, &res, "watch", w.result, Some(to_sorted(&doc)), &[]) {
+    if let Err(f) = write_summary_with_pending_signal(
+        &s,
+        &mut res,
+        "watch",
+        w.result,
+        Some(to_sorted(&doc)),
+        &[],
+    ) {
         return Err(signal_outranks(res.exit_code, f));
     }
     if let Some(p) = w.result {
@@ -1690,14 +1753,69 @@ fn cmd_verify(
     Ok(exit::OK)
 }
 
+/// Whether the value of `arg` of subcommand `sub` was typed on the command
+/// line. Clap also counts a value read from an environment variable as
+/// present, so a declared requirement or conflict cannot tell the two apart.
+fn typed_on_command_line(matches: &ArgMatches, sub: &str, arg: &str) -> bool {
+    matches
+        .subcommand_matches(sub)
+        .and_then(|matches| matches.value_source(arg))
+        == Some(ValueSource::CommandLine)
+}
+
+/// `check --target` selects what the stack checks read, so on the command
+/// line it needs `--stack-checks`. The variable `EB_PIPELINE_TARGET` is set
+/// for every command of a run, `check` included, and is not an error there.
+fn refuse_target_without_checks(cli: &Cli, matches: &ArgMatches) {
+    let Cmd::Check {
+        target: Some(_),
+        stack_checks,
+        ..
+    } = &cli.command
+    else {
+        return;
+    };
+    if typed_on_command_line(matches, "check", "target") && stack_checks.is_empty() {
+        Cli::command()
+            .error(
+                clap::error::ErrorKind::MissingRequiredArgument,
+                "the argument '--target <TARGET>' requires '--stack-checks <STACK_CHECKS>'",
+            )
+            .exit();
+    }
+}
+
+/// `verify --recorded-list` replaces the list, so an explicit list option
+/// conflicts with it. `EB_PIPELINE_LIST` is exported for a whole run and is
+/// only a fallback: the recorded path wins over it, as it does in
+/// `eb-retry-list`.
+fn refuse_list_with_recorded_list(cli: &Cli, matches: &ArgMatches) {
+    let Cmd::Verify {
+        list: Some(_),
+        recorded_list: true,
+        ..
+    } = &cli.command
+    else {
+        return;
+    };
+    if typed_on_command_line(matches, "verify", "list") {
+        Cli::command()
+            .error(
+                clap::error::ErrorKind::ArgumentConflict,
+                "the argument '--list <LIST>' cannot be used with '--recorded-list'",
+            )
+            .exit();
+    }
+}
+
 fn main() {
-    let cli = match Cli::try_parse() {
-        Ok(cli) => cli,
+    let matches = match Cli::command().try_get_matches() {
+        Ok(matches) => matches,
         Err(error) => match error.kind() {
             clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => {
                 let text = error.to_string();
-                if let Err(write_error) = util::write_stdout(text.as_bytes()) {
-                    eprintln!("ERROR [main] -: cannot write stdout: {write_error}");
+                if let Err(message) = util::write_stdout_checked(text.as_bytes()) {
+                    log("ERROR", "main", "-", &message);
                     std::process::exit(exit::FAILED);
                 }
                 std::process::exit(exit::OK);
@@ -1705,6 +1823,9 @@ fn main() {
             _ => error.exit(),
         },
     };
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    refuse_target_without_checks(&cli, &matches);
+    refuse_list_with_recorded_list(&cli, &matches);
     let r = match &cli.command {
         Cmd::Check {
             site,

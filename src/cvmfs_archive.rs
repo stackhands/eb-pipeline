@@ -1,5 +1,6 @@
 //! Optional check of one ingest archive before a CVMFS transaction.
 
+use eb_pipeline::util;
 use flate2::bufread::GzDecoder;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -15,7 +16,7 @@ pub(crate) fn check(manifest_path: &Path) -> Result<(), String> {
     let manifest = load_manifest(manifest_path)?;
     let directory = resolve_directory(manifest_path, &manifest.directory)?;
     let archive_path = one_archive(&directory, &manifest.name)?;
-    let mut file = File::open(&archive_path).map_err(|error| {
+    let mut file = util::open_regular_file(&archive_path).map_err(|error| {
         fail(&format!(
             "cannot read archive {}: {error}",
             archive_path.display()
@@ -111,7 +112,7 @@ struct Tree {
 }
 
 fn load_manifest(path: &Path) -> Result<Manifest, String> {
-    let file = File::open(path)
+    let file = util::open_regular_file(path)
         .map_err(|error| fail(&format!("cannot read manifest {}: {error}", path.display())))?;
     let parsed: ManifestFile = serde_json::from_reader(file)
         .map_err(|error| fail(&format!("manifest is invalid: {error}")))?;
@@ -721,9 +722,30 @@ fn fail(detail: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
     use std::process::Command;
+
+    #[test]
+    fn archive_checker_refuses_a_fifo_manifest_promptly() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("manifest.json");
+        let raw = CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+        let (send, receive) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            send.send(check(&path)).unwrap();
+        });
+        let error = receive
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("archive manifest reader blocked")
+            .unwrap_err();
+        assert!(error.contains("not a regular file"), "{error}");
+        reader.join().unwrap();
+    }
 
     fn sha256_hex(bytes: &[u8]) -> String {
         hex(&Sha256::digest(bytes))

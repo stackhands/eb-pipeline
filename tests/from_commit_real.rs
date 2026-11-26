@@ -1,4 +1,5 @@
 //! End-to-end from-commit check against an unmodified eb-stack build.
+#![allow(clippy::disallowed_methods)]
 
 use std::path::Path;
 use std::process::Command;

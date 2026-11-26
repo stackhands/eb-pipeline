@@ -72,6 +72,7 @@ Companion commands from this package:
   eb-test-map
   eb-junit
   eb-cvmfs
+  eb-admin-report
 
 Configuration: every flag above falls back to an EB_PIPELINE_<FLAG> variable
 (EB_PIPELINE_SITE, EB_PIPELINE_LIST, EB_PIPELINE_PACKAGE_PLAN,
@@ -119,7 +120,7 @@ when several apply: 1, then 78, then 75, then 0. Codes are never summed.
 =eb-pipeline --version= prints the version of the crate, the same for a release and for a build from source:
 
 #+begin_example
-eb-pipeline 0.4.0
+eb-pipeline 0.5.0
 #+end_example
 
 ** Arguments
@@ -157,9 +158,9 @@ An option with a variable in the table takes its value from that variable when t
 |-----------------------------+-------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | =--site FILE=               | =EB_PIPELINE_SITE=      | The site file. Required unless =--check-from-commit= is set.                                                                                                                                                                       |
 | =--lists-dir DIR=           | =EB_PIPELINE_LISTS_DIR= | A directory that must contain every file that the =build_lists= of a target names. A missing file is an error of the site file.                                                                                                   |
-| =--probe-tools=             |                         | Start =BIN --version= for each sibling tool that an enabled phase calls, and fail when one cannot start, prints no version, or prints one below the =min_version= of its =[site.tools]= table.                                     |
+| =--probe-tools=             |                         | Start =BIN --version= for each sibling tool that an enabled phase calls, and fail when one cannot start, prints no version, or prints one below the =min_version= of its =[site.tools]= table. On a =local= site with no module wrapper, also warn when this host has no =eb= on =PATH= or no module tool EasyBuild can use.                                     |
 | =--list FILE=               | =EB_PIPELINE_LIST=      | The build list or easystack passed to =--stack-checks= or =--check-from-commit=.                                                                                                                                                    |
-| =--target NAME=             | =EB_PIPELINE_TARGET=    | Use only this target's =cpu_target= and expanded source paths. Requires =--stack-checks=. Without it, target-dependent values from every target are used.                                                                          |
+| =--target NAME=             | =EB_PIPELINE_TARGET=    | Use only this target's =cpu_target= and expanded source paths. Requires =--stack-checks= when given as an option; =EB_PIPELINE_TARGET= alone is ignored without it. Without it, target-dependent values from every target are used. |
 | =--stack-checks LIST=       |                         | Comma-separated =files=, =arch=, =cuda-cc=, =generation=, =provided=, =known-failures= or =buildenv=. Each names an =eb-stack stack= subprocess. Requires =--list= and =--site=.                                                              |
 | =--check-from-commit=       |                         | Run =eb-stack stack from-commit --json= on an easystack =--list=; off by default. Requires =--list=.                                                                                                                               |
 | =--easyconfigs-repo DIR=    |                         | Passed to =eb-stack= when the easystack has =from-commit= pins.                                                                                                                                                                    |
@@ -260,6 +261,7 @@ It shows =<run-id>= and =<log-stamp>= where a run puts its own.
 =status= reads the directories under =filesystems.log_root= whose names are log stamps, newest first, and leaves out every other entry.
 With =--problems-only=, =--last= counts runs after filtering.
 With =--target=, the selected target's exit code decides whether a run is problematic.
+A run directory whose =summary.json= has another =kind= or an unsupported =schema_version= counts as a run without a readable summary: =status= names the reason on that run's line and exits 0.
 [[file:run-summary.org][The run summary]] shows what it prints.
 
 *** metrics
@@ -284,7 +286,8 @@ With =--target=, the selected target's exit code decides whether a run is proble
 A status the run did not use is 0.
 Log paths stay in the result file.
 Exit 0 means the file was read, including when the run's own exit code is not 0.
-Exit 2 means the file is missing, is not JSON, or its =kind= is not =result=.
+Exit 2 means the file is missing, is not JSON, its =kind= is not =result=, or it has a =schema_version= that is not the integer 1.
+A result without a =schema_version= key is read as version 1.
 
 *** plan
 
@@ -348,7 +351,7 @@ The preview does not evaluate a prior result, so =--dry-run= and =--resume-resul
 | Option              | Variable             | Meaning                                                                                              |
 |---------------------+----------------------+------------------------------------------------------------------------------------------------------|
 | =--list FILE=       | =EB_PIPELINE_LIST=   | Recompute from this build list or easystack. Use this or =--recorded-list=.                           |
-| =--recorded-list=   |                      | Recompute from the =list= path in =--from=. Conflicts with =--list=.                                 |
+| =--recorded-list=   |                      | Recompute from the =list= path in =--from=. Conflicts with =--list= as an option; it wins over =EB_PIPELINE_LIST=.                                 |
 | =--from FILE=       |                      | The plan or result JSON that holds =input_attestation=. Required. Needs =[attest] enabled=.           |
 
 =verify= recomputes the input record and checks the inclusion proof in =FILE=.
@@ -551,6 +554,14 @@ See [[file:test-map.org][The test map]] for all options and exit statuses.
 
 =eb-cvmfs= brackets one cache synchronization command in a CVMFS transaction, with optional archive-manifest checks, verification, timeouts, tagging, integrity checks, and Prometheus metrics.
 See [[file:cvmfs.org][The eb-cvmfs command]] for all options and exit statuses.
+
+*** eb-admin-report
+
+=eb-admin-report= reads one result file from =eb-pipeline run --result= and prints a markdown triage report: run metadata, status counts, failure signatures from =eb-stack stack bot-classify=, whether the failure is systemic, and the unfinished lines with log tails.
+
+#+begin_example
+eb-admin-report --result FILE [--out FILE] [--max-lines N] [--log-tail-lines N]
+#+end_example
 
 ** See also
 

@@ -46,7 +46,7 @@ buildenv\:"\`stack buildenv\` on a plain build list, failing while a toolchain o
 '--easybuild-version=[EasyBuild release \`X.Y.Z\`. Overrides \`eb-X.Y.Z\` in the list file name]:EASYBUILD_VERSION:_default' \
 '--gap-out=[Write eb-stack'\''s gap report files into this directory]:GAP_OUT:_files' \
 '--generation=[Toolchain generation passed to \`eb-stack stack gap\`]:GENERATION:_default' \
-'--probe-tools[Run each needed tool'\''s \`--version\` and enforce min_version]' \
+'--probe-tools[Run each needed tool'\''s \`--version\` and enforce min_version. On a \`local\` site, also warn when this host lacks \`eb\` or the module tool EasyBuild uses]' \
 '--check-from-commit[Ask \`eb-stack stack from-commit\` whether pins are already in the EasyBuild release tag]' \
 '--shadow[Also write \`stack shadow\` JavaScript Object Notation (JSON) output to \`DIR/shadow.json\`]' \
 '-h[Print help (see more with '\''--help'\'')]' \
@@ -151,7 +151,7 @@ _arguments "${_arguments_options[@]}" : \
 (verify)
 _arguments "${_arguments_options[@]}" : \
 '--site=[Site file]:SITE:_files' \
-'(--recorded-list)--list=[Build list file, or an EasyBuild easystack]:LIST:_files' \
+'--list=[Build list file, or an EasyBuild easystack]:LIST:_files' \
 '--target=[Target name]:TARGET:_default' \
 '--build-type=[Build type name]:BUILD_TYPE:_default' \
 '--from=[Plan or result JSON that holds \`input_attestation\`]:FROM:_files' \

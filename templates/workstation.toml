@@ -1,0 +1,32 @@
+# One machine with no scheduler: a workstation, a lab server or a CI runner.
+# Every phase starts on this host as a plain process. No EESSI, inode quota or
+# licences. Every value is a placeholder; /srv/eb stands for a directory
+# the build account owns.
+schema_version = 1
+kind = "site"
+
+[site]
+name = "workstation"
+
+[scheduler]
+kind = "local"
+
+[[targets]]
+name = "cpu"
+build_lists = ["software.list"]
+default = true
+
+[filesystems]
+scratch = "/srv/eb/scratch"
+tmp = "/srv/eb/scratch/tmp"
+build_path = "/srv/eb/scratch/build"
+source_paths = ["/srv/eb/sources"]
+install_root = "/srv/eb/software"
+log_root = "/srv/eb/logs"
+
+# `eb` comes from PATH, for example a pip install of EasyBuild, so no module
+# is loaded before a build. EasyBuild still needs a module tool: source
+# EESSI's init for its Lmod, or install Lmod, and set
+# EASYBUILD_MODULES_TOOL=Lmod.
+[modules]
+init = []

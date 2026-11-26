@@ -18,6 +18,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Read;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -192,13 +193,13 @@ pub fn verify(req: &Request<'_>, stored: &InputAttestation) -> Result<(), Fail> 
     let proof_text = serde_json::to_string_pretty(&stored.proof)
         .map_err(|e| Fail::new(exit::FAILED, format!("cannot write the stored proof: {e}")))?
         + "\n";
-    fs::write(&proof_path, proof_text).map_err(|e| {
+    crate::util::write_atomic(&proof_path, proof_text.as_bytes()).map_err(|e| {
         Fail::new(
             exit::FAILED,
             format!("cannot write {}: {e}", proof_path.display()),
         )
     })?;
-    fs::write(&blob_path, &bytes).map_err(|e| {
+    crate::util::write_atomic(&blob_path, &bytes).map_err(|e| {
         Fail::new(
             exit::FAILED,
             format!("cannot write {}: {e}", blob_path.display()),
@@ -384,6 +385,7 @@ fn canonical(req: &Request<'_>) -> Result<(String, Vec<u8>), Fail> {
             "path": site_path.display().to_string(),
             "sha256": sha256_hex(&read_bytes(&site_path)?),
         },
+        "target": req.target,
     });
     let mut bytes = serde_json::to_vec_pretty(&record)
         .map_err(|e| Fail::new(exit::FAILED, format!("cannot encode the input record: {e}")))?;
@@ -763,7 +765,7 @@ fn find_easyblock(class: &str, index: &Index) -> Result<Option<ResolvedFile>, Fa
     let mut found = Vec::new();
     for paths in index.by_name.values() {
         for path in paths {
-            let text = fs::read_to_string(path).map_err(|e| {
+            let text = util::read_text_file(path).map_err(|e| {
                 Fail::new(
                     exit::REFUSED,
                     format!("cannot read {}: {e}", path.display()),
@@ -852,12 +854,20 @@ fn absolute(path: &Path) -> Result<PathBuf, Fail> {
 }
 
 fn read_bytes(path: &Path) -> Result<Vec<u8>, Fail> {
-    fs::read(path).map_err(|e| {
+    let mut file = util::open_regular_file(path).map_err(|e| {
         Fail::new(
             exit::REFUSED,
             format!("cannot read {}: {e}", path.display()),
         )
-    })
+    })?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(|e| {
+        Fail::new(
+            exit::REFUSED,
+            format!("cannot read {}: {e}", path.display()),
+        )
+    })?;
+    Ok(bytes)
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -937,6 +947,7 @@ impl Drop for RemoveDir {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::{easyblock_literal, find_easyblock, index_files, patch_literals, run};
     use crate::exit;

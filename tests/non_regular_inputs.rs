@@ -1,4 +1,5 @@
 //! Non-regular input paths are refused promptly across sibling binaries.
+#![allow(clippy::disallowed_methods)]
 
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
@@ -199,4 +200,35 @@ fn binaries_refuse_or_finish_promptly_for_fifo_and_directory_inputs() {
             assert!(output.status.code().is_some(), "{output:?}");
         }
     }
+}
+
+#[test]
+fn shard_weights_log_root_refuses_a_fifo_summary_promptly() {
+    let dir = tempfile::tempdir().unwrap();
+    let logs = dir.path().join("logs");
+    let run = logs.join("20261118_230000");
+    std::fs::create_dir_all(&run).unwrap();
+    let summary = run.join("summary.json");
+    make_fifo(&summary);
+
+    let output = wait_output_with_timeout(
+        Command::new(env!("CARGO_BIN_EXE_eb-shard-weights"))
+            .args(["--log-root"])
+            .arg(&logs)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+        "eb-shard-weights --log-root",
+    );
+
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert_eq!(output.stdout, b"");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        format!(
+            "eb-shard-weights: cannot read {}: not a regular file\n",
+            summary.display()
+        )
+    );
 }

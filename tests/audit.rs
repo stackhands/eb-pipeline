@@ -1,4 +1,5 @@
 //! `audit` shells out to eb-stack and copies its rebuild lists.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 
@@ -396,6 +397,30 @@ fn generated_cli_assets_include_the_audit_subcommand() {
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     let page = std::fs::read_to_string(man.join("eb-pipeline.1")).unwrap();
     assert!(page.contains("audit"), "{page}");
+}
+
+#[test]
+fn man_refuses_to_follow_a_preexisting_output_symlink() {
+    let dir = tempfile::tempdir().unwrap();
+    let victim = dir.path().join("victim.1");
+    std::fs::write(&victim, "sentinel\n").unwrap();
+    let man = dir.path().join("man");
+    std::fs::create_dir_all(&man).unwrap();
+    std::os::unix::fs::symlink(&victim, man.join("eb-pipeline.1")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"))
+        .args(["man", "--out-dir"])
+        .arg(&man)
+        .output()
+        .unwrap();
+
+    assert_ne!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("cannot write"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(std::fs::read_to_string(victim).unwrap(), "sentinel\n");
 }
 
 #[test]

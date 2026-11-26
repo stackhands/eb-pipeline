@@ -12,4 +12,5 @@ It explains only what the next step needs; [[file:../explanation/index.org][Expl
    :maxdepth: 1
 
    first-build-list
+   workstation-build
 #+end_export

@@ -17,6 +17,12 @@ pub struct Template {
 /// Every built-in template, by name.
 pub const TEMPLATES: &[Template] = &[
     Template {
+        name: "workstation",
+        summary:
+            "One machine, no scheduler: every phase runs on this host; no EESSI, quota or licences",
+        text: include_str!("../templates/workstation.toml"),
+    },
+    Template {
         name: "small-cluster",
         summary: "Slurm, one CPU target; no EESSI, inode quota or licences",
         text: include_str!("../templates/small-cluster.toml"),

@@ -11,6 +11,7 @@ Nothing about a site lives in eb-pipeline: the site file holds it, and the envir
 
 New here?
 [[file:tutorials/first-build-list.org][Run your first build list]] installs eb-pipeline on one Linux machine, runs a build list against a stand-in for EasyBuild, and ends with a result file, a log for each line, and a line that fails without stopping the run.
+[[file:tutorials/workstation-build.org][Build with EasyBuild on your own machine]] installs EasyBuild beside EESSI's Lmod, checks the machine with =check --probe-tools=, and builds and loads a module, with no cluster and no Slurm.
 
 | You want to                       | Read                                       |
 |-----------------------------------+--------------------------------------------|

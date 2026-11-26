@@ -2,13 +2,14 @@
 //! output of the driver before the feature. With it enabled, `plan` and
 //! `run` append a record through `eb-stack` and `rfc9162-sidecar`, and
 //! `verify` recomputes that record.
+#![allow(clippy::disallowed_methods)]
 
-#[path = "common/exec_stub.rs"]
-mod exec_stub;
+mod common;
 
-use exec_stub::CommandSyncExt;
+use common::output_within;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::time::Duration;
 
 const EB_STACK: &str = r#"#!/bin/sh
 printf '%s\n' "$*" >> "$STUB_DIR/ebstack.calls"
@@ -77,7 +78,7 @@ exit 2
 const EB: &str = "#!/bin/sh\nexit 0\n";
 
 fn write_exec(path: &Path, text: &str) {
-    exec_stub::write_exec(path, text);
+    common::write_exec(path, text);
 }
 
 fn bin() -> Command {
@@ -103,7 +104,7 @@ impl Tree {
         self.root.path()
     }
 
-    fn run(&self, args: &[&str], vars: &[(&str, &str)]) -> Output {
+    fn command(&self, args: &[&str], vars: &[(&str, &str)]) -> Command {
         let path = format!(
             "{}:{}",
             self.path().join("stubs").display(),
@@ -120,11 +121,18 @@ impl Tree {
             .env_remove("EB_PIPELINE_RUN_ID")
             .env_remove("EB_PIPELINE_LOG_STAMP")
             .env_remove("EB_IMAGE_DIGEST")
-            .env_remove("EB_ROUTE_RECEIPT");
+            .env_remove("EB_ROUTE_RECEIPT")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         for (k, v) in vars {
             cmd.env(k, v);
         }
-        cmd.sync_output()
+        cmd
+    }
+
+    fn run(&self, args: &[&str], vars: &[(&str, &str)]) -> Output {
+        self.command(args, vars).output().unwrap()
     }
 }
 
@@ -202,6 +210,66 @@ fn plan(tree: &Tree, vars: &[(&str, &str)]) -> Output {
 }
 
 #[test]
+fn plan_refuses_a_fifo_or_directory_easyconfig() {
+    for kind in ["fifo", "dir"] {
+        let tree = Tree::new();
+        let root = tree.path();
+        std::fs::create_dir_all(root.join("easyconfigs")).unwrap();
+        std::fs::create_dir_all(root.join("easyblocks")).unwrap();
+        std::fs::create_dir_all(root.join("patches")).unwrap();
+        std::fs::write(root.join("key.pem"), "not-a-key\n").unwrap();
+        std::fs::write(root.join("site.toml"), attest_site(root)).unwrap();
+        std::fs::write(root.join("list.txt"), "Foo-1.0.eb\n").unwrap();
+        let easyconfig = root.join(format!("resolved-{kind}"));
+        match kind {
+            "fifo" => common::make_fifo(&easyconfig),
+            "dir" => std::fs::create_dir(&easyconfig).unwrap(),
+            _ => unreachable!(),
+        }
+        let shown = easyconfig.display().to_string();
+        let output = output_within(
+            &mut tree.command(
+                &[
+                    "plan",
+                    "--site",
+                    root.join("site.toml").to_str().unwrap(),
+                    "--list",
+                    root.join("list.txt").to_str().unwrap(),
+                    "--target",
+                    "cpu",
+                    "--build-type",
+                    "production",
+                    "--run-id",
+                    "R",
+                    "--log-stamp",
+                    "20260101_000000",
+                ],
+                &[("STUB_EASYCONFIG", shown.as_str())],
+            ),
+            Duration::from_secs(5),
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(eb_pipeline::exit::REFUSED),
+            "{kind}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty(), "{kind}");
+        let err = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            err.contains(&format!("cannot read {shown}")),
+            "{kind}: {err}"
+        );
+        let expected = if kind == "fifo" {
+            "not a regular file"
+        } else {
+            "Is a directory"
+        };
+        assert!(err.contains(expected), "{kind}: {err}");
+    }
+}
+
+#[test]
 fn a_plan_without_attest_matches_the_output_from_before_the_feature() {
     let tree = Tree::new();
     std::fs::write(tree.path().join("site.toml"), bare_site(tree.path())).unwrap();
@@ -225,6 +293,44 @@ fn a_plan_without_attest_matches_the_output_from_before_the_feature() {
     assert_eq!(again.status.code(), Some(0));
     assert_eq!(String::from_utf8(again.stdout).unwrap(), text);
     assert!(!text.contains("input_attestation"));
+}
+
+#[test]
+fn signed_record_names_the_plan_target() {
+    let tree = Tree::new();
+    let root = tree.path();
+    std::fs::create_dir_all(root.join("easyconfigs")).unwrap();
+    std::fs::create_dir_all(root.join("easyblocks")).unwrap();
+    std::fs::create_dir_all(root.join("patches")).unwrap();
+    let easyconfig = root.join("easyconfigs/Foo-1.0.eb");
+    std::fs::write(&easyconfig, "name = 'Foo'\n").unwrap();
+    std::fs::write(root.join("key.pem"), "k\n").unwrap();
+    std::fs::write(root.join("site.toml"), attest_site(root)).unwrap();
+    std::fs::write(root.join("list.txt"), "Foo-1.0.eb\n").unwrap();
+    let easyconfig = easyconfig.display().to_string();
+
+    let output = plan(
+        &tree,
+        &[
+            ("STUB_EASYCONFIG", easyconfig.as_str()),
+            ("EB_IMAGE_DIGEST", "sha256:abc"),
+            ("EB_ROUTE_RECEIPT", "receipt-1"),
+        ],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let sha = document["input_attestation"]["record_sha256"]
+        .as_str()
+        .unwrap();
+    let record = root.join("log/inputs").join(format!("{sha}.json"));
+    let body: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(record).unwrap()).unwrap();
+    assert_eq!(body["target"], "cpu");
 }
 
 #[test]
@@ -484,6 +590,74 @@ fn an_enabled_plan_appends_a_record_and_verify_recomputes_it() {
         "{}",
         String::from_utf8_lossy(&rejected.stderr)
     );
+}
+
+#[test]
+fn the_list_variable_does_not_conflict_with_the_recorded_list() {
+    let tree = Tree::new();
+    let root = tree.path();
+    std::fs::create_dir_all(root.join("easyconfigs")).unwrap();
+    std::fs::create_dir_all(root.join("easyblocks")).unwrap();
+    std::fs::create_dir_all(root.join("patches")).unwrap();
+    let easyconfig = root.join("easyconfigs/Foo-1.0.eb");
+    std::fs::write(&easyconfig, "name = 'Foo'\neasyblock = 'EB_Foo'\n").unwrap();
+    std::fs::write(
+        root.join("easyblocks/eb_foo.py"),
+        "class EB_Foo(EasyBlock):\n    pass\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("key.pem"), "not-a-key\n").unwrap();
+    std::fs::write(root.join("site.toml"), attest_site(root)).unwrap();
+    std::fs::write(root.join("list.txt"), "Foo-1.0.eb\n").unwrap();
+    std::fs::write(root.join("other.txt"), "Bar-1.0.eb\n").unwrap();
+    let ec = easyconfig.display().to_string();
+    let stub = [
+        ("STUB_EASYCONFIG", ec.as_str()),
+        ("EB_IMAGE_DIGEST", "sha256:abc"),
+        ("EB_ROUTE_RECEIPT", "receipt-1"),
+    ];
+    let made = plan(&tree, &stub);
+    assert_eq!(
+        made.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    let plan_path = root.join("plan.json");
+    std::fs::write(&plan_path, &made.stdout).unwrap();
+
+    let site = root.join("site.toml");
+    let other = root.join("other.txt");
+    let verify = |extra: &[&str], vars: &[(&str, &str)]| {
+        let mut args = vec!["verify", "--site", site.to_str().unwrap()];
+        args.extend_from_slice(extra);
+        args.extend_from_slice(&[
+            "--target",
+            "cpu",
+            "--build-type",
+            "production",
+            "--from",
+            plan_path.to_str().unwrap(),
+        ]);
+        let mut all = stub.to_vec();
+        all.extend_from_slice(vars);
+        tree.run(&args, &all)
+    };
+
+    let recorded = verify(
+        &["--recorded-list"],
+        &[("EB_PIPELINE_LIST", other.to_str().unwrap())],
+    );
+    assert_eq!(
+        recorded.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&recorded.stderr)
+    );
+    assert!(String::from_utf8_lossy(&recorded.stdout).starts_with("verified input record "));
+
+    let typed = verify(&["--recorded-list", "--list", other.to_str().unwrap()], &[]);
+    assert_eq!(typed.status.code(), Some(2));
 }
 
 #[test]

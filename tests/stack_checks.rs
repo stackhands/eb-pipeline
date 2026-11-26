@@ -1,4 +1,5 @@
 //! Opt-in `check --stack-checks` delegation to an eb-stack subprocess.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 
@@ -114,6 +115,27 @@ fn no_stack_checks_preserves_plain_check_and_a_failure_fails_check() {
     assert!(
         err.contains("eb-stack checks failed: files, generation"),
         "{err}"
+    );
+}
+
+#[test]
+fn the_target_variable_alone_does_not_ask_for_stack_checks() {
+    let t = configured();
+    let site = t.site.display().to_string();
+    let inherited = eb_pipeline(
+        &t,
+        &["check", "--site", &site],
+        &[("EB_PIPELINE_TARGET", "cpu")],
+    );
+    assert_eq!(code(&inherited), 0, "{}", stderr(&inherited));
+    assert!(t.calls("ebstack").is_empty());
+
+    let typed = eb_pipeline(&t, &["check", "--site", &site, "--target", "cpu"], &[]);
+    assert_eq!(code(&typed), 2, "{}", stderr(&typed));
+    assert!(
+        stderr(&typed).contains("requires '--stack-checks"),
+        "{}",
+        stderr(&typed)
     );
 }
 

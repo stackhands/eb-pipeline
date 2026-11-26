@@ -1,18 +1,16 @@
 //! `run` against stub tool binaries written into a temporary directory.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 
-use common::CommandSyncExt;
+use common::{hold_lock, kill_and_reap, write_exec};
 use serde_json::Value;
 use std::io::Write;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
-
-static SPAWN: Mutex<()> = Mutex::new(());
 
 fn write_skip_notice(reason: &str) {
     let mut stderr = std::io::stderr().lock();
@@ -116,9 +114,13 @@ if [ -n "${STUB_EB_DELAY:-}" ]; then sleep "$STUB_EB_DELAY"; fi
 if [ -n "${STUB_EB_SLEEP:-}" ]; then
   echo started > "$D/started"
   trap 'echo term > "$D/termed"; kill $pid 2>/dev/null; exit 0' TERM
-  sleep 30 &
-  pid=$!
-  wait $pid
+  i=0
+  while [ -d "$D" ] && [ $i -lt 300 ]; do
+    sleep 0.1 &
+    pid=$!
+    wait $pid
+    i=$((i + 1))
+  done
   exit 0
 fi
 case ",${STUB_EB_FAIL:-}," in *",$stem,"*) echo "ERROR: $stem failed"; exit 1;; esac
@@ -209,11 +211,6 @@ struct Env {
     dir: tempfile::TempDir,
     site: PathBuf,
     stubs: PathBuf,
-}
-
-fn write_exec(path: &Path, text: &str) {
-    let _g = SPAWN.lock().unwrap();
-    common::write_exec(path, text);
 }
 
 fn setup(extra_site: &str) -> Env {
@@ -354,8 +351,7 @@ fn driver_named(
             c.env(k, v);
         }
     }
-    let _g = SPAWN.lock().unwrap();
-    c.sync_spawn()
+    c.spawn().unwrap()
 }
 
 fn finish(env: &Env, child: std::process::Child) -> Out {
@@ -1082,32 +1078,6 @@ fn a_reservation_another_writer_rewrote_is_kept() {
     }
 }
 
-/// Take the admission lock in this process, as another controller would.
-fn hold_lock(path: &Path, posix: bool) -> std::fs::File {
-    use std::os::fd::AsRawFd;
-    let f = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(path)
-        .unwrap();
-    // SAFETY: the descriptor is open, and a zeroed `libc::flock` is a valid
-    // value of that plain C struct.
-    let rc = unsafe {
-        if posix {
-            let mut l: libc::flock = std::mem::zeroed();
-            l.l_type = libc::F_WRLCK as _;
-            l.l_whence = libc::SEEK_SET as _;
-            libc::fcntl(f.as_raw_fd(), libc::F_SETLK, &raw const l)
-        } else {
-            libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB)
-        }
-    };
-    assert_eq!(rc, 0, "{}", std::io::Error::last_os_error());
-    f
-}
-
 #[test]
 fn the_release_waits_for_the_admission_lock() {
     for kind in ["flock", "posix"] {
@@ -1115,12 +1085,28 @@ fn the_release_waits_for_the_admission_lock() {
         let held = reservations_here(&env, kind);
         let lock = hold_lock(&env.dir.path().join("admission.lock"), kind == "posix");
         let mut child = driver(&env, LIST, &[], &[]);
-        std::thread::sleep(Duration::from_millis(700));
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !held.exists() {
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "{kind}: the run ended before the reservation appeared"
+            );
+            let late = Instant::now() >= deadline;
+            if late {
+                kill_and_reap(&mut child);
+            }
+            assert!(!late, "{kind}: reservation never appeared");
+            std::thread::sleep(Duration::from_millis(20));
+        }
         assert!(
             child.try_wait().unwrap().is_none(),
             "{kind}: the run ended while the lock was held"
         );
-        assert!(held.exists(), "{kind}");
+        let reserved = held.exists();
+        if !reserved {
+            kill_and_reap(&mut child);
+        }
+        assert!(reserved, "{kind}");
         drop(lock);
         let o = finish(&env, child);
         assert_eq!(o.code, 0, "{kind}: {}", o.stderr);
@@ -1580,7 +1566,11 @@ fn sigterm_is_forwarded_and_exit_is_143() {
     let started = env.dir.path().join("started");
     let t0 = Instant::now();
     while !started.exists() {
-        assert!(t0.elapsed() < Duration::from_secs(20), "stub never started");
+        let late = t0.elapsed() >= Duration::from_secs(20);
+        if late {
+            kill_and_reap(&mut child);
+        }
+        assert!(!late, "stub never started");
         std::thread::sleep(Duration::from_millis(20));
     }
     // SAFETY: the pid is the driver child this test started.
@@ -1592,10 +1582,11 @@ fn sigterm_is_forwarded_and_exit_is_143() {
         if let Some(s) = child.try_wait().unwrap() {
             break s;
         }
-        assert!(
-            t0.elapsed() < Duration::from_secs(20),
-            "driver did not exit"
-        );
+        let late = t0.elapsed() >= Duration::from_secs(20);
+        if late {
+            kill_and_reap(&mut child);
+        }
+        assert!(!late, "driver did not exit");
         std::thread::sleep(Duration::from_millis(20));
     };
     assert_eq!(status.code(), Some(143));
@@ -1617,11 +1608,15 @@ fn sigterm_is_forwarded_and_exit_is_143() {
 fn a_result_that_cannot_be_written_does_not_replace_the_signal_exit() {
     let env = setup("");
     std::fs::create_dir(env.dir.path().join("result.json")).unwrap();
-    let child = driver(&env, LIST, &[("STUB_EB_SLEEP", "1")], &[]);
+    let mut child = driver(&env, LIST, &[("STUB_EB_SLEEP", "1")], &[]);
     let started = env.dir.path().join("started");
     let t0 = Instant::now();
     while !started.exists() {
-        assert!(t0.elapsed() < Duration::from_secs(20), "stub never started");
+        let late = t0.elapsed() >= Duration::from_secs(20);
+        if late {
+            kill_and_reap(&mut child);
+        }
+        assert!(!late, "stub never started");
         std::thread::sleep(Duration::from_millis(20));
     }
     // SAFETY: the pid is the driver child this test started.
@@ -1649,7 +1644,11 @@ fn sigterm_during_source_prefetch_records_every_line() {
     let started = env.dir.path().join("started");
     let t0 = Instant::now();
     while !started.exists() {
-        assert!(t0.elapsed() < Duration::from_secs(20), "stub never started");
+        let late = t0.elapsed() >= Duration::from_secs(20);
+        if late {
+            kill_and_reap(&mut child);
+        }
+        assert!(!late, "stub never started");
         std::thread::sleep(Duration::from_millis(20));
     }
     // SAFETY: the pid is the driver child this test started.
@@ -1679,17 +1678,24 @@ fn sigterm_reaches_descendants_of_the_running_command() {
         r#"#!/bin/sh
 trap 'echo term > "$STUB_DIR/descendant.termed"; exit 0' TERM
 echo ready > "$STUB_DIR/descendant.ready"
-while :; do sleep 1; done
+i=0
+while [ -d "$STUB_DIR" ] && [ $i -lt 300 ]; do
+  sleep 0.1 &
+  pid=$!
+  wait $pid
+  i=$((i + 1))
+done
 "#,
     );
     let mut child = driver(&env, LIST, &[("STUB_EB_DESCENDANT", "1")], &[]);
     let ready = env.dir.path().join("descendant.ready");
     let t0 = Instant::now();
     while !ready.exists() {
-        assert!(
-            t0.elapsed() < Duration::from_secs(20),
-            "descendant never started"
-        );
+        let late = t0.elapsed() >= Duration::from_secs(20);
+        if late {
+            kill_and_reap(&mut child);
+        }
+        assert!(!late, "descendant never started");
         std::thread::sleep(Duration::from_millis(20));
     }
 
@@ -1702,10 +1708,11 @@ while :; do sleep 1; done
         if let Some(s) = child.try_wait().unwrap() {
             break s;
         }
-        assert!(
-            t0.elapsed() < Duration::from_secs(20),
-            "driver did not exit"
-        );
+        let late = t0.elapsed() >= Duration::from_secs(20);
+        if late {
+            kill_and_reap(&mut child);
+        }
+        assert!(!late, "driver did not exit");
         std::thread::sleep(Duration::from_millis(20));
     };
     assert_eq!(status.code(), Some(143));
@@ -2282,8 +2289,7 @@ fn a_run_skips_its_rotation_while_another_run_holds_the_log_root() {
     let r = env.dir.path().display().to_string();
     let lock = format!("{r}/logs/.eb-pipeline-rotate.lock");
     std::fs::create_dir(env.dir.path().join("logs")).unwrap();
-    let live = std::fs::File::create(&lock).unwrap();
-    live.try_lock_shared().unwrap();
+    let live = common::LockHolder::shared(Path::new(&lock));
     let o = go(&env, LIST, &[]);
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert!(rotations(&env).is_empty());
@@ -2301,7 +2307,7 @@ fn a_run_skips_its_rotation_while_another_run_holds_the_log_root() {
     );
     assert!(calls(&env, "keeplogs.help").is_empty());
 
-    drop(live);
+    live.release();
     let o = go(&env, LIST, &[]);
     assert_eq!(o.code, 0, "{}", o.stderr);
     let logs = result_phase(o.result.as_ref().unwrap(), "logs");
@@ -2323,10 +2329,32 @@ fn a_run_waits_to_start_while_another_run_rotates() {
     let lock = format!("{r}/logs/.eb-pipeline-rotate.lock");
     std::fs::create_dir(env.dir.path().join("logs")).unwrap();
     let rotating = hold_lock(Path::new(&lock), false);
+    let lock_path = std::fs::canonicalize(&lock).unwrap();
     let mut child = driver(&env, LIST, &[], &[]);
-    std::thread::sleep(Duration::from_millis(1500));
+    let fds = format!("/proc/{}/fd", child.id());
+    let opened = || {
+        std::fs::read_dir(&fds)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|e| std::fs::read_link(e.path()).is_ok_and(|l| l == lock_path))
+    };
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !opened() {
+        assert!(child.try_wait().unwrap().is_none(), "the run ended");
+        let late = Instant::now() >= deadline;
+        if late {
+            kill_and_reap(&mut child);
+        }
+        assert!(!late, "the rotation lock never opened");
+        std::thread::sleep(Duration::from_millis(20));
+    }
     assert!(child.try_wait().unwrap().is_none(), "the run ended");
-    assert!(calls(&env, "eb.calls").is_empty(), "a line started");
+    let idle = calls(&env, "eb.calls").is_empty();
+    if !idle {
+        kill_and_reap(&mut child);
+    }
+    assert!(idle, "a line started");
     drop(rotating);
     let o = finish(&env, child);
     assert_eq!(o.code, 0, "{}", o.stderr);
@@ -2360,10 +2388,11 @@ fn a_signal_stops_a_run_that_waits_for_a_rotation() {
     let t0 = Instant::now();
     while !opened() {
         assert!(child.try_wait().unwrap().is_none(), "the run ended");
-        assert!(
-            t0.elapsed() < Duration::from_secs(20),
-            "the lock never opened"
-        );
+        let late = t0.elapsed() >= Duration::from_secs(20);
+        if late {
+            kill_and_reap(&mut child);
+        }
+        assert!(!late, "the lock never opened");
         std::thread::sleep(Duration::from_millis(20));
     }
     // SAFETY: the pid is the driver child this test started.
@@ -2410,12 +2439,13 @@ fn a_signal_while_waiting_for_the_summary_lock_preserves_signal_exit() {
         let wchan = std::fs::read_to_string(format!("/proc/{child_pid}/wchan"));
         let stack = std::fs::read_to_string(format!("/proc/{child_pid}/stack"));
         let wchan_text = wchan.as_deref().map(str::trim).unwrap_or_default();
-        if wchan_text.contains("lock")
-            || wchan_text.contains("flock")
-            || stack
-                .as_deref()
-                .is_ok_and(|text| text.contains("lock") || text.contains("flock"))
-        {
+        let shows_lock_wait = |text: &str| {
+            text.contains("flock")
+                || text.contains("lock_inode")
+                || text.contains("locks_lock")
+                || text.contains("posix_lock")
+        };
+        if shows_lock_wait(wchan_text) || stack.as_deref().is_ok_and(shows_lock_wait) {
             return LockWaitProbe::WaitingOnLock;
         }
         let wchan_observable =
@@ -2430,11 +2460,22 @@ fn a_signal_while_waiting_for_the_summary_lock_preserves_signal_exit() {
     };
     let t0 = Instant::now();
     let mut unobservable_since = None;
+    let mut waiting_since = None;
     loop {
         match waiting_on_summary_lock() {
-            LockWaitProbe::WaitingOnLock => break,
-            LockWaitProbe::NotYet => unobservable_since = None,
+            LockWaitProbe::WaitingOnLock => {
+                let since = *waiting_since.get_or_insert_with(Instant::now);
+                if since.elapsed() >= Duration::from_millis(200) {
+                    break;
+                }
+                unobservable_since = None;
+            }
+            LockWaitProbe::NotYet => {
+                unobservable_since = None;
+                waiting_since = None;
+            }
             LockWaitProbe::Unobservable(reason) => {
+                waiting_since = None;
                 let since = *unobservable_since.get_or_insert_with(Instant::now);
                 if since.elapsed() >= Duration::from_secs(2) {
                     // SAFETY: the pid is the driver child this test started.
@@ -2451,8 +2492,12 @@ fn a_signal_while_waiting_for_the_summary_lock_preserves_signal_exit() {
             }
         }
         assert!(child.try_wait().unwrap().is_none(), "the run ended");
+        let late = t0.elapsed() >= Duration::from_secs(20);
+        if late {
+            kill_and_reap(&mut child);
+        }
         assert!(
-            t0.elapsed() < Duration::from_secs(20),
+            !late,
             "the run never reached a flock wait on the summary lock"
         );
         std::thread::yield_now();
@@ -2467,6 +2512,24 @@ fn a_signal_while_waiting_for_the_summary_lock_preserves_signal_exit() {
     let r = o.result.unwrap();
     assert_eq!(r["interrupted_by"], "SIGTERM", "{r}");
     assert_eq!(r["exit_code"], 143, "{r}");
+    let summary_path = env.dir.path().join("logs/20260101_000000/summary.json");
+    let start = Instant::now();
+    while !summary_path.is_file() {
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "{} was not written",
+            summary_path.display()
+        );
+        std::thread::yield_now();
+    }
+    let summary: Value = serde_json::from_str(&std::fs::read_to_string(&summary_path).unwrap())
+        .unwrap_or_else(|e| panic!("{}: {e}", summary_path.display()));
+    let target = summary["targets"]
+        .as_array()
+        .and_then(|targets| targets.iter().find(|target| target["name"] == "cpu"))
+        .unwrap_or_else(|| panic!("no cpu target in {summary_path:?}"));
+    assert_eq!(target["interrupted_by"], "SIGTERM", "{target}");
+    assert_eq!(target["exit_code"], 143, "{target}");
 }
 
 /// eb-keep-logs rewrites a `.licensed-logs` from what it read before, so
@@ -2488,7 +2551,7 @@ D="${STUB_DIR:?}"
 echo "$*" >> "$D/eb.calls"
 echo "$EB_PIPELINE_TARGET" >> "$D/eb.targets"
 i=0
-while [ "$(sort -u "$D/eb.targets" | wc -l)" -lt 2 ] && [ $i -lt 200 ]; do sleep 0.1; i=$((i + 1)); done
+while [ -d "$D" ] && [ "$(sort -u "$D/eb.targets" | wc -l)" -lt 2 ] && [ $i -lt 200 ]; do sleep 0.1; i=$((i + 1)); done
 exit 0
 "#,
     );
@@ -2498,9 +2561,20 @@ exit 0
             r#"D="${STUB_DIR:?}"
 [ -e "$D/rotating" ] && echo "$EB_PIPELINE_TARGET" >> "$D/keeplogs.overlap"
 : > "$D/rotating"
+me="$D/keeplogs.inflight.$EB_PIPELINE_TARGET"
+: > "$me"
 echo "$*" >> "$D/keeplogs.calls"
-sleep 0.5
-rm -f "$D/rotating"
+case "$EB_PIPELINE_TARGET" in cpu) other=gpu;; *) other=cpu;; esac
+reason=timeout
+i=0
+while [ $i -lt 1000 ] && [ -d "$D" ]; do
+  if [ -e "$D/keeplogs.inflight.$other" ]; then reason=overlap; break; fi
+  if [ -e "$D/result-$other.json" ]; then reason=sibling-finished; break; fi
+  sleep 0.01
+  i=$((i + 1))
+done
+echo "$EB_PIPELINE_TARGET $reason $i" >> "$D/keeplogs.wait"
+rm -f "$D/rotating" "$me"
 "#,
         ),
     );
@@ -2533,13 +2607,16 @@ rm -f "$D/rotating"
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
-            let _g = SPAWN.lock().unwrap();
-            (t, c.sync_spawn())
+            (t, c.spawn().unwrap())
         })
         .collect();
+    let outputs: Vec<_> = kids
+        .into_iter()
+        .map(|(t, kid)| (t, kid.wait_with_output()))
+        .collect();
     let mut status = Vec::new();
-    for (t, kid) in kids {
-        let o = kid.wait_with_output().unwrap();
+    for (t, o) in outputs {
+        let o = o.unwrap();
         let stderr = String::from_utf8_lossy(&o.stderr);
         assert_eq!(o.status.code(), Some(0), "{t}: {stderr}");
         let text = std::fs::read_to_string(root.join(format!("result-{t}.json"))).unwrap();
@@ -2555,6 +2632,15 @@ rm -f "$D/rotating"
     assert_eq!(status, ["ok", "skipped"]);
     assert_eq!(rotations(&env).len(), 1, "{:?}", rotations(&env));
     assert!(calls(&env, "keeplogs.overlap").is_empty());
+    let waits = calls(&env, "keeplogs.wait");
+    assert!(
+        !waits.is_empty(),
+        "the rotation never waited for its sibling"
+    );
+    assert!(
+        waits.iter().all(|wait| !wait.contains(" timeout ")),
+        "the rotation timed out instead of observing its sibling: {waits:?}"
+    );
 }
 
 /// An eb-keep-logs `rotate` that exits with `STUB_ROTATE_EXIT`, saying what
@@ -2643,7 +2729,7 @@ fn a_run_leaves_its_rotation_at_once_to_a_rotate_that_holds_the_tree() {
     let t0 = Instant::now();
     while child.try_wait().unwrap().is_none() {
         if t0.elapsed() > Duration::from_secs(30) {
-            child.kill().unwrap();
+            kill_and_reap(&mut child);
             panic!("the run still waits for {r}/logs/.eb-keep-logs-rotate.lock");
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -3012,7 +3098,7 @@ fn with_job_dirs(env: &Env) -> PathBuf {
 fn each_job_builds_in_its_own_directory() {
     let env = setup("");
     let local = with_job_dirs(&env);
-    let user = Command::new("id").arg("-un").sync_output().stdout;
+    let user = Command::new("id").arg("-un").output().unwrap().stdout;
     let user = String::from_utf8(user).unwrap();
     // The job's user, else the user the job runs as.
     for (stem, job_user, owner) in [
@@ -3252,10 +3338,7 @@ fn a_command_that_runs_eb_pipeline_reads_the_site_file_of_the_run() {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let child = {
-        let _g = SPAWN.lock().unwrap();
-        c.sync_spawn()
-    };
+    let child = c.spawn().unwrap();
     let o = child.wait_with_output().unwrap();
     assert_eq!(
         o.status.code(),
@@ -3361,7 +3444,8 @@ echo "$*" >> "$D/check.calls"
 env | grep '^EB_PIPELINE_CHECK_' | sort > "$D/check.env"
 if [ -n "${STUB_CHECK_SLEEP:-}" ]; then
   echo started > "$D/check.started"
-  sleep 30
+  i=0
+  while [ -d "$D" ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
 fi
 exit "${STUB_CHECK_CODE:-0}"
 "#;
@@ -3457,10 +3541,11 @@ fn sigterm_during_the_check_command_records_the_phase_once() {
     let started = env.dir.path().join("check.started");
     let t0 = Instant::now();
     while !started.exists() {
-        assert!(
-            t0.elapsed() < Duration::from_secs(20),
-            "check never started"
-        );
+        let late = t0.elapsed() >= Duration::from_secs(20);
+        if late {
+            kill_and_reap(&mut child);
+        }
+        assert!(!late, "check never started");
         std::thread::sleep(Duration::from_millis(20));
     }
     // SAFETY: the pid is the driver child this test started.

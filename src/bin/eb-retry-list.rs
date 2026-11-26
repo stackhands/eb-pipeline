@@ -6,6 +6,7 @@
 use eb_pipeline::classify;
 use eb_pipeline::easystack;
 use eb_pipeline::exit;
+use eb_pipeline::run;
 use eb_pipeline::util::{self, ListLine};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -58,7 +59,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(msg) => {
-            eprintln!("eb-retry-list: {msg}");
+            run::log_line(&format!("eb-retry-list: {msg}"));
             ExitCode::from(2)
         }
     }
@@ -125,8 +126,7 @@ fn run() -> Result<ExitCode, String> {
                 .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
         }
         _ => {
-            util::write_stdout(text.as_bytes())
-                .map_err(|e| format!("cannot write retry list: {e}"))?;
+            util::write_stdout_checked(text.as_bytes())?;
         }
     }
     if args.require_lines && selected.is_empty() {
@@ -250,14 +250,12 @@ fn parse(words: impl Iterator<Item = OsString>) -> Result<Args, String> {
         let word = util::os_to_string(word)?;
         match word.as_str() {
             "-h" | "--help" => {
-                util::write_stdout(include_str!("eb-retry-list-help.txt").as_bytes())
-                    .map_err(|error| format!("cannot write help: {error}"))?;
+                util::write_stdout_checked(include_str!("eb-retry-list-help.txt").as_bytes())?;
                 std::process::exit(0);
             }
             "-V" | "--version" => {
                 let version = format!("eb-retry-list {}\n", env!("CARGO_PKG_VERSION"));
-                util::write_stdout(version.as_bytes())
-                    .map_err(|error| format!("cannot write version: {error}"))?;
+                util::write_stdout_checked(version.as_bytes())?;
                 std::process::exit(0);
             }
             "--classify" => parsed.classify = true,
@@ -750,7 +748,7 @@ fn filter_oom(
         }
     }
     for hit in &hits {
-        eprintln!("eb-retry-list: {}", hit.line);
+        run::log_line(&format!("eb-retry-list: {}", hit.line));
     }
     Ok(lines
         .into_iter()
@@ -782,7 +780,8 @@ fn write_easystack(path: &Path, lines: &[RetryLine]) -> Result<(), String> {
     );
     let value = serde_yaml::Value::Mapping(document);
     let text = serde_yaml::to_string(&value).map_err(|e| format!("cannot make easystack: {e}"))?;
-    fs::write(path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))
+    util::write_atomic(path, text.as_bytes())
+        .map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
 fn easystack_entry(name: &str, args: &[String]) -> Result<serde_yaml::Value, String> {
@@ -925,6 +924,7 @@ fn basename(path: &str) -> &str {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 
@@ -1062,6 +1062,26 @@ oom=2 fits=1 builds=3 nodes=1
                 "--try-amend=toolchain=foss,2025a"
             ]
         );
+    }
+
+    #[test]
+    fn write_easystack_refuses_a_symlink_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim.yaml");
+        std::fs::write(&victim, "sentinel\n").unwrap();
+        let out = dir.path().join("retry.yaml");
+        std::os::unix::fs::symlink(&victim, &out).unwrap();
+        let lines = vec![RetryLine {
+            raw: "Big-1.0.eb".into(),
+            easyconfig: "Big-1.0.eb".into(),
+            args: Vec::new(),
+            log: None,
+        }];
+
+        let error = write_easystack(&out, &lines).unwrap_err();
+
+        assert!(error.contains("cannot write"), "{error}");
+        assert_eq!(std::fs::read_to_string(victim).unwrap(), "sentinel\n");
     }
 
     fn outcome(status: &str) -> Outcome {
