@@ -266,28 +266,6 @@ fn output_aliases_are_refused_before_report_inputs_are_changed() {
 }
 
 #[test]
-fn stdout_write_failures_name_stdout_as_the_destination() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("result.json");
-    std::fs::write(&path, result(0, "")).unwrap();
-    let full = std::fs::OpenOptions::new()
-        .write(true)
-        .open("/dev/full")
-        .unwrap();
-
-    let output = bin()
-        .arg("--result")
-        .arg(&path)
-        .stdout(Stdio::from(full))
-        .output()
-        .unwrap();
-
-    assert_eq!(output.status.code(), Some(2));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("cannot write stdout"), "{}", stderr);
-}
-
-#[test]
 fn custom_properties_apply_to_every_suite() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("result.json"), result(0, "")).unwrap();

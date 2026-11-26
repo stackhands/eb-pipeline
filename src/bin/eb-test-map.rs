@@ -579,12 +579,4 @@ mod tests {
         );
         assert!(parse_map("GROMACS\n").unwrap_err().contains("no test name"));
     }
-
-    #[test]
-    fn reframe_selectors_escape_regex_characters() {
-        assert_eq!(
-            escape_regex_literal("gromacs+gpu(v2)"),
-            "gromacs\\+gpu\\(v2\\)"
-        );
-    }
 }

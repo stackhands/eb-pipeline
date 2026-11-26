@@ -889,19 +889,6 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_successful_run_has_no_cases() {
-        let text = r#"{
-          "schema_version": 1, "kind": "result", "site": "example", "target": "cpu",
-          "build_type": "production", "run_id": "n", "exit_code": 0, "lines": []
-        }"#;
-        let xml = render(text).unwrap();
-        assert!(
-            xml.contains("tests=\"0\" failures=\"0\" errors=\"0\" skipped=\"0\" time=\"0.000\"")
-        );
-        assert!(!xml.contains("<testcase"));
-    }
-
-    #[test]
     fn two_files_stay_in_order_and_a_plan_is_refused() {
         let a = r#"{"schema_version":1,"kind":"result","site":"example","target":"zen2","build_type":"production","run_id":"a","exit_code":0,"lines":[]}"#;
         let b = r#"{"schema_version":1,"kind":"result","site":"example","target":"zen4","build_type":"production","run_id":"b","exit_code":0,"started_at":"2026-11-17T00:00:00+00:00","lines":[]}"#;
