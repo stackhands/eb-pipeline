@@ -7,6 +7,7 @@ mod common;
 
 use common::*;
 use serde_json::Value;
+use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
@@ -212,6 +213,37 @@ fn a_signal_while_watch_waits_for_the_summary_lock_preserves_signal_exit() {
     let result: Value = serde_json::from_str(&std::fs::read_to_string(&result).unwrap()).unwrap();
     assert_eq!(result["interrupted_by"], "SIGTERM", "{result}");
     assert_eq!(result["exit_code"], 143, "{result}");
+}
+
+#[test]
+fn an_unwritable_run_summary_still_writes_the_result() {
+    let t = built("");
+    change(&t);
+    let run_dir = t.run_dir(LATER);
+    let log_dir = run_dir.join("cpu");
+    std::fs::create_dir_all(&log_dir).unwrap();
+    // The summary lock is a file this directory already holds. With the
+    // directory unwritable, the summary file is what cannot be created.
+    std::fs::write(run_dir.join(".summary.lock"), "").unwrap();
+    std::fs::set_permissions(&run_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let result = t.root().join("watch-result.json");
+    let result_arg = result.display().to_string();
+    let vars = eessi_vars(&t, "2023.06");
+    let output = watch(&t, LATER, &["--result", &result_arg], &with(&vars));
+    std::fs::set_permissions(&run_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let err = stderr(&output);
+    assert_eq!(code(&output), 1, "{err}");
+    assert!(err.contains("cannot write run summary:"), "{err}");
+    let summary = run_dir.join("summary.json");
+    assert!(err.contains(&summary.display().to_string()), "{err}");
+    assert!(!summary.exists());
+    let text =
+        std::fs::read_to_string(&result).unwrap_or_else(|error| panic!("{result:?}: {error}"));
+    let written: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(written["kind"], "result", "{written}");
+    assert_eq!(written["target"], "cpu", "{written}");
+    assert_eq!(written["exit_code"], 0, "{written}");
 }
 
 const LATER: &str = "20260102_000000";
