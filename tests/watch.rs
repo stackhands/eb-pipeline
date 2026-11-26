@@ -7,7 +7,6 @@ mod common;
 
 use common::*;
 use serde_json::Value;
-use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
@@ -222,22 +221,19 @@ fn an_unwritable_run_summary_still_writes_the_result() {
     let run_dir = t.run_dir(LATER);
     let log_dir = run_dir.join("cpu");
     std::fs::create_dir_all(&log_dir).unwrap();
-    // The summary lock is a file this directory already holds. With the
-    // directory unwritable, the summary file is what cannot be created.
-    std::fs::write(run_dir.join(".summary.lock"), "").unwrap();
-    std::fs::set_permissions(&run_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    // A directory at the summary path fails the write for every user.
+    let summary = run_dir.join("summary.json");
+    std::fs::create_dir_all(&summary).unwrap();
     let result = t.root().join("watch-result.json");
     let result_arg = result.display().to_string();
     let vars = eessi_vars(&t, "2023.06");
     let output = watch(&t, LATER, &["--result", &result_arg], &with(&vars));
-    std::fs::set_permissions(&run_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     let err = stderr(&output);
     assert_eq!(code(&output), 1, "{err}");
     assert!(err.contains("cannot write run summary:"), "{err}");
-    let summary = run_dir.join("summary.json");
     assert!(err.contains(&summary.display().to_string()), "{err}");
-    assert!(!summary.exists());
+    assert!(summary.is_dir());
     let text =
         std::fs::read_to_string(&result).unwrap_or_else(|error| panic!("{result:?}: {error}"));
     let written: Value = serde_json::from_str(&text).unwrap();
@@ -1272,14 +1268,17 @@ fn watch_does_not_drop_an_install_recorded_while_it_rebuilds() {
 
     let real_eb = t.stubs.join("eb-real");
     std::fs::rename(t.stubs.join("eb"), &real_eb).unwrap();
+    let ready = ReadyFifo::open(&t.root().join("watch.ready.fifo"));
+    let release = t.root().join("watch-continue");
+    make_fifo(&release);
     write_exec(
         &t.stubs.join("eb"),
         &format!(
             r#"#!/bin/sh
 case " $* " in
   *" Foo-1.0-GCCcore-13.2.0.eb "*)
-    : > "$STUB_DIR/watch-paused"
-    while [ ! -e "$STUB_DIR/watch-continue" ] && [ -d "$STUB_DIR" ]; do sleep 0.01; done
+    printf x > "$STUB_READY_FIFO"
+    read _ < "$STUB_DIR/watch-continue"
     ;;
 esac
 exec "{}" "$@"
@@ -1309,6 +1308,7 @@ exec "{}" "$@"
         ])
         .env("PATH", path)
         .env("STUB_DIR", t.root())
+        .env("STUB_READY_FIFO", ready.path())
         .env_remove("EB_PIPELINE_LOG_STAMP")
         .env_remove("EB_PIPELINE_RUN_ID")
         .stdin(Stdio::null())
@@ -1317,39 +1317,29 @@ exec "{}" "$@"
     for (key, value) in &vars {
         command.env(key, value);
     }
-    let mut child = command.spawn().unwrap();
-    let paused = t.root().join("watch-paused");
-    for _ in 0..1000 {
-        if paused.is_file() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    let reached = paused.is_file();
-    let rerun = reached.then(|| {
-        run(
-            &t,
-            "cpu",
-            "20260103_000003",
-            "Bar-2.0-GCCcore-13.2.0.eb\n",
-            &with(&vars),
-        )
-    });
+    let child = command.spawn().unwrap();
+    ready.wait();
+    let rerun = run(
+        &t,
+        "cpu",
+        "20260103_000003",
+        "Bar-2.0-GCCcore-13.2.0.eb\n",
+        &with(&vars),
+    );
     let recorded = std::fs::read_to_string(t.root().join("install/.eb-pipeline-watch/cpu.json"));
 
-    // The stub eb runs in a process group of its own, out of reach of a kill
-    // of watch, and waits until watch-continue exists or STUB_DIR is gone.
-    let released = std::fs::write(t.root().join("watch-continue"), "");
-    if !reached || released.is_err() {
-        let _ = child.kill();
+    // The stub blocks in `read` until this test writes the continue pipe.
+    {
+        let mut release_file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&release)
+            .unwrap();
+        std::io::Write::write_all(&mut release_file, b"x\n").unwrap();
     }
     let output = child.wait_with_output().unwrap();
-    assert!(reached, "watch did not reach the paused rebuild");
-    let rerun = rerun.unwrap();
     assert_eq!(code(&rerun), 0, "{}", stderr(&rerun));
     let recorded: Value = serde_json::from_str(&recorded.unwrap()).unwrap();
     assert!(recorded["installs"].get("Bar/2.0-GCCcore-13.2.0").is_some());
-    released.unwrap();
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(t.watch_state("cpu")["installs"]
         .get("Bar/2.0-GCCcore-13.2.0")

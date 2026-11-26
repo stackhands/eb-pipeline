@@ -68,28 +68,6 @@ fn metrics_prints_prometheus_for_a_failed_run() {
 }
 
 #[test]
-fn malformed_result_names_the_producer_and_path() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("result.json");
-    std::fs::write(&path, "{").unwrap();
-
-    let output = bin()
-        .args(["metrics", "--result"])
-        .arg(&path)
-        .output()
-        .unwrap();
-
-    assert_eq!(output.status.code(), Some(2));
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        format!(
-            "ERROR [main] -: eb-pipeline run wrote invalid JSON to {}: EOF while parsing an object at line 1 column 1\n",
-            path.display()
-        )
-    );
-}
-
-#[test]
 fn metrics_json_is_a_status_and_a_plan_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("result.json");

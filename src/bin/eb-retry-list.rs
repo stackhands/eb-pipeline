@@ -1028,40 +1028,31 @@ oom=2 fits=1 builds=3 nodes=1
 
     #[test]
     fn generated_easystacks_keep_short_easybuild_options() {
-        let entry = easystack_entry("Big-1.0.eb", &["-f".into()]).unwrap();
-        let document = serde_yaml::Value::Mapping(serde_yaml::Mapping::from_iter([(
-            serde_yaml::Value::String("easyconfigs".into()),
-            serde_yaml::Value::Sequence(vec![entry]),
-        )]));
-        let text = serde_yaml::to_string(&document).unwrap();
-        let lines = easystack::parse(&text).unwrap();
-        assert_eq!(lines[0].args, ["-f"]);
-    }
-
-    #[test]
-    fn generated_easystacks_keep_repeated_amend_options() {
-        let entry = easystack_entry(
-            "Big-1.0.eb",
-            &[
-                "--try-amend=versionsuffix=-a".into(),
-                "--try-amend".into(),
-                "toolchain=foss,2025a".into(),
-            ],
-        )
-        .unwrap();
-        let document = serde_yaml::Value::Mapping(serde_yaml::Mapping::from_iter([(
-            serde_yaml::Value::String("easyconfigs".into()),
-            serde_yaml::Value::Sequence(vec![entry]),
-        )]));
-        let text = serde_yaml::to_string(&document).unwrap();
-        let lines = easystack::parse(&text).unwrap();
-        assert_eq!(
-            lines[0].args,
-            [
-                "--try-amend=versionsuffix=-a",
-                "--try-amend=toolchain=foss,2025a"
-            ]
-        );
+        let rows: &[(&[&str], &[&str])] = &[
+            (&["-f"], &["-f"]),
+            (
+                &[
+                    "--try-amend=versionsuffix=-a",
+                    "--try-amend",
+                    "toolchain=foss,2025a",
+                ],
+                &[
+                    "--try-amend=versionsuffix=-a",
+                    "--try-amend=toolchain=foss,2025a",
+                ],
+            ),
+        ];
+        for (input, want) in rows {
+            let owned: Vec<String> = input.iter().map(|arg| (*arg).to_string()).collect();
+            let entry = easystack_entry("Big-1.0.eb", &owned).unwrap();
+            let document = serde_yaml::Value::Mapping(serde_yaml::Mapping::from_iter([(
+                serde_yaml::Value::String("easyconfigs".into()),
+                serde_yaml::Value::Sequence(vec![entry]),
+            )]));
+            let text = serde_yaml::to_string(&document).unwrap();
+            let lines = easystack::parse(&text).unwrap();
+            assert_eq!(lines[0].args, *want);
+        }
     }
 
     #[test]

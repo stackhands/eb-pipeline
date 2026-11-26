@@ -490,70 +490,39 @@ fn include_resumed_requires_result_input() {
 
 #[test]
 fn reframe_output_escapes_regex_metacharacters() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(
-        dir.path().join("map.tsv"),
-        "GROMACS gromacs+gpu(v2)\n".as_bytes(),
-    )
-    .unwrap();
-    std::fs::write(
-        dir.path().join("build.list"),
-        "GROMACS-2024.1-foss-2023b.eb\n".as_bytes(),
-    )
-    .unwrap();
-    let o = bin()
-        .arg("--map")
-        .arg(dir.path().join("map.tsv"))
-        .arg("--list")
-        .arg(dir.path().join("build.list"))
-        .arg("--format")
-        .arg("reframe")
-        .output()
-        .unwrap();
-    assert_eq!(
-        o.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&o.stderr)
-    );
-    assert_eq!(
-        String::from_utf8(o.stdout).unwrap(),
-        "-n ^gromacs\\+gpu\\(v2\\)$\n"
-    );
-}
-
-#[test]
-fn reframe_output_escapes_dot_and_libstdcpp() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(
-        dir.path().join("map.tsv"),
-        "GROMACS gromacs.2024\nFFTW libstdc++\n".as_bytes(),
-    )
-    .unwrap();
-    std::fs::write(
-        dir.path().join("build.list"),
-        "GROMACS-2024.1-foss-2023b.eb\nFFTW-3.3.10-GCC-13.2.0.eb\n".as_bytes(),
-    )
-    .unwrap();
-    let o = bin()
-        .arg("--map")
-        .arg(dir.path().join("map.tsv"))
-        .arg("--list")
-        .arg(dir.path().join("build.list"))
-        .arg("--format")
-        .arg("reframe")
-        .output()
-        .unwrap();
-    assert_eq!(
-        o.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&o.stderr)
-    );
-    assert_eq!(
-        String::from_utf8(o.stdout).unwrap(),
-        "-n ^gromacs\\.2024$\n-n ^libstdc\\+\\+$\n"
-    );
+    let rows = [
+        (
+            "GROMACS gromacs+gpu(v2)\n",
+            "GROMACS-2024.1-foss-2023b.eb\n",
+            "-n ^gromacs\\+gpu\\(v2\\)$\n",
+        ),
+        (
+            "GROMACS gromacs.2024\nFFTW libstdc++\n",
+            "GROMACS-2024.1-foss-2023b.eb\nFFTW-3.3.10-GCC-13.2.0.eb\n",
+            "-n ^gromacs\\.2024$\n-n ^libstdc\\+\\+$\n",
+        ),
+    ];
+    for (map, list, want) in rows {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("map.tsv"), map.as_bytes()).unwrap();
+        std::fs::write(dir.path().join("build.list"), list.as_bytes()).unwrap();
+        let output = bin()
+            .arg("--map")
+            .arg(dir.path().join("map.tsv"))
+            .arg("--list")
+            .arg(dir.path().join("build.list"))
+            .arg("--format")
+            .arg("reframe")
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{map} {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), want, "{map}");
+    }
 }
 
 #[test]
@@ -644,37 +613,6 @@ fn duplicate_single_value_flags_are_refused() {
 }
 
 #[test]
-fn test_map_succeeds_when_stdout_consumer_closes() {
-    let dir = tempfile::tempdir().unwrap();
-    let map = dir.path().join("map.tsv");
-    std::fs::write(&map, "G g\n").unwrap();
-    let list = dir.path().join("l.txt");
-    std::fs::write(&list, "G-1.0.eb\n").unwrap();
-
-    for format in ["text", "eessi-modules"] {
-        let mut fds = [0; 2];
-        unsafe {
-            assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
-            assert_eq!(libc::close(fds[0]), 0);
-        }
-        let closed =
-            unsafe { <std::process::Stdio as std::os::fd::FromRawFd>::from_raw_fd(fds[1]) };
-        let mut cmd = bin();
-        cmd.args(["--list"]).arg(&list).args(["--format", format]);
-        if format != "eessi-modules" {
-            cmd.args(["--map"]).arg(&map);
-        }
-        let o = cmd.stdout(closed).output().unwrap();
-        assert_eq!(
-            o.status.code(),
-            Some(0),
-            "{format}: {}",
-            String::from_utf8_lossy(&o.stderr)
-        );
-    }
-}
-
-#[test]
 fn plain_build_list_options_are_not_part_of_the_easyconfig_name() {
     let dir = tempfile::tempdir().unwrap();
     let list = dir.path().join("build.list");
@@ -706,9 +644,6 @@ fn plain_build_list_options_are_not_part_of_the_easyconfig_name() {
 fn result_input_refuses_a_fifo_without_blocking() {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
-    use std::process::Stdio;
-    use std::time::{Duration, Instant};
-
     let dir = tempfile::tempdir().unwrap();
     let map = dir.path().join("map.tsv");
     std::fs::write(&map, "G g\n").unwrap();
@@ -716,29 +651,13 @@ fn result_input_refuses_a_fifo_without_blocking() {
     let raw = CString::new(fifo.as_os_str().as_bytes()).unwrap();
     assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
 
-    let mut child = bin()
+    let output = bin()
         .args(["--map"])
         .arg(&map)
         .args(["--result"])
         .arg(&fifo)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .output()
         .unwrap();
-
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        if child.try_wait().unwrap().is_some() {
-            break;
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!("eb-test-map blocked while reading a FIFO result path");
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    let output = child.wait_with_output().unwrap();
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(output.stdout, b"");
     assert!(

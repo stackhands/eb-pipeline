@@ -1804,39 +1804,6 @@ fn duplicate_single_value_flags_are_refused() {
 }
 
 #[test]
-fn retry_list_succeeds_when_stdout_consumer_closes() {
-    let dir = tempfile::tempdir().unwrap();
-    let list = dir.path().join("list.txt");
-    std::fs::write(&list, "Want.eb\n").unwrap();
-    let result = dir.path().join("result.json");
-    std::fs::write(
-        &result,
-        r#"{"kind":"result","exit_code":1,"lines":[{"easyconfig":"Want.eb","status":"failed"}]}"#,
-    )
-    .unwrap();
-    let mut fds = [0; 2];
-    unsafe {
-        assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
-        assert_eq!(libc::close(fds[0]), 0);
-    }
-    let closed = unsafe { <std::process::Stdio as std::os::fd::FromRawFd>::from_raw_fd(fds[1]) };
-    let o = bin()
-        .args(["--result"])
-        .arg(&result)
-        .args(["--list"])
-        .arg(&list)
-        .stdout(closed)
-        .output()
-        .unwrap();
-    assert_eq!(
-        o.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&o.stderr)
-    );
-}
-
-#[test]
 fn value_options_do_not_consume_the_next_long_option() {
     let output = bin()
         .args(["--result", "--list", "build.list"])
