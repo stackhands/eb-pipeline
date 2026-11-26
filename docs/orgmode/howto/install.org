@@ -59,9 +59,9 @@ The [[https://github.com/stackhands/eb-pipeline/blob/main/CHANGELOG.md][changelo
    eb-test-map
    #+end_example
 
-   Release 0.3.0 ships =eb-pipeline= alone; later releases ship all six commands.
+   Release 0.3.0 ships =eb-pipeline= alone; releases 0.3.1 to 0.5.0 ship these six commands, and =eb-admin-report= comes from a source install.
 
-3. Install the six commands:
+3. Install the six commands of the release:
 
    #+begin_src bash
    for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cvmfs; do
@@ -80,11 +80,11 @@ cargo +1.90 install --locked --path . --root ~/.local
 
 To install another commit, check it out first; to replace an eb-pipeline that is installed there, add =--force=.
 
-The install builds =eb-pipeline=, =eb-retry-list=, =eb-shard-weights=, =eb-test-map=, =eb-junit= and =eb-cvmfs=.
+The install builds =eb-pipeline=, =eb-retry-list=, =eb-shard-weights=, =eb-test-map=, =eb-junit=, =eb-cvmfs= and =eb-admin-report=.
 Check that each command is on =PATH=:
 
 #+begin_src bash
-for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cvmfs; do
+for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cvmfs eb-admin-report; do
   command -v "$cmd"
   "$cmd" --help >/dev/null
 done
