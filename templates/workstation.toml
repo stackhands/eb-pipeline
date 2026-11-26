@@ -1,6 +1,6 @@
 # One machine with no scheduler: a workstation, a lab server or a CI runner.
 # Every phase starts on this host as a plain process. No EESSI, inode quota or
-# licences. Every value is a placeholder; /home/user stands for a directory
+# licences. Every value is a placeholder; /srv/eb stands for a directory
 # the build account owns.
 schema_version = 1
 kind = "site"
@@ -17,12 +17,12 @@ build_lists = ["software.list"]
 default = true
 
 [filesystems]
-scratch = "/home/user/eb/scratch"
-tmp = "/home/user/eb/scratch/tmp"
-build_path = "/home/user/eb/scratch/build"
-source_paths = ["/home/user/eb/sources"]
-install_root = "/home/user/eb/software"
-log_root = "/home/user/eb/logs"
+scratch = "/srv/eb/scratch"
+tmp = "/srv/eb/scratch/tmp"
+build_path = "/srv/eb/scratch/build"
+source_paths = ["/srv/eb/sources"]
+install_root = "/srv/eb/software"
+log_root = "/srv/eb/logs"
 
 # `eb` comes from PATH, for example a pip install of EasyBuild, so no module
 # is loaded before a build. EasyBuild still needs a module tool: source
