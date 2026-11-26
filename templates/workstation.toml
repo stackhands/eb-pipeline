@@ -24,9 +24,7 @@ source_paths = ["/srv/eb/sources"]
 install_root = "/srv/eb/software"
 log_root = "/srv/eb/logs"
 
-# `eb` comes from PATH, for example a pip install of EasyBuild, so no module
-# is loaded before a build. EasyBuild still needs a module tool: source
-# EESSI's init for its Lmod, or install Lmod, and set
-# EASYBUILD_MODULES_TOOL=Lmod.
-[modules]
-init = []
+# No [modules] table: `eb` comes from PATH, for example a pip install of
+# EasyBuild, so no module is loaded before a build and no wrapper starts.
+# EasyBuild still needs a module tool: source EESSI's init for its Lmod, or
+# install Lmod, and set EASYBUILD_MODULES_TOOL=Lmod.

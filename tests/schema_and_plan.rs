@@ -74,10 +74,19 @@ fn unknown_keys_are_rejected() {
 
 #[test]
 fn missing_required_sections_are_rejected() {
-    for cut in ["[scheduler]\nkind = \"slurm\"\n", "[modules]\ninit = []\n"] {
-        let text = MINIMAL.replace(cut, "");
-        assert!(site::parse(&text).is_err(), "{cut}");
-    }
+    let cut = "[scheduler]\nkind = \"slurm\"\n";
+    assert!(MINIMAL.contains(cut));
+    assert!(site::parse(&MINIMAL.replace(cut, "")).is_err(), "{cut}");
+}
+
+#[test]
+fn a_site_without_modules_loads_nothing() {
+    let cut = "[modules]\ninit = []\n";
+    assert!(MINIMAL.contains(cut));
+    let s = site::parse(&MINIMAL.replace(cut, "")).expect("[modules] is optional");
+    assert!(s.modules.init.is_empty());
+    assert!(s.modules.shell_init.is_none());
+    assert!(site::validate(&s, None).is_empty());
 }
 
 #[test]
