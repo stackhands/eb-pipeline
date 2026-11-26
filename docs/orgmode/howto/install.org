@@ -123,7 +123,15 @@ eb-keep-logs-0.3.1-x86_64-linux-musl: OK
 eb-staged-rebuild-2.0.1-x86_64-linux-musl: OK
 #+end_example
 
-eb-stack has no static aarch64 build, so on aarch64 it installs the glibc one.
+eb-stack has no static aarch64 build, so on aarch64 it installs the glibc one, and the check prints:
+
+#+begin_example
+eb_stack-aarch64-unknown-linux-gnu.tar.xz: OK
+eb-keep-logs-0.3.1-aarch64-linux-musl: OK
+eb-staged-rebuild-2.0.1-aarch64-linux-musl: OK
+#+end_example
+
+Each tool's release lists the file it installs, so no =OK= line is missing; a missing one means =--ignore-missing= skipped a file the release does not have.
 
 ** Check that it worked
 
