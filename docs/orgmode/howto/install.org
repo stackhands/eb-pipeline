@@ -90,6 +90,41 @@ for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cv
 done
 #+end_src
 
+** Install the companion tools
+
+Some phases start a companion tool: resume and the OOM preflight start =eb-stack=, =keep_failed= starts =eb-keep-logs=, and a staged rebuild starts =eb-staged-rebuild=.
+Install the ones the site file turns on; this installs all three from their releases into =~/.local/bin=, and checks each against its release's checksums:
+
+#+begin_src bash
+set -euo pipefail
+bin=$HOME/.local/bin arch=$(uname -m) gh_dl=https://github.com/stackhands
+mkdir -p "$bin"
+
+v=0.9.1
+case $arch in x86_64) t=x86_64-unknown-linux-musl ;; aarch64) t=aarch64-unknown-linux-gnu ;; esac
+curl -fsSLO "$gh_dl/eb-stack/releases/download/v$v/eb_stack-$t.tar.xz"
+curl -fsSLO "$gh_dl/eb-stack/releases/download/v$v/eb_stack-$t.tar.xz.sha256"
+sha256sum -c "eb_stack-$t.tar.xz.sha256"
+tar -xJf "eb_stack-$t.tar.xz"
+install -m 0755 "eb_stack-$t/eb-stack" "$bin/eb-stack"
+
+for tool in eb-keep-logs:0.3.1 eb-staged-rebuild:2.0.1; do
+  name=${tool%%:*} v=${tool#*:} f=${tool%%:*}-${tool#*:}-$arch-linux-musl
+  curl -fsSLO "$gh_dl/$name/releases/download/v$v/$f"
+  curl -fsSL -o "SHA256SUMS.$name" "$gh_dl/$name/releases/download/v$v/SHA256SUMS"
+  sha256sum -c --ignore-missing "SHA256SUMS.$name"
+  install -m 0755 "$f" "$bin/$name"
+done
+#+end_src
+
+#+begin_example
+eb_stack-x86_64-unknown-linux-musl.tar.xz: OK
+eb-keep-logs-0.3.1-x86_64-linux-musl: OK
+eb-staged-rebuild-2.0.1-x86_64-linux-musl: OK
+#+end_example
+
+eb-stack has no static aarch64 build, so on aarch64 it installs the glibc one.
+
 ** Check that it worked
 
 #+begin_src bash
