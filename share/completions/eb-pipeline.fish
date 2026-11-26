@@ -57,7 +57,7 @@ complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand check" -l easybl
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand check" -l easybuild-version -d 'EasyBuild release `X.Y.Z`. Overrides `eb-X.Y.Z` in the list file name' -r
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand check" -l gap-out -d 'Write eb-stack\'s gap report files into this directory' -r -F
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand check" -l generation -d 'Toolchain generation passed to `eb-stack stack gap`' -r
-complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand check" -l probe-tools -d 'Run each needed tool\'s `--version` and enforce min_version'
+complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand check" -l probe-tools -d 'Run each needed tool\'s `--version` and enforce min_version. On a `local` site, also warn when this host lacks `eb` or the module tool EasyBuild uses'
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand check" -l check-from-commit -d 'Ask `eb-stack stack from-commit` whether pins are already in the EasyBuild release tag'
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand check" -l shadow -d 'Also write `stack shadow` JavaScript Object Notation (JSON) output to `DIR/shadow.json`'
 complete -c eb-pipeline -n "__fish_eb_pipeline_using_subcommand check" -s h -l help -d 'Print help (see more with \'--help\')'
