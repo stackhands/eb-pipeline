@@ -4,7 +4,8 @@
 
 * Build with EasyBuild on your own machine
 
-By the end of this tutorial EasyBuild will have installed a package and written its module, driven by eb-pipeline on one Linux machine, and you will have loaded that module.
+By the end of this tutorial eb-pipeline will have driven EasyBuild on one Linux machine to install a package and write its module.
+You will then load that module.
 There is no cluster and no Slurm: the site file's =local= scheduler starts every phase on this machine.
 The package is a bundle with no components, so the build takes seconds and downloads nothing; a real easyconfig goes through the same steps.
 
