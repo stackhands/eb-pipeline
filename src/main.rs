@@ -1654,6 +1654,7 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             ),
         }
     }
+    let mut output_errors = Vec::new();
     if let Err(f) = write_summary_with_pending_signal(
         &s,
         &mut res,
@@ -1662,10 +1663,18 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
         Some(to_sorted(&doc)),
         &[],
     ) {
-        return Err(signal_outranks(res.exit_code, f));
+        output_errors.push(f.msg);
     }
     if let Some(p) = w.result {
-        write_json(&to_sorted(&res), Some(p)).map_err(|f| signal_outranks(res.exit_code, f))?;
+        if let Err(f) = write_json(&to_sorted(&res), Some(p)) {
+            output_errors.push(f.msg);
+        }
+    }
+    if !output_errors.is_empty() {
+        return Err(signal_outranks(
+            res.exit_code,
+            Fail::new(exit::FAILED, output_errors.join("; ")),
+        ));
     }
     Ok(res.exit_code)
 }
