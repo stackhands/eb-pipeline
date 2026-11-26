@@ -57,8 +57,8 @@ expect_line '  "kind": "status",'
 
 run 'mkdir -p site/logs/20261117_100000/summary.json
 eb-pipeline run --site site.toml --list example.list --target zen4 --build-type production --log-stamp 20261117_100000; echo "exit $?"'
-expect_line 'exit 0'
-expect_line 'WARN [summary] zen4: no summary written: cannot read $WORK/site/logs/20261117_100000/summary.json: Is a directory (os error 21)'
+expect_line 'exit 1'
+expect_line 'ERROR [main] -: cannot write run summary: cannot read $WORK/site/logs/20261117_100000/summary.json: Is a directory (os error 21)'
 
 cp site.toml notify.toml
 printf '\n[notify]\nwebhook_env = "SUMMARY_WEBHOOK"\nwhen = "problems"\n' >>notify.toml

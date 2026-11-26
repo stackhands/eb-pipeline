@@ -1117,16 +1117,18 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         if let Some(before) = &before {
             watch::record_run(&planner, &lines, &res, before);
         }
-        write_summary_with_pending_signal(
+        let mut output_errors = Vec::new();
+        if let Err(f) = write_summary_with_pending_signal(
             &s,
             &mut res,
             "run",
             result,
             None,
             &planner.offline_wrapper,
-        );
+        ) {
+            output_errors.push(f.msg);
+        }
         let value = to_sorted(&res);
-        let mut output_errors = Vec::new();
         if let Some(p) = result {
             if let Err(f) = write_json(&value, Some(p)) {
                 output_errors.push(f.msg);
@@ -1168,14 +1170,15 @@ fn write_summary_with_pending_signal(
     result: Option<&Path>,
     watch: Option<serde_json::Value>,
     offline_wrapper: &[String],
-) {
+) -> Result<(), Fail> {
     apply_pending_signal(&mut res.exit_code, &mut res.interrupted_by);
-    write_summary(s, res, command, result, watch, offline_wrapper);
+    let written = write_summary(s, res, command, result, watch, offline_wrapper);
     apply_pending_signal(&mut res.exit_code, &mut res.interrupted_by);
+    written
 }
 
-/// Merge a target's run into its run directory's summary; a problem is a
-/// warning and leaves the run's exit code as it is.
+/// Merge a target's run into its run directory's summary. A problem writing
+/// the summary fails the command.
 fn write_summary(
     s: &schema::Site,
     res: &RunResult,
@@ -1183,7 +1186,7 @@ fn write_summary(
     result: Option<&Path>,
     watch: Option<serde_json::Value>,
     offline_wrapper: &[String],
-) {
+) -> Result<(), Fail> {
     let dir = summary::run_dir(res);
     let entry = summary::entry(res, command, result, watch);
     match summary::record(&s.site.name, entry, &dir) {
@@ -1206,13 +1209,12 @@ fn write_summary(
                 &dir.join(summary::JSON),
                 offline_wrapper,
             );
+            Ok(())
         }
-        Err(e) => log(
-            "WARN",
-            "summary",
-            &res.target,
-            &format!("no summary written: {e}"),
-        ),
+        Err(e) => Err(Fail::new(
+            exit::FAILED,
+            format!("cannot write run summary: {e}"),
+        )),
     }
 }
 
@@ -1652,7 +1654,16 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             ),
         }
     }
-    write_summary_with_pending_signal(&s, &mut res, "watch", w.result, Some(to_sorted(&doc)), &[]);
+    if let Err(f) = write_summary_with_pending_signal(
+        &s,
+        &mut res,
+        "watch",
+        w.result,
+        Some(to_sorted(&doc)),
+        &[],
+    ) {
+        return Err(signal_outranks(res.exit_code, f));
+    }
     if let Some(p) = w.result {
         write_json(&to_sorted(&res), Some(p)).map_err(|f| signal_outranks(res.exit_code, f))?;
     }

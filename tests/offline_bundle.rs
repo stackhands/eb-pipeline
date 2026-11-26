@@ -367,9 +367,9 @@ fn a_bundle_manifest_is_not_taken_for_a_run_summary() {
 
     let again = run(&f, &[]);
     let stderr = String::from_utf8_lossy(&again.stderr);
-    assert_eq!(again.status.code(), Some(0), "{stderr}");
+    assert_eq!(again.status.code(), Some(1), "{stderr}");
     assert!(
-        stderr.contains("no summary written: ") && stderr.contains(why),
+        stderr.contains("cannot write run summary: ") && stderr.contains(why),
         "{stderr}"
     );
     assert_eq!(std::fs::read_to_string(&summary).unwrap(), manifest);

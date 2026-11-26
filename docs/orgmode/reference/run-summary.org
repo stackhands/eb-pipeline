@@ -58,11 +58,11 @@ zen4
 Each run takes the lock =.summary.lock= of the run directory, reads =summary.json=, replaces the entry of its own target and keeps the others, and writes both files anew through a rename, so that a reader never sees half of one.
 A later run of the same target with the same stamp replaces that target's entry.
 A =summary.json= with another =schema_version= is replaced, whatever else it holds.
-One that does not parse is kept, and the run warns that no summary was written, so one target cannot erase the other target entries that may still be recoverable.
-A file whose =kind= is not =summary=, or that lacks a =kind= or an integer =schema_version=, is kept as well: it may be another artifact of the tool, such as a result, a plan or a status document, and the warning names the =kind= it found.
+One that does not parse is kept, and the run fails without replacing it, so one target cannot erase the other target entries that may still be recoverable.
+A file whose =kind= is not =summary=, or that lacks a =kind= or an integer =schema_version=, is kept as well: it may be another artifact of the tool, such as a result, a plan or a status document, and the error names the =kind= it found.
 The =kind= is read before the =schema_version=, and both before the other keys, so that a file of another kind is never mistaken for a summary of another version.
 
-A summary that cannot be written is a warning, and the run exits as it would have without it.
+A summary that cannot be written fails the run.
 Here a directory is in the way of =summary.json=:
 
 #+begin_src bash
@@ -73,8 +73,8 @@ eb-pipeline run --site site.toml --list example.list --target zen4 --build-type 
 #+begin_example
 INFO [licences] zen4: not configured
 ...
-WARN [summary] zen4: no summary written: cannot read $WORK/site/logs/20261117_100000/summary.json: Is a directory (os error 21)
-exit 0
+ERROR [main] -: cannot write run summary: cannot read $WORK/site/logs/20261117_100000/summary.json: Is a directory (os error 21)
+exit 1
 #+end_example
 
 ** summary.json
