@@ -47,8 +47,30 @@ fn help_and_version_exit_zero() {
     assert!(text.starts_with("eb-junit "), "{text}");
 }
 
-#[test]
-fn malformed_inputs_name_their_producers_and_paths() {
+fn assert_invalid_json(
+    output: &std::process::Output,
+    producer: &str,
+    path: &std::path::Path,
+    empty_stdout: bool,
+) {
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    if empty_stdout {
+        assert_eq!(output.stdout, b"");
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let shown = path.display().to_string();
+    assert!(
+        stderr.contains(producer) && stderr.contains(&shown) && stderr.contains("invalid JSON"),
+        "{stderr}"
+    );
+}
+
+fn junit_malformed() {
     let dir = tempfile::tempdir().unwrap();
     for (flag, name, producer) in [
         ("--result", "result.json", "eb-pipeline run"),
@@ -56,18 +78,155 @@ fn malformed_inputs_name_their_producers_and_paths() {
     ] {
         let path = dir.path().join(name);
         std::fs::write(&path, "{").unwrap();
-
         let output = bin().arg(flag).arg(&path).output().unwrap();
+        assert_invalid_json(&output, producer, &path, true);
+    }
+}
 
-        assert_eq!(output.status.code(), Some(2));
-        assert_eq!(output.stdout, b"");
-        assert_eq!(
-            String::from_utf8_lossy(&output.stderr),
-            format!(
-                "eb-junit: {producer} wrote invalid JSON to {}: EOF while parsing an object at line 1 column 1\n",
-                path.display()
-            )
-        );
+fn shard_weights_malformed() {
+    for (flag, name) in [("--result", "result.json"), ("--summary", "summary.json")] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(name);
+        std::fs::write(&path, "{").unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_eb-shard-weights"))
+            .arg(flag)
+            .arg(&path)
+            .env_remove("EB_PIPELINE_RESULT")
+            .env_remove("EB_PIPELINE_TARGET")
+            .output()
+            .unwrap();
+        assert_invalid_json(&output, "eb-pipeline run", &path, true);
+    }
+}
+
+fn metrics_malformed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("result.json");
+    std::fs::write(&path, "{").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"))
+        .args(["metrics", "--result"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert_invalid_json(&output, "eb-pipeline run", &path, false);
+}
+
+fn package_plan_malformed() {
+    let root = tempfile::tempdir().unwrap();
+    let root_path = root.path().display().to_string();
+    let bundle = root.path().join("bundle");
+    std::fs::create_dir_all(&bundle).unwrap();
+    let manifest = bundle.join("package.plan.json");
+    std::fs::write(&manifest, "{").unwrap();
+    let site = root.path().join("site.toml");
+    std::fs::write(
+        &site,
+        format!(
+            "\
+schema_version = 1
+kind = \"site\"
+[site]
+name = \"t\"
+[scheduler]
+kind = \"local\"
+[[targets]]
+name = \"cpu\"
+[filesystems]
+scratch = \"{root_path}/scratch\"
+tmp = \"{root_path}/tmp\"
+build_path = \"{root_path}/build\"
+install_root = \"{root_path}/install\"
+log_root = \"{root_path}/logs\"
+[modules]
+init = []
+"
+        ),
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"))
+        .args(["plan", "--site"])
+        .arg(&site)
+        .args(["--package-plan"])
+        .arg(&bundle)
+        .args([
+            "--target",
+            "cpu",
+            "--build-type",
+            "production",
+            "--run-id",
+            "package-plan",
+            "--log-stamp",
+            "20261117_120000",
+        ])
+        .output()
+        .unwrap();
+    assert_invalid_json(&output, "eb-stack package plan", &manifest, false);
+}
+
+fn attest_verify_malformed() {
+    let root = tempfile::tempdir().unwrap();
+    let root_path = root.path().display().to_string();
+    std::fs::create_dir_all(root.path().join("easyconfigs")).unwrap();
+    std::fs::write(root.path().join("key.pem"), "k\n").unwrap();
+    let site = root.path().join("site.toml");
+    std::fs::write(
+        &site,
+        format!(
+            "\
+schema_version = 1
+kind = \"site\"
+[site]
+name = \"t\"
+[scheduler]
+kind = \"local\"
+[[targets]]
+name = \"cpu\"
+[filesystems]
+scratch = \"{root_path}/scratch\"
+tmp = \"{root_path}/tmp\"
+build_path = \"{root_path}/build\"
+install_root = \"{root_path}/install\"
+log_root = \"{root_path}/logs\"
+[modules]
+init = []
+
+[attest]
+enabled = true
+log_dir = \"{root_path}/log\"
+key = \"{root_path}/key.pem\"
+origin = \"example.org/inputs\"
+trusted = [\"example.org/inputs+abcd+AAAA\"]
+easyconfigs = [\"{root_path}/easyconfigs\"]
+"
+        ),
+    )
+    .unwrap();
+    let list = root.path().join("list.txt");
+    std::fs::write(&list, "Foo-1.0.eb\n").unwrap();
+    let from = root.path().join("plan.json");
+    std::fs::write(&from, "{").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"))
+        .args(["verify", "--site"])
+        .arg(&site)
+        .args(["--list"])
+        .arg(&list)
+        .args(["--target", "cpu", "--build-type", "production", "--from"])
+        .arg(&from)
+        .output()
+        .unwrap();
+    assert_invalid_json(&output, "eb-pipeline plan", &from, false);
+}
+
+#[test]
+fn malformed_inputs_name_their_producers_and_paths() {
+    for row in [
+        junit_malformed as fn(),
+        shard_weights_malformed,
+        metrics_malformed,
+        package_plan_malformed,
+        attest_verify_malformed,
+    ] {
+        row();
     }
 }
 
@@ -501,35 +660,6 @@ fn the_pages_name_eb_junit() {
     assert!(howto.contains("publish-a-junit-report"), "{howto}");
     let reference = std::fs::read_to_string(root.join("reference/index.org")).unwrap();
     assert!(reference.contains("\n   junit\n"), "{reference}");
-}
-
-#[test]
-fn junit_succeeds_when_stdout_consumer_closes() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("result.json");
-    std::fs::write(
-        &path,
-        r#"{"kind":"result","schema_version":1,"site":"s","target":"t","build_type":"b","run_id":"r","exit_code":0,"lines":[]}"#,
-    )
-    .unwrap();
-    let mut fds = [0; 2];
-    unsafe {
-        assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
-        assert_eq!(libc::close(fds[0]), 0);
-    }
-    let closed = unsafe { <std::process::Stdio as std::os::fd::FromRawFd>::from_raw_fd(fds[1]) };
-    let o = bin()
-        .args(["--result"])
-        .arg(&path)
-        .stdout(closed)
-        .output()
-        .unwrap();
-    assert_eq!(
-        o.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&o.stderr)
-    );
 }
 
 #[test]

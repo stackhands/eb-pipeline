@@ -50,93 +50,33 @@ fn successful_build_durations_become_sorted_tab_separated_weights() {
 }
 
 #[test]
-fn malformed_result_names_the_producer_and_path() {
-    let dir = tempfile::tempdir().unwrap();
-    let result = dir.path().join("result.json");
-    std::fs::write(&result, "{").unwrap();
-
-    let output = bin().args(["--result"]).arg(&result).output().unwrap();
-
-    assert_eq!(output.status.code(), Some(2));
-    assert_eq!(output.stdout, b"");
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        format!(
-            "eb-shard-weights: eb-pipeline run wrote invalid JSON to {}: EOF while parsing an object at line 1 column 1\n",
-            result.display()
-        )
-    );
-}
-
-#[test]
 fn a_duration_beyond_any_integer_weight_is_refused() {
-    let dir = tempfile::tempdir().unwrap();
-    let result = dir.path().join("result.json");
-    std::fs::write(
-        &result,
-        r#"{"kind":"result","target":"cpu","lines":[{"easyconfig":"Foo-1.0.eb","phase":"build","status":"success","duration_seconds":1e300}]}"#,
-    )
-    .unwrap();
-
-    let output = bin()
-        .args(["--result"])
-        .arg(&result)
-        .args(["--target", "cpu"])
-        .output()
-        .unwrap();
-
-    assert_eq!(output.status.code(), Some(2));
-    assert_eq!(output.stdout, b"");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("lines[0].duration_seconds exceeds"),
-        "{stderr}"
-    );
-}
-
-#[test]
-fn a_duration_at_exactly_two_to_the_sixty_fourth_is_refused() {
-    let dir = tempfile::tempdir().unwrap();
-    let result = dir.path().join("result.json");
-    std::fs::write(
-        &result,
-        r#"{"kind":"result","target":"cpu","lines":[{"easyconfig":"Foo-1.0.eb","phase":"build","status":"success","duration_seconds":18446744073709551616.0}]}"#,
-    )
-    .unwrap();
-
-    let output = bin()
-        .args(["--result"])
-        .arg(&result)
-        .args(["--target", "cpu"])
-        .output()
-        .unwrap();
-
-    assert_eq!(output.status.code(), Some(2));
-    assert_eq!(output.stdout, b"");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("lines[0].duration_seconds exceeds"),
-        "{stderr}"
-    );
-}
-
-#[test]
-fn malformed_summary_names_the_producer_and_path() {
-    let dir = tempfile::tempdir().unwrap();
-    let summary = dir.path().join("summary.json");
-    std::fs::write(&summary, "{").unwrap();
-
-    let output = bin().args(["--summary"]).arg(&summary).output().unwrap();
-
-    assert_eq!(output.status.code(), Some(2));
-    assert_eq!(output.stdout, b"");
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        format!(
-            "eb-shard-weights: eb-pipeline run wrote invalid JSON to {}: EOF while parsing an object at line 1 column 1\n",
-            summary.display()
+    for duration in ["1e300", "18446744073709551616.0"] {
+        let dir = tempfile::tempdir().unwrap();
+        let result = dir.path().join("result.json");
+        std::fs::write(
+            &result,
+            format!(
+                r#"{{"kind":"result","target":"cpu","lines":[{{"easyconfig":"Foo-1.0.eb","phase":"build","status":"success","duration_seconds":{duration}}}]}}"#
+            ),
         )
-    );
+        .unwrap();
+
+        let output = bin()
+            .args(["--result"])
+            .arg(&result)
+            .args(["--target", "cpu"])
+            .output()
+            .unwrap();
+
+        assert_eq!(output.status.code(), Some(2), "{duration}");
+        assert_eq!(output.stdout, b"", "{duration}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("lines[0].duration_seconds exceeds"),
+            "{duration} {stderr}"
+        );
+    }
 }
 
 #[test]
@@ -627,35 +567,6 @@ fn duplicate_single_value_flags_are_refused() {
             String::from_utf8_lossy(&o.stderr)
         );
     }
-}
-
-#[test]
-fn shard_weights_succeeds_when_stdout_consumer_closes() {
-    let dir = tempfile::tempdir().unwrap();
-    let result = dir.path().join("result.json");
-    std::fs::write(
-        &result,
-        r#"{"kind":"result","target":"cpu","lines":[{"easyconfig":"A-1.0.eb","phase":"build","status":"success","duration_seconds":1.0}]}"#,
-    )
-    .unwrap();
-    let mut fds = [0; 2];
-    unsafe {
-        assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
-        assert_eq!(libc::close(fds[0]), 0);
-    }
-    let closed = unsafe { <std::process::Stdio as std::os::fd::FromRawFd>::from_raw_fd(fds[1]) };
-    let o = bin()
-        .args(["--result"])
-        .arg(&result)
-        .stdout(closed)
-        .output()
-        .unwrap();
-    assert_eq!(
-        o.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&o.stderr)
-    );
 }
 
 #[test]

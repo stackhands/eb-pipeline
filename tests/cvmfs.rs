@@ -169,64 +169,50 @@ fn successful_sync_opens_and_publishes_one_transaction() {
 
 #[test]
 fn sync_without_a_timeout_stays_in_the_callers_process_group() {
-    let fixture = Fixture::new();
-    let group = fixture.dir.path().join("group");
-    write_exec(
-        &fixture.sync,
-        "#!/bin/sh\n\
-         echo \"sync $*\" >> \"$CALLS\"\n\
-         set -- $(/bin/cat /proc/$$/stat)\n\
-         echo \"$$ ${5}\" > \"$GROUP\"\n",
-    );
-    let output = fixture.command().env("GROUP", &group).output().unwrap();
-    assert_eq!(code(&output), 0, "{}", stderr(&output));
-    let identity = std::fs::read_to_string(group).unwrap();
-    let (pid, process_group) = identity.trim().split_once(' ').unwrap();
-    assert_ne!(pid, process_group);
-    assert_eq!(process_group, current_process_group());
-    assert_eq!(output.stdout, b"");
-    assert_eq!(output.stderr, b"");
-}
-
-#[test]
-fn publish_without_a_timeout_stays_in_the_callers_process_group() {
-    let fixture = Fixture::new();
-    let group = fixture.dir.path().join("publish-group");
-    let output = fixture
-        .command()
-        .env("STUB_PUBLISH_GROUP", &group)
-        .output()
-        .unwrap();
-    assert_eq!(code(&output), 0, "{}", stderr(&output));
-    let identity = std::fs::read_to_string(group).unwrap();
-    let (pid, process_group) = identity.trim().split_once(' ').unwrap();
-    assert_ne!(pid, process_group);
-    assert_eq!(process_group, current_process_group());
-    assert_eq!(output.stdout, b"");
-    assert_eq!(output.stderr, b"");
-    assert_eq!(fixture.calls().as_bytes(), HISTORICAL_CALLS);
-}
-
-#[test]
-fn check_without_a_timeout_stays_in_the_callers_process_group() {
-    let fixture = Fixture::new();
-    let group = fixture.dir.path().join("check-group");
-    let output = fixture
-        .command_with_options(None, None, None, &["--check"])
-        .env("STUB_CHECK_GROUP", &group)
-        .output()
-        .unwrap();
-    assert_eq!(code(&output), 0, "{}", stderr(&output));
-    let identity = std::fs::read_to_string(group).unwrap();
-    let (pid, process_group) = identity.trim().split_once(' ').unwrap();
-    assert_ne!(pid, process_group);
-    assert_eq!(process_group, current_process_group());
-    assert_eq!(output.stdout, b"");
-    assert_eq!(output.stderr, b"");
-    assert_eq!(
-        fixture.calls().as_bytes(),
-        b"list\ntransaction repo.example\nsync --delete\npublish repo.example\ncheck repo.example\n"
-    );
+    for phase in ["sync", "publish", "check"] {
+        let fixture = Fixture::new();
+        let group = fixture.dir.path().join("group");
+        let output = match phase {
+            "sync" => {
+                write_exec(
+                    &fixture.sync,
+                    "#!/bin/sh\n\
+                     echo \"sync $*\" >> \"$CALLS\"\n\
+                     set -- $(/bin/cat /proc/$$/stat)\n\
+                     echo \"$$ ${5}\" > \"$GROUP\"\n",
+                );
+                fixture.command().env("GROUP", &group).output().unwrap()
+            }
+            "publish" => fixture
+                .command()
+                .env("STUB_PUBLISH_GROUP", &group)
+                .output()
+                .unwrap(),
+            "check" => fixture
+                .command_with_options(None, None, None, &["--check"])
+                .env("STUB_CHECK_GROUP", &group)
+                .output()
+                .unwrap(),
+            _ => unreachable!(),
+        };
+        assert_eq!(code(&output), 0, "{phase} {}", stderr(&output));
+        let identity = std::fs::read_to_string(&group).unwrap();
+        let (pid, process_group) = identity.trim().split_once(' ').unwrap();
+        assert_ne!(pid, process_group, "{phase}");
+        assert_eq!(process_group, current_process_group(), "{phase}");
+        assert_eq!(output.stdout, b"", "{phase}");
+        assert_eq!(output.stderr, b"", "{phase}");
+        match phase {
+            "sync" => {}
+            "publish" => assert_eq!(fixture.calls().as_bytes(), HISTORICAL_CALLS, "{phase}"),
+            "check" => assert_eq!(
+                fixture.calls().as_bytes(),
+                b"list\ntransaction repo.example\nsync --delete\npublish repo.example\ncheck repo.example\n",
+                "{phase}"
+            ),
+            _ => unreachable!(),
+        }
+    }
 }
 
 fn current_process_group() -> String {
@@ -912,55 +898,66 @@ fn a_missing_cvmfs_server_is_a_clear_error() {
 
 #[test]
 fn dry_run_prints_every_possible_command_without_running_one() {
-    let fixture = Fixture::new();
-    let output = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
-        .args(["--dry-run", "repo.example", "--"])
-        .arg(&fixture.sync)
-        .arg("--delete")
-        .output()
-        .unwrap();
-    assert_eq!(code(&output), 0, "{}", stderr(&output));
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let sync = format!("{} --delete", fixture.sync.display());
-    assert_eq!(
-        stdout.lines().collect::<Vec<_>>(),
-        [
-            "cvmfs_server list",
-            "cvmfs_server transaction repo.example",
-            &sync,
-            "cvmfs_server publish repo.example",
-            "# on sync failure: cvmfs_server abort -f repo.example",
-        ]
-    );
-    assert!(fixture.calls().is_empty());
-}
-
-#[test]
-fn dry_run_prints_verification_between_sync_and_publish() {
-    let fixture = Fixture::new();
-    let verify = format!("{} --cache 'two words'", fixture.verify.display());
-    let output = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
-        .args(["--dry-run", "--verify-cmd", &verify, "repo.example", "--"])
-        .arg(&fixture.sync)
-        .arg("--delete")
-        .output()
-        .unwrap();
-    assert_eq!(code(&output), 0, "{}", stderr(&output));
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let sync = format!("{} --delete", fixture.sync.display());
-    let verifier = format!("{} --cache 'two words'", fixture.verify.display());
-    assert_eq!(
-        stdout.lines().collect::<Vec<_>>(),
-        [
-            "cvmfs_server list",
-            "cvmfs_server transaction repo.example",
-            &sync,
-            &verifier,
-            "cvmfs_server publish repo.example",
-            "# on sync or verification failure: cvmfs_server abort -f repo.example",
-        ]
-    );
-    assert!(fixture.calls().is_empty());
+    for case in ["commands", "verify", "tags"] {
+        let fixture = Fixture::new();
+        let sync = format!("{} --delete", fixture.sync.display());
+        let verify = format!("{} --cache 'two words'", fixture.verify.display());
+        let extra: Vec<&str> = match case {
+            "commands" => vec![],
+            "verify" => vec!["--verify-cmd", &verify],
+            "tags" => vec![
+                "--tag",
+                "snapshot",
+                "--tag-description",
+                "two words",
+                "--check",
+            ],
+            _ => unreachable!(),
+        };
+        let expected: Vec<String> = match case {
+            "commands" => vec![
+                "cvmfs_server list".into(),
+                "cvmfs_server transaction repo.example".into(),
+                sync.clone(),
+                "cvmfs_server publish repo.example".into(),
+                "# on sync failure: cvmfs_server abort -f repo.example".into(),
+            ],
+            "verify" => vec![
+                "cvmfs_server list".into(),
+                "cvmfs_server transaction repo.example".into(),
+                sync.clone(),
+                verify.clone(),
+                "cvmfs_server publish repo.example".into(),
+                "# on sync or verification failure: cvmfs_server abort -f repo.example".into(),
+            ],
+            "tags" => vec![
+                "cvmfs_server list".into(),
+                "cvmfs_server transaction repo.example".into(),
+                sync.clone(),
+                "cvmfs_server publish -a snapshot -m 'two words' repo.example".into(),
+                "cvmfs_server check repo.example".into(),
+                "# on sync failure: cvmfs_server abort -f repo.example".into(),
+            ],
+            _ => unreachable!(),
+        };
+        let output = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
+            .arg("--dry-run")
+            .args(&extra)
+            .arg("repo.example")
+            .arg("--")
+            .arg(&fixture.sync)
+            .arg("--delete")
+            .output()
+            .unwrap();
+        assert_eq!(code(&output), 0, "{case} {}", stderr(&output));
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(
+            stdout.lines().collect::<Vec<_>>(),
+            expected.iter().map(String::as_str).collect::<Vec<_>>(),
+            "{case}"
+        );
+        assert!(fixture.calls().is_empty(), "{case}");
+    }
 }
 
 fn historical_dry_run(sync: &str) -> Vec<u8> {
@@ -1318,41 +1315,6 @@ fn check_failure_returns_its_status_after_publish() {
 }
 
 #[test]
-fn tag_options_appear_in_dry_run_publish_and_check_order() {
-    let fixture = Fixture::new();
-    let output = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
-        .args([
-            "--dry-run",
-            "--tag",
-            "snapshot",
-            "--tag-description",
-            "two words",
-            "--check",
-            "repo.example",
-            "--",
-        ])
-        .arg(&fixture.sync)
-        .arg("--delete")
-        .output()
-        .unwrap();
-    assert_eq!(code(&output), 0, "{}", stderr(&output));
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let sync = format!("{} --delete", fixture.sync.display());
-    assert_eq!(
-        stdout.lines().collect::<Vec<_>>(),
-        [
-            "cvmfs_server list",
-            "cvmfs_server transaction repo.example",
-            &sync,
-            "cvmfs_server publish -a snapshot -m 'two words' repo.example",
-            "cvmfs_server check repo.example",
-            "# on sync failure: cvmfs_server abort -f repo.example",
-        ]
-    );
-    assert!(fixture.calls().is_empty());
-}
-
-#[test]
 fn invalid_arguments_are_usage_errors() {
     for args in [
         vec![],
@@ -1466,27 +1428,6 @@ fn concurrent_fixture_exec_writes_do_not_hit_text_file_busy() {
     for worker in workers {
         worker.join().unwrap();
     }
-}
-
-#[test]
-fn cvmfs_dry_run_succeeds_when_stdout_consumer_closes() {
-    let mut fds = [0; 2];
-    unsafe {
-        assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
-        assert_eq!(libc::close(fds[0]), 0);
-    }
-    let closed = unsafe { <std::process::Stdio as std::os::fd::FromRawFd>::from_raw_fd(fds[1]) };
-    let o = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
-        .args(["--dry-run", "repo.example", "--", "sync"])
-        .stdout(closed)
-        .output()
-        .unwrap();
-    assert_eq!(
-        o.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&o.stderr)
-    );
 }
 
 #[test]

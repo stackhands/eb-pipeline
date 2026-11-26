@@ -394,6 +394,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let output = dir.path().join("mod.lua");
         std::fs::write(&output, "module\n").unwrap();
+        let kept = output.display().to_string();
         let prior = Prior {
             digest: "aa".into(),
             lines: vec![
@@ -405,7 +406,7 @@ mod tests {
                 PriorLine {
                     easyconfig: "Foo-1.0.eb".into(),
                     status: "success".into(),
-                    outputs: vec![output.display().to_string()],
+                    outputs: vec![kept],
                 },
             ],
         };
@@ -416,11 +417,7 @@ mod tests {
             &prior,
         );
         assert!(skip.is_empty(), "{skip:?}");
-    }
 
-    #[test]
-    fn a_successful_shard_is_skipped_when_its_outputs_remain() {
-        let dir = tempfile::tempdir().unwrap();
         let foo = dir.path().join("foo.lua");
         std::fs::write(&foo, "module\n").unwrap();
         let prior = Prior {
@@ -445,10 +442,7 @@ mod tests {
             &prior,
         );
         assert_eq!(skip.into_iter().collect::<Vec<_>>(), ["shard-01"]);
-    }
 
-    #[test]
-    fn a_missing_output_is_not_skipped() {
         let prior = Prior {
             digest: "aa".into(),
             lines: vec![PriorLine {

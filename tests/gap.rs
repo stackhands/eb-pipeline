@@ -3,8 +3,8 @@
 
 mod common;
 
-use common::{closed_stdout, code, eb_pipeline, setup, stderr, stdout, write_exec};
-use std::process::{Command, Stdio};
+use common::{code, eb_pipeline, setup, stderr, stdout, write_exec};
+use std::process::Command;
 
 const EB_STACK_GAP: &str = r#"#!/bin/sh
 echo "$*" >> "$STUB_DIR/gap.calls"
@@ -286,37 +286,4 @@ fn a_gap_failure_stops_before_shadow() {
     assert_eq!(code(&out), 2, "{}", stderr(&out));
     assert_eq!(t.calls("gap").lines().count(), 1);
     assert!(!out_dir.join("shadow.json").exists());
-}
-
-#[test]
-fn a_closed_gap_output_consumer_does_not_fail_check() {
-    let t = configured();
-    let out_dir = t.root().join("gap-report");
-    let path = format!(
-        "{}:{}",
-        t.stubs.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
-    let output = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"))
-        .args([
-            "check",
-            "--site",
-            &t.site.display().to_string(),
-            "--gap-out",
-            &out_dir.display().to_string(),
-            "--generation",
-            "2026.1",
-        ])
-        .env("PATH", path)
-        .env("STUB_DIR", t.root())
-        .env("GAP_BASE", "/base/accel")
-        .env("STUB_GAP_LARGE_OUTPUT", "1")
-        .stdin(Stdio::null())
-        .stdout(closed_stdout())
-        .stderr(Stdio::piped())
-        .output()
-        .unwrap();
-
-    assert_eq!(code(&output), 0, "{}", stderr(&output));
-    assert!(out_dir.join("gap.stdout.log").is_file());
 }

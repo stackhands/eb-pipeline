@@ -187,123 +187,107 @@ fn cve_mode_runs_stack_sbom_and_component_reach() {
 
 #[test]
 fn audit_refuses_truncated_rebuild_set_json() {
-    let t = setup("");
-    write_exec(&t.stubs.join("eb-stack"), EB_STACK_AUDIT);
-    t.eessi_module("Foo", "1.0-GCCcore-13.2.0");
-    let findings = t.root().join("findings.csv");
-    std::fs::write(
-        &findings,
-        "severity,vuln_id,package,used_in\nhigh,CVE-2026-0001,zlib,Foo/1.0-GCCcore-13.2.0\n",
-    )
-    .unwrap();
-    let out_dir = t.root().join("audit");
-    let mut vars: Vec<(&str, &str)> = eessi_vars(&t, "2026.06")
-        .into_iter()
-        .map(|(key, value)| (key, Box::leak(value.into_boxed_str()) as &str))
-        .collect();
-    vars.push(("STUB_AUDIT_TRUNCATED_REBUILD_SET", "1"));
+    struct Row {
+        site: &'static str,
+        env_flag: &'static str,
+        findings: bool,
+        lock: bool,
+        needle: &'static str,
+        no_component_reach: bool,
+        no_rebuilds: bool,
+    }
+    let rows = [
+        Row {
+            site: "",
+            env_flag: "STUB_AUDIT_TRUNCATED_REBUILD_SET",
+            findings: true,
+            lock: false,
+            needle: "rebuild-set.json",
+            no_component_reach: false,
+            no_rebuilds: true,
+        },
+        Row {
+            site: "[sbom]\nenabled = true\nlock = \"@ROOT@/stack.lock.json\"",
+            env_flag: "STUB_AUDIT_TRUNCATED_SBOM",
+            findings: false,
+            lock: true,
+            needle: "stack.cdx.json",
+            no_component_reach: true,
+            no_rebuilds: false,
+        },
+        Row {
+            site: "[sbom]\nenabled = true\nlock = \"@ROOT@/stack.lock.json\"",
+            env_flag: "STUB_AUDIT_TRUNCATED_COMPONENT",
+            findings: false,
+            lock: true,
+            needle: "component-reach.json",
+            no_component_reach: false,
+            no_rebuilds: false,
+        },
+    ];
+    for row in rows {
+        let t = setup(row.site);
+        write_exec(&t.stubs.join("eb-stack"), EB_STACK_AUDIT);
+        t.eessi_module("Foo", "1.0-GCCcore-13.2.0");
+        let findings = t.root().join("findings.csv");
+        if row.findings {
+            std::fs::write(
+                &findings,
+                "severity,vuln_id,package,used_in\nhigh,CVE-2026-0001,zlib,Foo/1.0-GCCcore-13.2.0\n",
+            )
+            .unwrap();
+        }
+        if row.lock {
+            std::fs::write(t.root().join("stack.lock.json"), "{\"packages\":[]}").unwrap();
+        }
+        let out_dir = t.root().join("audit");
+        let owned = eessi_vars(&t, "2026.06");
+        let mut vars: Vec<(&str, &str)> = owned
+            .iter()
+            .map(|(key, value)| (*key, value.as_str()))
+            .collect();
+        vars.push((row.env_flag, "1"));
+        let site_path = t.site.display().to_string();
+        let out = out_dir.display().to_string();
+        let findings_path = findings.display().to_string();
+        let mut args = vec![
+            "audit".to_string(),
+            "--site".into(),
+            site_path,
+            "--target".into(),
+            "cpu".into(),
+        ];
+        if row.findings {
+            args.push("--findings".into());
+            args.push(findings_path);
+        } else {
+            args.push("--cve".into());
+            args.push("CVE-2026-0001".into());
+        }
+        args.push("--out-dir".into());
+        args.push(out);
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let output = eb_pipeline(&t, &refs, &vars);
 
-    let output = eb_pipeline(
-        &t,
-        &[
-            "audit",
-            "--site",
-            &t.site.display().to_string(),
-            "--target",
-            "cpu",
-            "--findings",
-            &findings.display().to_string(),
-            "--out-dir",
-            &out_dir.display().to_string(),
-        ],
-        &vars,
-    );
-
-    assert_eq!(code(&output), 1, "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("rebuild-set.json")
-            && stderr(&output).contains("wrote invalid JSON"),
-        "{}",
-        stderr(&output)
-    );
-    assert!(!out_dir.join("rebuilds").exists());
-}
-
-#[test]
-fn audit_refuses_truncated_sbom_json() {
-    let t = setup("[sbom]\nenabled = true\nlock = \"@ROOT@/stack.lock.json\"");
-    write_exec(&t.stubs.join("eb-stack"), EB_STACK_AUDIT);
-    t.eessi_module("Foo", "1.0-GCCcore-13.2.0");
-    std::fs::write(t.root().join("stack.lock.json"), "{\"packages\":[]}").unwrap();
-    let out_dir = t.root().join("audit");
-    let mut vars: Vec<(&str, &str)> = eessi_vars(&t, "2026.06")
-        .into_iter()
-        .map(|(key, value)| (key, Box::leak(value.into_boxed_str()) as &str))
-        .collect();
-    vars.push(("STUB_AUDIT_TRUNCATED_SBOM", "1"));
-
-    let output = eb_pipeline(
-        &t,
-        &[
-            "audit",
-            "--site",
-            &t.site.display().to_string(),
-            "--target",
-            "cpu",
-            "--cve",
-            "CVE-2026-0001",
-            "--out-dir",
-            &out_dir.display().to_string(),
-        ],
-        &vars,
-    );
-
-    assert_eq!(code(&output), 1, "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("stack.cdx.json")
-            && stderr(&output).contains("wrote invalid JSON"),
-        "{}",
-        stderr(&output)
-    );
-    assert!(!t.calls("ebstack").contains("component-reach"));
-}
-
-#[test]
-fn audit_refuses_truncated_component_json() {
-    let t = setup("[sbom]\nenabled = true\nlock = \"@ROOT@/stack.lock.json\"");
-    write_exec(&t.stubs.join("eb-stack"), EB_STACK_AUDIT);
-    t.eessi_module("Foo", "1.0-GCCcore-13.2.0");
-    std::fs::write(t.root().join("stack.lock.json"), "{\"packages\":[]}").unwrap();
-    let out_dir = t.root().join("audit");
-    let mut vars: Vec<(&str, &str)> = eessi_vars(&t, "2026.06")
-        .into_iter()
-        .map(|(key, value)| (key, Box::leak(value.into_boxed_str()) as &str))
-        .collect();
-    vars.push(("STUB_AUDIT_TRUNCATED_COMPONENT", "1"));
-
-    let output = eb_pipeline(
-        &t,
-        &[
-            "audit",
-            "--site",
-            &t.site.display().to_string(),
-            "--target",
-            "cpu",
-            "--cve",
-            "CVE-2026-0001",
-            "--out-dir",
-            &out_dir.display().to_string(),
-        ],
-        &vars,
-    );
-
-    assert_eq!(code(&output), 1, "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("component-reach.json")
-            && stderr(&output).contains("wrote invalid JSON"),
-        "{}",
-        stderr(&output)
-    );
+        assert_eq!(code(&output), 1, "{} {}", row.needle, stderr(&output));
+        assert!(
+            stderr(&output).contains(row.needle) && stderr(&output).contains("wrote invalid JSON"),
+            "{} {}",
+            row.needle,
+            stderr(&output)
+        );
+        if row.no_rebuilds {
+            assert!(!out_dir.join("rebuilds").exists(), "{}", row.needle);
+        }
+        if row.no_component_reach {
+            assert!(
+                !t.calls("ebstack").contains("component-reach"),
+                "{} {}",
+                row.needle,
+                t.calls("ebstack")
+            );
+        }
+    }
 }
 
 #[test]
