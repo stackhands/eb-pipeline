@@ -131,7 +131,7 @@ eb-keep-logs-0.3.1-aarch64-linux-musl: OK
 eb-staged-rebuild-2.0.1-aarch64-linux-musl: OK
 #+end_example
 
-Each tool's release lists the file it installs, so no =OK= line is missing; a missing one means =--ignore-missing= skipped a file the release does not have.
+Count the =OK= lines: =--ignore-missing= passes without a word over a file that =SHA256SUMS= does not name, so three lines mean three files checked.
 
 ** Check that it worked
 
