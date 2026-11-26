@@ -80,6 +80,33 @@ fn a_duration_beyond_any_integer_weight_is_refused() {
 }
 
 #[test]
+fn an_existing_weight_beyond_any_integer_second_is_refused() {
+    for seconds in ["1e300", "18446744073709551616"] {
+        let dir = tempfile::tempdir().unwrap();
+        let result = dir.path().join("result.json");
+        let existing = dir.path().join("existing.tsv");
+        std::fs::write(&result, r#"{"kind":"result","target":"cpu","lines":[]}"#).unwrap();
+        std::fs::write(&existing, format!("Foo/1.0\t{seconds}\n")).unwrap();
+
+        let output = bin()
+            .args(["--result"])
+            .arg(&result)
+            .args(["--existing"])
+            .arg(&existing)
+            .output()
+            .unwrap();
+
+        assert_eq!(output.status.code(), Some(2), "{seconds} {output:?}");
+        assert_eq!(output.stdout, b"", "{seconds}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("exceeds") && stderr.contains(seconds),
+            "{seconds} {stderr}"
+        );
+    }
+}
+
+#[test]
 fn common_environment_falls_back_and_flags_win() {
     let dir = tempfile::tempdir().unwrap();
     let result = dir.path().join("result.json");

@@ -359,13 +359,26 @@ fn read_existing(path: &Path) -> Result<BTreeMap<String, u64>, String> {
                 value.trim()
             )
         })?;
-        if util::checked_duration_seconds(secs, None).is_err() {
-            return Err(format!(
-                "{} line {}: `{}` is not a number of seconds",
-                path.display(),
-                i + 1,
-                value.trim()
-            ));
+        let max_weight_seconds = u64::MAX as f64;
+        match util::checked_duration_seconds(secs, Some(max_weight_seconds)) {
+            Ok(_) => {}
+            Err(util::DurationError::Invalid) => {
+                return Err(format!(
+                    "{} line {}: `{}` is not a number of seconds",
+                    path.display(),
+                    i + 1,
+                    value.trim()
+                ));
+            }
+            Err(util::DurationError::TooLarge) => {
+                return Err(format!(
+                    "{} line {}: `{}` exceeds {} seconds",
+                    path.display(),
+                    i + 1,
+                    value.trim(),
+                    u64::MAX
+                ));
+            }
         }
         let module = module.trim();
         if let Some(first) = first_lines.insert(module.to_string(), i + 1) {
