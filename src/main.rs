@@ -99,7 +99,9 @@ enum Cmd {
         /// Directory that must hold every build list a target names.
         #[arg(long, env = "EB_PIPELINE_LISTS_DIR")]
         lists_dir: Option<PathBuf>,
-        /// Run each needed tool's `--version` and enforce min_version.
+        /// Run each needed tool's `--version` and enforce min_version. On a
+        /// `local` site, also warn when this host lacks `eb` or the module
+        /// tool EasyBuild uses.
         #[arg(long)]
         probe_tools: bool,
         /// Build list or easystack to pass to requested eb-stack checks.
@@ -524,6 +526,16 @@ fn cmd_check(
             }
         }
         if probe {
+            for p in eb_pipeline::host::local_problems(
+                s,
+                &|k| std::env::var(k).ok(),
+                &eb_pipeline::host::on_path,
+            ) {
+                log("WARN", "check", &s.site.name, &p);
+            }
+            if let Some(p) = eb_pipeline::host::eb_problem(s) {
+                log("WARN", "check", &s.site.name, &p);
+            }
             tools::check_versions(s, true)?;
         }
         if !stack_checks.is_empty() {

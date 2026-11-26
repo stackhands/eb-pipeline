@@ -1,0 +1,187 @@
+#+TITLE: Build with EasyBuild on your own machine
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Build with EasyBuild on your own machine
+
+By the end of this tutorial eb-pipeline will have driven EasyBuild on one Linux machine to install a package and write its module.
+You will then load that module.
+There is no cluster and no Slurm: the site file's =local= scheduler starts every phase on this machine.
+The package is a bundle with no components, so the build takes seconds and downloads nothing; a real easyconfig goes through the same steps.
+
+** What you will need
+
+- A Linux machine with Python 3.9 or newer and =python3 -m venv=.
+- EESSI mounted at =/cvmfs/software.eessi.io=, for its Lmod. EasyBuild needs a module tool to write and find modules; an Lmod you installed yourself works the same way.
+- eb-pipeline on your =PATH=, as [[file:../howto/install.org][Install eb-pipeline]] describes.
+
+** Make a directory to work in
+
+Every step from here on runs in one directory, which the commands call =$WORK=:
+
+#+begin_src bash
+export WORK=$HOME/eb-workstation
+mkdir -p "$WORK"
+cd "$WORK"
+#+end_src
+
+** Give EasyBuild a module tool
+
+Source EESSI's init, which puts Lmod on your =PATH= and sets =LMOD_CMD=, and tell EasyBuild to use Lmod:
+
+#+begin_src bash
+source /cvmfs/software.eessi.io/versions/2023.06/init/lmod/bash
+export EASYBUILD_MODULES_TOOL=Lmod
+#+end_src
+
+#+begin_example
+Module for EESSI/2023.06 loaded successfully
+EESSI has selected x86_64/amd/zen4 as the compatible CPU target for EESSI/2023.06
+#+end_example
+
+The CPU target in the second line is your machine's.
+Do this before the next step: EESSI's init puts a Python of its own on =PATH=, and EasyBuild must find the Python it is installed in first.
+
+** Install EasyBuild
+
+Install EasyBuild into a virtual environment and put it first on your =PATH=:
+
+#+begin_src bash
+python3 -m venv "$WORK/venv"
+"$WORK/venv/bin/pip" install --quiet easybuild==5.4.2
+export PATH="$WORK/venv/bin:$PATH"
+eb --version
+#+end_src
+
+#+begin_example
+This is EasyBuild 5.4.2 (framework: 5.4.2, easyblocks: 5.4.2) on host yourhost.
+#+end_example
+
+** Write a site file
+
+=init= writes a site file from a template; =workstation= is the one for a single machine with no scheduler:
+
+#+begin_src bash
+eb-pipeline init --template workstation --out site.toml
+sed -i "s|/srv/eb|$WORK|g" site.toml
+#+end_src
+
+#+begin_example
+INFO [init] -: wrote template workstation to site.toml
+#+end_example
+
+Every path in the template sits under =/srv/eb=; =sed= moves them under =$WORK=, so EasyBuild builds in =$WORK/scratch= and installs in =$WORK/software=.
+
+Check the file, and with =--probe-tools= check this machine too:
+
+#+begin_src bash
+eb-pipeline check --site site.toml --probe-tools
+#+end_src
+
+#+begin_example
+INFO [check] workstation: site file is valid
+#+end_example
+
+On a =local= site, =--probe-tools= looks for =eb=, runs =eb --version=, and looks for the module tool, and prints a =WARN= line for each one it cannot find or start.
+With the two steps above in the other order it prints:
+
+#+begin_example
+WARN [check] workstation: `eb --version` fails on this host: ERROR: No compatible 'python' command found via $PATH (EasyBuild requires Python 3.6+); set EB_PYTHON to the Python that has EasyBuild installed, or put its directory first on PATH
+#+end_example
+
+** Write an easyconfig and a build list
+
+The easyconfig is a bundle with no components, built with the =SYSTEM= toolchain, so EasyBuild needs no compiler and no source:
+
+#+begin_src bash
+mkdir -p easyconfigs
+cat > easyconfigs/Hello-1.0.eb <<'EOF'
+easyblock = 'Bundle'
+
+name = 'Hello'
+version = '1.0'
+
+homepage = 'https://easybuild.io'
+description = "A bundle with no components: EasyBuild installs nothing and writes its module."
+
+toolchain = SYSTEM
+
+moduleclass = 'tools'
+EOF
+printf '%s\n' "$WORK/easyconfigs/Hello-1.0.eb" > software.list
+#+end_src
+
+The build list names one easyconfig per line; a path works as well as a name EasyBuild finds on its robot path.
+
+** See what a run would start
+
+#+begin_src bash
+eb-pipeline run --site site.toml --list software.list --target cpu --build-type production --dry-run
+#+end_src
+
+#+begin_example
+# [licences] not configured
+# [shard] not configured
+# [sources] not configured
+# [admission] not configured
+[build] eb $WORK/easyconfigs/Hello-1.0.eb
+# [checks] not configured
+# [caches] not configured
+# [logs] not configured
+INFO [run] cpu: dry run: nothing executed
+#+end_example
+
+The =build= phase starts =eb= directly, with no =srun= in front of it, because the scheduler is =local=.
+
+** Build it
+
+#+begin_src bash
+eb-pipeline run --site site.toml --list software.list --target cpu --build-type production --result result.json
+echo $?
+#+end_src
+
+#+begin_example
+INFO [licences] cpu: not configured
+INFO [shard] cpu: not configured
+INFO [sources] cpu: not configured
+INFO [admission] cpu: not configured
+INFO [checks] cpu: not configured
+INFO [caches] cpu: not configured
+INFO [logs] cpu: not configured
+INFO [build] cpu: Hello-1.0: start
+INFO [build] cpu: Hello-1.0: ok
+INFO [summary] cpu: summary.json and summary.html written in $WORK/logs/20261126_015425
+0
+#+end_example
+
+=result.json= records the line as built, with the log EasyBuild wrote:
+
+#+begin_src bash
+grep -E '"log"|"status": "(success|failed)"' result.json
+#+end_src
+
+#+begin_example
+      "log": "$WORK/logs/20261126_015425/cpu/Hello-1.0.stdout.log",
+      "status": "success",
+#+end_example
+
+** Load the module
+
+EasyBuild wrote the module under =$WORK/software/modules/all=:
+
+#+begin_src bash
+module use "$WORK/software/modules/all"
+module load Hello/1.0
+echo "$EBROOTHELLO"
+#+end_src
+
+#+begin_example
+$WORK/software/software/Hello/1.0
+#+end_example
+
+** What you did
+
+You installed EasyBuild beside EESSI's Lmod and wrote a site file for one machine.
+=check --probe-tools= checked that machine, and =run= built a module you then loaded.
+To build software of your own, put its easyconfigs in the build list: lines that EasyBuild resolves from its robot path, with any =eb= options after the name, as in [[file:first-build-list.org][Run your first build list]].
+[[file:../reference/templates.org][The site file templates]] lists the other templates, and [[file:../howto/write-a-site-file.org][Write a site file]] goes through every table.

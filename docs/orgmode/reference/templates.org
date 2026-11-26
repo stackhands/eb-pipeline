@@ -52,7 +52,7 @@ ERROR [main] -: cannot create small-cluster.toml: File exists (os error 17)
 One machine with no scheduler, such as a workstation, a lab server or a continuous integration runner.
 =kind = "local"= starts every command of a run on this host as a plain process, so no command goes through =srun=.
 No module is loaded before a build: =eb= comes from =PATH=, for example from =pip install easybuild=.
-EasyBuild still needs a module tool to write and find modules: source EESSI's init, which provides Lmod, or install Lmod, and set =EASYBUILD_MODULES_TOOL=Lmod=.
+EasyBuild still needs a module tool to write and find modules: source EESSI's init, which provides Lmod, or install Lmod, and set =EASYBUILD_MODULES_TOOL=Lmod=. =eb-pipeline check --site site.toml --probe-tools= says when this host has neither =eb= nor the module tool.
 Each line runs as its own =eb= command with the line's options only, so a line whose dependencies are not installed yet needs =--robot= on the line.
 
 #+INCLUDE: "../../../templates/workstation.toml" src toml
