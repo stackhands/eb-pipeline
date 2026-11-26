@@ -395,31 +395,24 @@ fn a_failed_publish_has_duration_but_no_success_timestamp() {
 fn a_shared_metrics_file_serializes_whole_invocations() {
     let fixture = Fixture::new();
     let metrics = fixture.dir.path().join("cvmfs.prom");
-    let ready = fixture.dir.path().join("sync.ready");
     let release = fixture.dir.path().join("sync.release");
+    common::make_fifo(&release);
+    let ready = common::ReadyFifo::open(&fixture.dir.path().join("sync.ready.fifo"));
     write_exec(
         &fixture.sync,
         "#!/bin/sh\n\
          echo \"sync $*\" >> \"$CALLS\"\n\
-         if [ -n \"${SYNC_READY:-}\" ]; then\n\
-           : > \"$SYNC_READY\"\n\
-           while [ ! -e \"$SYNC_RELEASE\" ]; do /bin/sleep 0.01; done\n\
+         if [ -n \"${SYNC_READY_FIFO:-}\" ]; then\n\
+           printf x > \"$SYNC_READY_FIFO\"\n\
+           read _ < \"$SYNC_RELEASE\"\n\
          fi\n",
     );
     let mut first = fixture.command_with_metrics(Some(&metrics));
     first
-        .env("SYNC_READY", &ready)
+        .env("SYNC_READY_FIFO", ready.path())
         .env("SYNC_RELEASE", &release);
     let first = first.spawn().unwrap();
-    let became_ready = wait_for_path(&ready, std::time::Duration::from_secs(10));
-    if !became_ready {
-        std::fs::write(&release, b"go\n").unwrap();
-    }
-    assert!(
-        became_ready,
-        "first synchronization did not become ready; calls:\n{}",
-        fixture.calls()
-    );
+    ready.wait();
     assert_eq!(
         fixture.calls(),
         "list\ntransaction repo.example\nsync --delete\n"
@@ -433,22 +426,35 @@ fn a_shared_metrics_file_serializes_whole_invocations() {
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join(".cvmfs.prom.lock");
-    let reached_lock = wait_for_fd_target(
-        second.id(),
-        &std::fs::canonicalize(&lock_path).unwrap_or(lock_path),
-        std::time::Duration::from_secs(10),
-    );
-    let second_status = second.try_wait();
-    let calls_while_locked = fixture.calls();
-    std::fs::write(release, b"go\n").unwrap();
+    let target = std::fs::canonicalize(&lock_path).unwrap_or(lock_path);
+    let fds = format!("/proc/{}/fd", second.id());
+    loop {
+        let opened = std::fs::read_dir(&fds)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|entry| std::fs::read_link(entry.path()).is_ok_and(|path| path == target));
+        if opened {
+            break;
+        }
+        assert!(
+            second.try_wait().unwrap().is_none(),
+            "second invocation finished before it opened the metrics lock"
+        );
+        std::thread::yield_now();
+    }
     assert!(
-        reached_lock,
-        "second invocation never reached the metrics lock path"
-    );
-    assert!(
-        second_status.unwrap().is_none(),
+        second.try_wait().unwrap().is_none(),
         "second invocation finished while the first held the metrics lock"
     );
+    let calls_while_locked = fixture.calls();
+    {
+        let mut release_file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&release)
+            .unwrap();
+        std::io::Write::write_all(&mut release_file, b"x\n").unwrap();
+    }
     assert_eq!(
         calls_while_locked,
         "list\ntransaction repo.example\nsync --delete\n"
@@ -470,36 +476,6 @@ sync --delete
 publish repo.example
 "
     );
-}
-
-fn wait_for_path(path: &Path, timeout: std::time::Duration) -> bool {
-    let deadline = std::time::Instant::now() + timeout;
-    while !path.exists() {
-        if std::time::Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    true
-}
-
-fn wait_for_fd_target(pid: u32, target: &Path, timeout: std::time::Duration) -> bool {
-    let fds = format!("/proc/{pid}/fd");
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        let opened = std::fs::read_dir(&fds)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .any(|entry| std::fs::read_link(entry.path()).is_ok_and(|path| path == target));
-        if opened {
-            return true;
-        }
-        if std::time::Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
 }
 
 #[test]

@@ -7,7 +7,7 @@
 mod exec_stub_shared;
 
 use serde_json::Value;
-use std::io::BufRead;
+use std::io::{BufRead, Read};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Output, Stdio};
@@ -519,6 +519,43 @@ pub fn make_fifo(path: &Path) {
     use std::os::unix::ffi::OsStrExt;
     let raw = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
     assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+}
+
+/// A named pipe a stub writes one byte into, so a test can wait without a poll.
+///
+/// Opened read-write: the open does not block, and a child that never writes
+/// does not look like end of file. Pass [`ReadyFifo::path`] as
+/// `STUB_READY_FIFO`. The stub runs `printf x > "$STUB_READY_FIFO"`.
+/// `wait` blocks until that byte arrives.
+pub struct ReadyFifo {
+    path: PathBuf,
+    reader: std::fs::File,
+}
+
+impl ReadyFifo {
+    pub fn open(path: &Path) -> Self {
+        make_fifo(path);
+        let reader = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        Self {
+            path: path.to_path_buf(),
+            reader,
+        }
+    }
+
+    pub fn path(&self) -> &str {
+        self.path.to_str().unwrap()
+    }
+
+    pub fn wait(mut self) {
+        let mut buf = [0u8; 1];
+        self.reader
+            .read_exact(&mut buf)
+            .expect("ready fifo closed before the child wrote");
+    }
 }
 
 /// Kill `child` if it still runs and reap it, so that a failed check after

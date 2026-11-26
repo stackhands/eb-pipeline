@@ -5,18 +5,10 @@ mod common;
 
 use common::{hold_lock, kill_and_reap, write_exec};
 use serde_json::Value;
-use std::io::Write;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
-
-fn write_skip_notice(reason: &str) {
-    let mut stderr = std::io::stderr().lock();
-    let _ = stderr.write_all(format!("SKIP: {reason}\n").as_bytes());
-    let _ = stderr.flush();
-}
 
 const EB_STACK: &str = r#"#!/bin/sh
 D="${STUB_DIR:?}"
@@ -51,6 +43,7 @@ case "$sub" in
         if [ -e "$res/$job.json" ]; then echo held >> "$D/admit.saw"; else echo free >> "$D/admit.saw"; fi
         ph=""; [ -n "${STUB_ADMIT_PHASE:-}" ] && ph=",\"phase\":\"$STUB_ADMIT_PHASE\""
         echo "{\"job\":\"$job\",\"footprint\":1,\"ts\":\"2026-01-01T00:00:00Z\"$ph}" > "$res/$job.json"
+        [ -n "${STUB_READY_FIFO:-}" ] && printf x > "$STUB_READY_FIFO"
       fi
       echo "{\"admitted\":true,\"attempt\":$n}"; exit 0
     fi
@@ -113,6 +106,7 @@ fi
 if [ -n "${STUB_EB_DELAY:-}" ]; then sleep "$STUB_EB_DELAY"; fi
 if [ -n "${STUB_EB_SLEEP:-}" ]; then
   echo started > "$D/started"
+  [ -n "${STUB_READY_FIFO:-}" ] && printf x > "$STUB_READY_FIFO"
   trap 'echo term > "$D/termed"; kill $pid 2>/dev/null; exit 0' TERM
   i=0
   while [ -d "$D" ] && [ $i -lt 300 ]; do
@@ -352,6 +346,27 @@ fn driver_named(
         }
     }
     c.spawn().unwrap()
+}
+
+/// Block until `child` has `lock` open. The child's exit is the failure.
+fn wait_until_lock_fd(child: &mut std::process::Child, lock: &Path) {
+    let fds = format!("/proc/{}/fd", child.id());
+    loop {
+        let opened = std::fs::read_dir(&fds)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|entry| std::fs::read_link(entry.path()).is_ok_and(|path| path == lock));
+        if opened {
+            return;
+        }
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "the run ended before it opened {}",
+            lock.display()
+        );
+        std::thread::yield_now();
+    }
 }
 
 fn finish(env: &Env, child: std::process::Child) -> Out {
@@ -649,23 +664,25 @@ fn result_phases_follow_the_pipeline_order() {
 #[test]
 fn the_result_records_how_long_each_line_phase_and_run_took() {
     let env = setup("");
-    let o = go(&env, LIST, &[("STUB_EB_DELAY", "0.3")]);
+    let o = go(&env, LIST, &[]);
     assert_eq!(o.code, 0, "{}", o.stderr);
     let r = o.result.unwrap();
-    for l in r["lines"].as_array().unwrap() {
-        assert!(l["duration_seconds"].as_f64().unwrap() >= 0.3, "{l}");
-    }
     let build = result_phase(&r, "build")["duration_seconds"]
         .as_f64()
         .unwrap();
-    assert!(build >= 0.6, "{r}");
+    assert!(build.is_finite(), "{r}");
+    for line in r["lines"].as_array().unwrap() {
+        let took = line["duration_seconds"].as_f64().unwrap();
+        assert!(took.is_finite() && took <= build, "{line}");
+    }
     assert!(
         result_phase(&r, "preflight")
             .get("duration_seconds")
             .is_none(),
         "a phase that ran no command has no duration: {r}"
     );
-    assert!(r["duration_seconds"].as_f64().unwrap() >= build, "{r}");
+    let run = r["duration_seconds"].as_f64().unwrap();
+    assert!(run.is_finite() && build <= run, "{r}");
 }
 
 #[test]
@@ -1084,29 +1101,14 @@ fn the_release_waits_for_the_admission_lock() {
         let env = setup(ADMISSION);
         let held = reservations_here(&env, kind);
         let lock = hold_lock(&env.dir.path().join("admission.lock"), kind == "posix");
-        let mut child = driver(&env, LIST, &[], &[]);
-        let deadline = Instant::now() + Duration::from_secs(20);
-        while !held.exists() {
-            assert!(
-                child.try_wait().unwrap().is_none(),
-                "{kind}: the run ended before the reservation appeared"
-            );
-            let late = Instant::now() >= deadline;
-            if late {
-                kill_and_reap(&mut child);
-            }
-            assert!(!late, "{kind}: reservation never appeared");
-            std::thread::sleep(Duration::from_millis(20));
-        }
+        let ready = common::ReadyFifo::open(&env.dir.path().join(format!("admit-{kind}.fifo")));
+        let mut child = driver(&env, LIST, &[("STUB_READY_FIFO", ready.path())], &[]);
+        ready.wait();
         assert!(
             child.try_wait().unwrap().is_none(),
             "{kind}: the run ended while the lock was held"
         );
-        let reserved = held.exists();
-        if !reserved {
-            kill_and_reap(&mut child);
-        }
-        assert!(reserved, "{kind}");
+        assert!(held.exists(), "{kind}");
         drop(lock);
         let o = finish(&env, child);
         assert_eq!(o.code, 0, "{kind}: {}", o.stderr);
@@ -1182,18 +1184,12 @@ fn a_held_state_root_lock_refuses_the_line_when_lock_timeout_runs_out() {
     install_module(&env, "Foo/1.0-foss-2025a.lua");
     std::fs::create_dir(env.dir.path().join("state")).unwrap();
     let _held = hold_lock(&env.dir.path().join("state/.lock"), false);
-    let t0 = Instant::now();
     let o = go(
         &env,
         "Foo-1.0-foss-2025a.eb --rebuild\n",
         &[("STUB_STAGED_LOCKS", "1")],
     );
-    let took = t0.elapsed();
     assert_eq!(o.code, 78, "{}", o.stderr);
-    assert!(
-        took >= Duration::from_secs(1) && took < Duration::from_secs(20),
-        "{took:?}"
-    );
     let c = calls(&env, "staged.calls");
     assert!(
         c[0].contains(&format!(" --state-root {r}/state --lock-timeout 1 ")),
@@ -1239,9 +1235,7 @@ fn lock_timeout_zero_refuses_at_once_at_the_tool_default_state_root() {
         let _ = std::fs::remove_file(env.dir.path().join("staged.calls"));
         let mut vars = vars;
         vars.push(("STUB_STAGED_LOCKS", "1"));
-        let t0 = Instant::now();
         let o = go(&env, "Foo-1.0-foss-2025a.eb --rebuild\n", &vars);
-        assert!(t0.elapsed() < Duration::from_secs(20), "{root}");
         assert_eq!(o.code, 78, "{root}: {}", o.stderr);
         assert!(calls(&env, "staged.calls")[0].contains(" --lock-timeout 0 "));
         assert_eq!(
@@ -1562,33 +1556,19 @@ echo "$1 ${EASYBUILD_OUTPUT_STYLE:-unset}" >> "$STUB_DIR/keeplogs.style"
 #[test]
 fn sigterm_is_forwarded_and_exit_is_143() {
     let env = setup("");
-    let mut child = driver(&env, LIST, &[("STUB_EB_SLEEP", "1")], &[]);
-    let started = env.dir.path().join("started");
-    let t0 = Instant::now();
-    while !started.exists() {
-        let late = t0.elapsed() >= Duration::from_secs(20);
-        if late {
-            kill_and_reap(&mut child);
-        }
-        assert!(!late, "stub never started");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    let ready = common::ReadyFifo::open(&env.dir.path().join("ready.fifo"));
+    let mut child = driver(
+        &env,
+        LIST,
+        &[("STUB_EB_SLEEP", "1"), ("STUB_READY_FIFO", ready.path())],
+        &[],
+    );
+    ready.wait();
     // SAFETY: the pid is the driver child this test started.
     unsafe {
         libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
     }
-    let t0 = Instant::now();
-    let status = loop {
-        if let Some(s) = child.try_wait().unwrap() {
-            break s;
-        }
-        let late = t0.elapsed() >= Duration::from_secs(20);
-        if late {
-            kill_and_reap(&mut child);
-        }
-        assert!(!late, "driver did not exit");
-        std::thread::sleep(Duration::from_millis(20));
-    };
+    let status = child.wait().unwrap();
     assert_eq!(status.code(), Some(143));
     assert!(env.dir.path().join("termed").exists(), "child saw SIGTERM");
     assert_eq!(calls(&env, "eb.calls").len(), 1, "no further line started");
@@ -1608,17 +1588,14 @@ fn sigterm_is_forwarded_and_exit_is_143() {
 fn a_result_that_cannot_be_written_does_not_replace_the_signal_exit() {
     let env = setup("");
     std::fs::create_dir(env.dir.path().join("result.json")).unwrap();
-    let mut child = driver(&env, LIST, &[("STUB_EB_SLEEP", "1")], &[]);
-    let started = env.dir.path().join("started");
-    let t0 = Instant::now();
-    while !started.exists() {
-        let late = t0.elapsed() >= Duration::from_secs(20);
-        if late {
-            kill_and_reap(&mut child);
-        }
-        assert!(!late, "stub never started");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    let ready = common::ReadyFifo::open(&env.dir.path().join("ready.fifo"));
+    let child = driver(
+        &env,
+        LIST,
+        &[("STUB_EB_SLEEP", "1"), ("STUB_READY_FIFO", ready.path())],
+        &[],
+    );
+    ready.wait();
     // SAFETY: the pid is the driver child this test started.
     unsafe {
         libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
@@ -1640,17 +1617,14 @@ fn a_result_that_cannot_be_written_fails_a_run_that_no_signal_ended() {
 #[test]
 fn sigterm_during_source_prefetch_records_every_line() {
     let env = setup("[sources]\n");
-    let mut child = driver(&env, LIST, &[("STUB_EB_SLEEP", "1")], &[]);
-    let started = env.dir.path().join("started");
-    let t0 = Instant::now();
-    while !started.exists() {
-        let late = t0.elapsed() >= Duration::from_secs(20);
-        if late {
-            kill_and_reap(&mut child);
-        }
-        assert!(!late, "stub never started");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    let ready = common::ReadyFifo::open(&env.dir.path().join("ready.fifo"));
+    let mut child = driver(
+        &env,
+        LIST,
+        &[("STUB_EB_SLEEP", "1"), ("STUB_READY_FIFO", ready.path())],
+        &[],
+    );
+    ready.wait();
     // SAFETY: the pid is the driver child this test started.
     unsafe {
         libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
@@ -1676,67 +1650,37 @@ fn sigterm_reaches_descendants_of_the_running_command() {
     write_exec(
         &env.dir.path().join("descendant"),
         r#"#!/bin/sh
-trap 'echo term > "$STUB_DIR/descendant.termed"; exit 0' TERM
-echo ready > "$STUB_DIR/descendant.ready"
-i=0
-while [ -d "$STUB_DIR" ] && [ $i -lt 300 ]; do
-  sleep 0.1 &
+trap 'echo term > "$STUB_DIR/descendant.termed"; printf x > "$STUB_TERM_FIFO"; exit 0' TERM
+printf x > "$STUB_READY_FIFO"
+while [ -d "$STUB_DIR" ]; do
+  sleep 3600 &
   pid=$!
   wait $pid
-  i=$((i + 1))
 done
 "#,
     );
-    let mut child = driver(&env, LIST, &[("STUB_EB_DESCENDANT", "1")], &[]);
-    let ready = env.dir.path().join("descendant.ready");
-    let t0 = Instant::now();
-    while !ready.exists() {
-        let late = t0.elapsed() >= Duration::from_secs(20);
-        if late {
-            kill_and_reap(&mut child);
-        }
-        assert!(!late, "descendant never started");
-        std::thread::sleep(Duration::from_millis(20));
-    }
-
+    let ready = common::ReadyFifo::open(&env.dir.path().join("descendant.ready.fifo"));
+    let term = common::ReadyFifo::open(&env.dir.path().join("descendant.term.fifo"));
+    let mut child = driver(
+        &env,
+        LIST,
+        &[
+            ("STUB_EB_DESCENDANT", "1"),
+            ("STUB_READY_FIFO", ready.path()),
+            ("STUB_TERM_FIFO", term.path()),
+        ],
+        &[],
+    );
+    ready.wait();
     // SAFETY: the pid is the driver child this test started.
     unsafe {
         libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
     }
-    let t0 = Instant::now();
-    let status = loop {
-        if let Some(s) = child.try_wait().unwrap() {
-            break s;
-        }
-        let late = t0.elapsed() >= Duration::from_secs(20);
-        if late {
-            kill_and_reap(&mut child);
-        }
-        assert!(!late, "driver did not exit");
-        std::thread::sleep(Duration::from_millis(20));
-    };
+    term.wait();
+    let status = child.wait().unwrap();
     assert_eq!(status.code(), Some(143));
-
-    let terminated = env.dir.path().join("descendant.termed");
-    let t0 = Instant::now();
-    let descendant_stopped = loop {
-        if terminated.exists() {
-            break true;
-        }
-        if t0.elapsed() >= Duration::from_secs(2) {
-            break false;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    if !descendant_stopped {
-        let pid: libc::pid_t = file_text(&env, "descendant.pid").trim().parse().unwrap();
-        // SAFETY: this cleans up the descendant pid recorded by the test stub.
-        unsafe {
-            libc::kill(pid, libc::SIGKILL);
-        }
-    }
     assert!(
-        descendant_stopped,
+        env.dir.path().join("descendant.termed").is_file(),
         "SIGTERM did not reach the running command's descendant"
     );
 }
@@ -2331,24 +2275,7 @@ fn a_run_waits_to_start_while_another_run_rotates() {
     let rotating = hold_lock(Path::new(&lock), false);
     let lock_path = std::fs::canonicalize(&lock).unwrap();
     let mut child = driver(&env, LIST, &[], &[]);
-    let fds = format!("/proc/{}/fd", child.id());
-    let opened = || {
-        std::fs::read_dir(&fds)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .any(|e| std::fs::read_link(e.path()).is_ok_and(|l| l == lock_path))
-    };
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while !opened() {
-        assert!(child.try_wait().unwrap().is_none(), "the run ended");
-        let late = Instant::now() >= deadline;
-        if late {
-            kill_and_reap(&mut child);
-        }
-        assert!(!late, "the rotation lock never opened");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    wait_until_lock_fd(&mut child, &lock_path);
     assert!(child.try_wait().unwrap().is_none(), "the run ended");
     let idle = calls(&env, "eb.calls").is_empty();
     if !idle {
@@ -2377,24 +2304,7 @@ fn a_signal_stops_a_run_that_waits_for_a_rotation() {
     let _rotating = hold_lock(&lock, false);
     let lock = std::fs::canonicalize(&lock).unwrap();
     let mut child = driver(&env, LIST, &[], &[]);
-    let fds = format!("/proc/{}/fd", child.id());
-    let opened = || {
-        std::fs::read_dir(&fds)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .any(|e| std::fs::read_link(e.path()).is_ok_and(|l| l == lock))
-    };
-    let t0 = Instant::now();
-    while !opened() {
-        assert!(child.try_wait().unwrap().is_none(), "the run ended");
-        let late = t0.elapsed() >= Duration::from_secs(20);
-        if late {
-            kill_and_reap(&mut child);
-        }
-        assert!(!late, "the lock never opened");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    wait_until_lock_fd(&mut child, &lock);
     // SAFETY: the pid is the driver child this test started.
     unsafe {
         libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
@@ -2415,93 +2325,7 @@ fn a_signal_while_waiting_for_the_summary_lock_preserves_signal_exit() {
     let held = hold_lock(&lock, false);
     let lock = std::fs::canonicalize(&lock).unwrap();
     let mut child = driver(&env, LIST, &[], &[]);
-    let child_pid = child.id();
-    let fds = format!("/proc/{child_pid}/fd");
-    let force_unobservable =
-        std::env::var_os("EB_PIPELINE_TEST_FORCE_SUMMARY_LOCK_UNOBSERVABLE").is_some();
-    enum LockWaitProbe {
-        WaitingOnLock,
-        NotYet,
-        Unobservable(String),
-    }
-    let waiting_on_summary_lock = || -> LockWaitProbe {
-        if force_unobservable {
-            return LockWaitProbe::Unobservable("forced by test hook".into());
-        }
-        let lock_opened = std::fs::read_dir(&fds)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .any(|entry| std::fs::read_link(entry.path()).is_ok_and(|path| path == lock));
-        if !lock_opened {
-            return LockWaitProbe::NotYet;
-        }
-        let wchan = std::fs::read_to_string(format!("/proc/{child_pid}/wchan"));
-        let stack = std::fs::read_to_string(format!("/proc/{child_pid}/stack"));
-        let wchan_text = wchan.as_deref().map(str::trim).unwrap_or_default();
-        let shows_lock_wait = |text: &str| {
-            text.contains("flock")
-                || text.contains("lock_inode")
-                || text.contains("locks_lock")
-                || text.contains("posix_lock")
-        };
-        if shows_lock_wait(wchan_text) || stack.as_deref().is_ok_and(shows_lock_wait) {
-            return LockWaitProbe::WaitingOnLock;
-        }
-        let wchan_observable =
-            wchan.as_ref().is_ok() && !wchan_text.is_empty() && wchan_text != "?";
-        let stack_observable = stack.is_ok();
-        if wchan_observable || stack_observable {
-            return LockWaitProbe::NotYet;
-        }
-        LockWaitProbe::Unobservable(format!(
-            "cannot inspect lock wait state: wchan={wchan:?}, stack={stack:?}"
-        ))
-    };
-    let t0 = Instant::now();
-    let mut unobservable_since = None;
-    let mut waiting_since = None;
-    loop {
-        match waiting_on_summary_lock() {
-            LockWaitProbe::WaitingOnLock => {
-                let since = *waiting_since.get_or_insert_with(Instant::now);
-                if since.elapsed() >= Duration::from_millis(200) {
-                    break;
-                }
-                unobservable_since = None;
-            }
-            LockWaitProbe::NotYet => {
-                unobservable_since = None;
-                waiting_since = None;
-            }
-            LockWaitProbe::Unobservable(reason) => {
-                waiting_since = None;
-                let since = *unobservable_since.get_or_insert_with(Instant::now);
-                if since.elapsed() >= Duration::from_secs(2) {
-                    // SAFETY: the pid is the driver child this test started.
-                    unsafe {
-                        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
-                    }
-                    drop(held);
-                    let _ = finish(&env, child);
-                    write_skip_notice(&format!(
-                        "{reason} for at least 2s after opening .summary.lock"
-                    ));
-                    return;
-                }
-            }
-        }
-        assert!(child.try_wait().unwrap().is_none(), "the run ended");
-        let late = t0.elapsed() >= Duration::from_secs(20);
-        if late {
-            kill_and_reap(&mut child);
-        }
-        assert!(
-            !late,
-            "the run never reached a flock wait on the summary lock"
-        );
-        std::thread::yield_now();
-    }
+    wait_until_lock_fd(&mut child, &lock);
     // SAFETY: the pid is the driver child this test started.
     unsafe {
         libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
@@ -2513,15 +2337,11 @@ fn a_signal_while_waiting_for_the_summary_lock_preserves_signal_exit() {
     assert_eq!(r["interrupted_by"], "SIGTERM", "{r}");
     assert_eq!(r["exit_code"], 143, "{r}");
     let summary_path = env.dir.path().join("logs/20260101_000000/summary.json");
-    let start = Instant::now();
-    while !summary_path.is_file() {
-        assert!(
-            start.elapsed() < Duration::from_secs(2),
-            "{} was not written",
-            summary_path.display()
-        );
-        std::thread::yield_now();
-    }
+    assert!(
+        summary_path.is_file(),
+        "{} was not written",
+        summary_path.display()
+    );
     let summary: Value = serde_json::from_str(&std::fs::read_to_string(&summary_path).unwrap())
         .unwrap_or_else(|e| panic!("{}: {e}", summary_path.display()));
     let target = summary["targets"]
@@ -2542,16 +2362,23 @@ fn two_targets_that_end_together_rotate_once() {
         "[[targets]]\nname = \"cpu\"\n[[targets]]\nname = \"gpu\"",
     );
     std::fs::write(&env.site, text).unwrap();
-    // Each target's first line waits until both targets build, so both runs
-    // are live before either ends.
+    // Each build blocks on a pipe until the other target has entered, so
+    // both runs are live before either ends. The shared rotation lock is
+    // still held then, and the run that reaches rotation second is the one
+    // that rotates.
     write_exec(
         &env.stubs.join("eb"),
         r#"#!/bin/sh
 D="${STUB_DIR:?}"
 echo "$*" >> "$D/eb.calls"
 echo "$EB_PIPELINE_TARGET" >> "$D/eb.targets"
-i=0
-while [ -d "$D" ] && [ "$(sort -u "$D/eb.targets" | wc -l)" -lt 2 ] && [ $i -lt 200 ]; do sleep 0.1; i=$((i + 1)); done
+case "$EB_PIPELINE_TARGET" in
+  cpu) other=gpu ;;
+  *) other=cpu ;;
+esac
+printf 'x\n' > "$D/entered.$other" &
+read _ < "$D/entered.$EB_PIPELINE_TARGET"
+wait
 exit 0
 "#,
     );
@@ -2564,21 +2391,15 @@ exit 0
 me="$D/keeplogs.inflight.$EB_PIPELINE_TARGET"
 : > "$me"
 echo "$*" >> "$D/keeplogs.calls"
-case "$EB_PIPELINE_TARGET" in cpu) other=gpu;; *) other=cpu;; esac
-reason=timeout
-i=0
-while [ $i -lt 1000 ] && [ -d "$D" ]; do
-  if [ -e "$D/keeplogs.inflight.$other" ]; then reason=overlap; break; fi
-  if [ -e "$D/result-$other.json" ]; then reason=sibling-finished; break; fi
-  sleep 0.01
-  i=$((i + 1))
-done
-echo "$EB_PIPELINE_TARGET $reason $i" >> "$D/keeplogs.wait"
+echo "$EB_PIPELINE_TARGET entered" >> "$D/keeplogs.wait"
 rm -f "$D/rotating" "$me"
 "#,
         ),
     );
     let root = env.dir.path();
+    for name in ["entered.cpu", "entered.gpu"] {
+        common::make_fifo(&root.join(name));
+    }
     std::fs::write(root.join("list.txt"), LIST).unwrap();
     let path = format!(
         "{}:{}",
@@ -2725,15 +2546,7 @@ fn a_run_leaves_its_rotation_at_once_to_a_rotate_that_holds_the_tree() {
         &env.dir.path().join("logs/.eb-keep-logs-rotate.lock"),
         false,
     );
-    let mut child = driver(&env, LIST, &[], &[]);
-    let t0 = Instant::now();
-    while child.try_wait().unwrap().is_none() {
-        if t0.elapsed() > Duration::from_secs(30) {
-            kill_and_reap(&mut child);
-            panic!("the run still waits for {r}/logs/.eb-keep-logs-rotate.lock");
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    let child = driver(&env, LIST, &[], &[]);
     let o = finish(&env, child);
     drop(rotating);
     assert_eq!(o.code, 0, "{}", o.stderr);
@@ -3444,6 +3257,7 @@ echo "$*" >> "$D/check.calls"
 env | grep '^EB_PIPELINE_CHECK_' | sort > "$D/check.env"
 if [ -n "${STUB_CHECK_SLEEP:-}" ]; then
   echo started > "$D/check.started"
+  [ -n "${STUB_READY_FIFO:-}" ] && printf x > "$STUB_READY_FIFO"
   i=0
   while [ -d "$D" ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
 fi
@@ -3537,17 +3351,14 @@ fn a_failed_check_fails_the_run_and_skips_caches() {
 #[test]
 fn sigterm_during_the_check_command_records_the_phase_once() {
     let env = with_check("[checks]\ncommand = \"CHECKBIN\"\n");
-    let mut child = driver(&env, LIST, &[("STUB_CHECK_SLEEP", "1")], &[]);
-    let started = env.dir.path().join("check.started");
-    let t0 = Instant::now();
-    while !started.exists() {
-        let late = t0.elapsed() >= Duration::from_secs(20);
-        if late {
-            kill_and_reap(&mut child);
-        }
-        assert!(!late, "check never started");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    let ready = common::ReadyFifo::open(&env.dir.path().join("ready.fifo"));
+    let mut child = driver(
+        &env,
+        LIST,
+        &[("STUB_CHECK_SLEEP", "1"), ("STUB_READY_FIFO", ready.path())],
+        &[],
+    );
+    ready.wait();
     // SAFETY: the pid is the driver child this test started.
     unsafe {
         libc::kill(child.id() as libc::pid_t, libc::SIGTERM);

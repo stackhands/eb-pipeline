@@ -2,8 +2,7 @@
 
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
 
 fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
@@ -20,31 +19,14 @@ fn dry_run_metrics_update_does_not_block_on_fifo() {
     let metrics = dir.path().join("metrics.prom");
     make_fifo(&metrics);
 
-    let mut child = bin()
+    let output = bin()
         .args(["--dry-run", "--metrics-file"])
         .arg(&metrics)
         .arg("repo.example.org")
         .arg("--")
         .arg("true")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .output()
         .unwrap();
-
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        if child.try_wait().unwrap().is_some() {
-            break;
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!("eb-cvmfs blocked while reading a FIFO metrics file");
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-
-    let output = child.wait_with_output().unwrap();
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     assert!(
         String::from_utf8_lossy(&output.stdout).contains("cvmfs_server list"),

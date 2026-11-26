@@ -1,78 +1,12 @@
-//! `[notify]` POSTs a run's summary.json to a webhook, here a local HTTP
-//! server, and never prints the URL past its host.
+//! `[notify]` POSTs a run's summary.json through curl on `PATH`, and never
+//! prints the webhook URL past its host.
 
 mod common;
 use common::{code, eb_pipeline, run, setup, stderr, stdout, write_exec, STAMP};
 use serde_json::Value;
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::sync::mpsc::{channel, Receiver};
-use std::time::Duration;
 
 const LIST: &str = "Foo-1.0-foss-2025a.eb\n";
 const SECRET: &str = "s3cr3t-token";
-
-struct Request {
-    body: Vec<u8>,
-}
-
-/// A server on 127.0.0.1 that answers each request with `status`.
-fn serve(status: &'static str) -> (u16, Receiver<Request>) {
-    let l = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = l.local_addr().unwrap().port();
-    let (tx, rx) = channel();
-    std::thread::spawn(move || {
-        for s in l.incoming() {
-            let Ok(mut s) = s else { break };
-            let req = read_request(&mut s);
-            let _ = write!(
-                s,
-                "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-            );
-            if tx.send(req).is_err() {
-                break;
-            }
-        }
-    });
-    (port, rx)
-}
-
-fn read_request(s: &mut TcpStream) -> Request {
-    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
-    let mut buf = Vec::new();
-    let mut chunk = [0u8; 4096];
-    let head_end = loop {
-        if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-            break i + 4;
-        }
-        let n = s.read(&mut chunk).unwrap();
-        assert!(n > 0, "connection closed inside the headers");
-        buf.extend_from_slice(&chunk[..n]);
-    };
-    let head = String::from_utf8_lossy(&buf[..head_end]).into_owned();
-    let headers: Vec<String> = head
-        .split("\r\n")
-        .filter(|l| !l.is_empty())
-        .skip(1)
-        .map(str::to_string)
-        .collect();
-    let len: usize = headers
-        .iter()
-        .find_map(|h| {
-            let (k, v) = h.split_once(':')?;
-            k.eq_ignore_ascii_case("content-length")
-                .then(|| v.trim().parse().ok())?
-        })
-        .unwrap_or(0);
-    while buf.len() < head_end + len {
-        let n = s.read(&mut chunk).unwrap();
-        assert!(n > 0, "connection closed inside the body");
-        buf.extend_from_slice(&chunk[..n]);
-    }
-    Request {
-        body: buf[head_end..head_end + len].to_vec(),
-    }
-}
 
 fn assert_no_secret(t: &common::T, out: &std::process::Output) {
     for text in [stderr(out), stdout(out)] {
@@ -212,12 +146,13 @@ fn an_unreachable_webhook_is_a_warning() {
 
 #[test]
 fn when_problems_posts_only_after_a_run_that_did_not_exit_zero() {
-    let (port, rx) = serve("200 OK");
     let t = setup(&format!(
-        "[notify]\nwebhook = \"http://127.0.0.1:{port}/{SECRET}\"\nwhen = \"problems\"\n"
+        "[notify]\nwebhook = \"http://hooks.example/{SECRET}\"\nwhen = \"problems\"\n"
     ));
+    install_curl(&t);
     let o = run(&t, "cpu", STAMP, LIST, &[]);
     assert_eq!(code(&o), 0, "{}", stderr(&o));
+    assert_eq!(curl_count(&t), 0);
     assert!(
         stderr(&o).contains(
             "INFO [notify] cpu: the run exited 0 and notify.when is problems; nothing sent"
@@ -225,7 +160,6 @@ fn when_problems_posts_only_after_a_run_that_did_not_exit_zero() {
         "{}",
         stderr(&o)
     );
-    assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
     let o = run(
         &t,
         "gpu",
@@ -234,8 +168,9 @@ fn when_problems_posts_only_after_a_run_that_did_not_exit_zero() {
         &[("STUB_EB_FAIL", "Foo-1.0-foss-2025a")],
     );
     assert_eq!(code(&o), 1, "{}", stderr(&o));
-    let req = rx.recv_timeout(Duration::from_secs(10)).unwrap();
-    let posted: Value = serde_json::from_slice(&req.body).unwrap();
+    assert_eq!(curl_count(&t), 1);
+    let body = std::fs::read(t.root().join("curl.1.body")).unwrap();
+    let posted: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(posted["targets"].as_array().unwrap().len(), 2);
     assert_eq!(posted["exit_code"], 1);
     assert_no_secret(&t, &o);

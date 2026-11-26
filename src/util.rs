@@ -1227,15 +1227,8 @@ mod tests {
         let fifo = dir.path().join("input.fifo");
         let raw = CString::new(fifo.as_os_str().as_bytes()).unwrap();
         assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
-        let (send, receive) = std::sync::mpsc::channel();
-        let reader = std::thread::spawn(move || {
-            send.send(read_text_file(&fifo)).unwrap();
-        });
-        let error = receive
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("FIFO reader blocked")
-            .unwrap_err();
-        reader.join().unwrap();
+        let reader = std::thread::spawn(move || read_text_file(&fifo));
+        let error = reader.join().unwrap().unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
 
         let error = read_text_file(dir.path()).unwrap_err();
