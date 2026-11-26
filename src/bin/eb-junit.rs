@@ -5,7 +5,7 @@
 
 use eb_pipeline::{exit, run, util};
 use serde_json::{Map, Number, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -639,16 +639,16 @@ fn write_case(out: &mut String, class: &str, case: &Case) {
 }
 
 fn disambiguate(names: &[String]) -> Vec<String> {
-    let mut seen = BTreeMap::<String, usize>::new();
+    let mut used = BTreeSet::new();
     let mut out = Vec::with_capacity(names.len());
     for name in names {
-        let n = seen.entry(escape_attr(name)).or_insert(0);
-        *n += 1;
-        if *n == 1 {
-            out.push(name.clone());
-        } else {
-            out.push(format!("{name} #{n}"));
+        let mut n = 1usize;
+        let mut candidate = name.clone();
+        while !used.insert(escape_attr(&candidate)) {
+            n += 1;
+            candidate = format!("{name} #{n}");
         }
+        out.push(candidate);
     }
     out
 }
@@ -853,6 +853,22 @@ mod tests {
         let xml = render(text).unwrap();
         assert!(xml.contains("name=\"cpu/Ok-1.0.eb\""));
         assert!(xml.contains("name=\"cpu/Ok-1.0.eb #2\""));
+    }
+
+    #[test]
+    fn a_numbered_suffix_does_not_reuse_another_xml_safe_name() {
+        let text = concat!(
+            r#"{"schema_version":1,"kind":"result","site":"example","target":"cpu","#,
+            r#""build_type":"production","run_id":"n","exit_code":1,"lines":["#,
+            r#"{"easyconfig":"A.eb","unit":"all","phase":"build","status":"failed"},"#,
+            r#"{"easyconfig":"A.eb","unit":"all","phase":"build","status":"failed"},"#,
+            "{\"easyconfig\":\"A\\u0001.eb #2\",\"unit\":\"all\",\"phase\":\"build\",\"status\":\"failed\"}",
+            "]}"
+        );
+        let xml = render(text).unwrap();
+        assert_eq!(xml.matches("name=\"cpu/A.eb\"").count(), 1, "{xml}");
+        assert_eq!(xml.matches("name=\"cpu/A.eb #2\"").count(), 1, "{xml}");
+        assert_eq!(xml.matches("name=\"cpu/A.eb #2 #2\"").count(), 1, "{xml}");
     }
 
     #[test]
