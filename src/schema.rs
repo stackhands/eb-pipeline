@@ -476,8 +476,7 @@ doc_struct! {
 doc_struct! {
     /// Environment modules.
     Modules {
-        #[serde(default)]
-        init: Vec<String> => ("array of string", "[]", false,
+        init: Vec<String> => ("array of string", "", true,
             "Modules loaded, in order, after `module purge` in every EasyBuild phase and around `stack shard`, one name per entry, without white space. May be empty."),
         #[serde(default)]
         unuse_path: bool => ("boolean", "false", false, "Clears MODULEPATH after `shell_init` and before loading `init`, so the first `init` module needs an absolute path."),
@@ -490,20 +489,6 @@ doc_struct! {
         #[serde(default)]
         package_env: BTreeMap<String, BTreeMap<String, String>> => ("table of tables", "{}", false,
             "Environment per package name, `[modules.package_env.<Name>]`, exported for lines of that package."),
-    }
-}
-
-impl Default for Modules {
-    /// An absent `[modules]` table: no module loaded, no wrapper.
-    fn default() -> Self {
-        Modules {
-            init: Vec::new(),
-            unuse_path: false,
-            shell: d_shell(),
-            shell_init: None,
-            eessi: None,
-            package_env: BTreeMap::new(),
-        }
     }
 }
 
@@ -773,9 +758,7 @@ doc_struct! {
         attest: Option<Attest> => ("table", "none", false,
             "When enabled, `plan` and `run` append a hash of the exact inputs to an RFC 9162 sidecar log. Absent, they record nothing."),
         sources: Option<Sources> => ("table", "none", false, "Source prefetch."),
-        #[serde(default)]
-        modules: Modules => ("table", "{}", false,
-            "Environment modules; absent, no module is loaded and no wrapper starts."),
+        modules: Modules => ("table", "", true, "Environment modules."),
         caches: Option<Caches> => ("table", "none", false, "Module caches."),
         checks: Option<Checks> => ("table", "none", false,
             "A test command run after a clean build and before caches."),
@@ -987,20 +970,5 @@ mod tests {
         let caches: Caches = toml::from_str("").unwrap();
         assert!(caches.enabled);
         assert!(caches.targets.is_empty());
-    }
-
-    #[test]
-    fn site_without_modules_table_loads_nothing() {
-        let text = "schema_version = 1\nkind = \"site\"\n[site]\nname = \"w\"\n\
-                    [scheduler]\nkind = \"local\"\n[[targets]]\nname = \"cpu\"\n\
-                    build_lists = [\"software.list\"]\ndefault = true\n[filesystems]\n\
-                    scratch = \"/srv/s\"\ntmp = \"/srv/s/tmp\"\nbuild_path = \"/srv/s/b\"\n\
-                    install_root = \"/srv/sw\"\nlog_root = \"/srv/logs\"\n";
-        let s: Site = toml::from_str(text).expect("a site without [modules] parses");
-        assert_eq!(s.modules, Modules::default());
-        assert!(s.modules.init.is_empty());
-        assert_eq!(s.modules.shell, "bash");
-        let m: Modules = toml::from_str("shell = \"sh\"").expect("[modules] without init parses");
-        assert!(m.init.is_empty());
     }
 }

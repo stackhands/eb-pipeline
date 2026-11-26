@@ -94,7 +94,7 @@ So every job that a run or =watch= starts needs the directory, whatever its phas
 | =resume=         | table          | none     | Recording an input identity and resuming a run from a prior result.             |
 | =attest=         | table          | none     | Attesting the exact inputs of a finalized plan in an RFC 9162 sidecar log.      |
 | =sources=        | table          | none     | Fetching the sources of every line before the first build.                      |
-| =modules=        | table          | ={}=     | The environment modules each command loads; absent, none.                                   |
+| =modules=        | table          | required | The environment modules each command loads.                                     |
 | =caches=         | table          | none     | The command that writes module caches after a clean build.                      |
 | =checks=         | table          | none     | A test command run after a clean build and before caches.                       |
 | =logs=           | table          | none     | Keeping the logs of a failed line, and rotating the log tree.                   |
@@ -435,7 +435,7 @@ earlier valid bundle.
 
 | Key           | Type            | Default  | Meaning                                                                                                                                                                                                                                                       |
 |---------------+-----------------+----------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| =init=        | array of string | =[]=     | The modules to load, in order, after =module purge=, before the shard, prefetch, build, =eb-keep-logs failed= and cache commands; may be empty. An entry is one module name, so =module load A B= is =["A", "B"]=; =check= refuses an entry with white space. |
+| =init=        | array of string | required | The modules to load, in order, after =module purge=, before the shard, prefetch, build, =eb-keep-logs failed= and cache commands; may be empty. An entry is one module name, so =module load A B= is =["A", "B"]=; =check= refuses an entry with white space. |
 | =unuse_path=  | boolean         | =false=  | =true= empties =MODULEPATH= after =shell_init= and before =init= loads, so that the first module of =init= needs an absolute path; =check= warns when it has none.                                                                                            |
 | =shell=       | string          | =bash=   | The shell that runs the module wrapper, a script for a POSIX shell, by name or by path: =sh=, =bash=, =dash=, =ash=, =ksh=, =ksh93=, =mksh= or =yash=. =check= refuses any other, such as =zsh=, which does not split the names of =init=.                    |
 | =shell_init=  | string          | none     | A file to source before =module= is called, for a shell that does not define it. It is sourced without =set -e= and =set -u=; a =module= call that fails still stops the command.                                                                             |
