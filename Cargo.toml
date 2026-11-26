@@ -7,6 +7,7 @@ description = "Site-neutral EasyBuild pipeline driver configured by a per-site T
 license = "MIT"
 authors = ["the stackhands authors"]
 repository = "https://github.com/stackhands/eb-pipeline"
+documentation = "https://stackhands.github.io/eb-pipeline/"
 readme = "README.md"
 keywords = ["easybuild", "hpc", "slurm", "pipeline", "ci"]
 categories = ["command-line-utilities", "development-tools", "science"]
