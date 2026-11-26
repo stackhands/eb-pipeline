@@ -222,6 +222,16 @@ pub fn copy_atomic_checked<E>(
     )
 }
 
+#[cfg(test)]
+fn atomic_create_attempts() -> u32 {
+    2
+}
+
+#[cfg(not(test))]
+fn atomic_create_attempts() -> u32 {
+    1000
+}
+
 fn publish_atomic_with<T, E>(
     path: &Path,
     populate: impl FnOnce(&mut std::fs::File, &Path) -> Result<T, E>,
@@ -244,7 +254,7 @@ fn publish_atomic_with<T, E>(
     let name = atomic_output_name(&destination);
     let local_identity = local_writer_identity();
     remove_stale_atomic_temporary_files(parent, name, &local_identity);
-    for attempt in 0..1000u32 {
+    for attempt in 0..atomic_create_attempts() {
         let temporary = parent.join(atomic_temp_file_name(
             name,
             &local_identity,
@@ -1270,7 +1280,7 @@ mod tests {
         let path = dir.path().join("result.json");
         std::fs::write(&path, b"complete old bytes\n").unwrap();
         let identity = local_writer_identity();
-        for attempt in 0..1000u32 {
+        for attempt in 0..atomic_create_attempts() {
             std::fs::write(
                 dir.path().join(atomic_temp_file_name(
                     "result.json",

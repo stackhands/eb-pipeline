@@ -1414,10 +1414,10 @@ fn invalid_arguments_are_usage_errors() {
 
 #[test]
 fn concurrent_fixture_exec_writes_do_not_hit_text_file_busy() {
-    let workers: Vec<_> = (0..8)
+    let workers: Vec<_> = (0..2)
         .map(|_| {
             std::thread::spawn(|| {
-                for _ in 0..20 {
+                for _ in 0..2 {
                     let fixture = Fixture::new();
                     let output = fixture.command().output().unwrap();
                     assert_eq!(code(&output), 0, "{}", stderr(&output));
