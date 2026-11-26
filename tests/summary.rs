@@ -166,7 +166,7 @@ fn a_summary_with_another_kind_is_not_merged() {
 
     let gpu = run(&t, "gpu", STAMP, LIST, &[]);
 
-    assert_eq!(code(&gpu), 0, "{}", stderr(&gpu));
+    assert_eq!(code(&gpu), 1, "{}", stderr(&gpu));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), foreign);
     assert!(
         stderr(&gpu).contains("kind `result` is not `summary`"),
@@ -283,19 +283,19 @@ fn status_of_runs(t: &T) -> String {
 }
 
 /// `record` and `status` on `text` as `summary.json`: both refuse it with
-/// `why`, and the run leaves the file as it was.
+/// `why`, the run fails, and the file is left as it was.
 fn assert_refused_and_kept(text: &str, why: &str) {
     let (t, path) = with_summary_file(text);
 
     let o = run(&t, "gpu", STAMP, LIST, &[]);
-    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    assert_eq!(code(&o), 1, "{}", stderr(&o));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
     let err = stderr(&o);
-    let warning = err
+    let error = err
         .lines()
-        .find(|l| l.starts_with("WARN [summary] gpu: no summary written: "))
-        .unwrap_or_else(|| panic!("no summary warning in {err}"));
-    assert!(warning.contains(why), "{warning}");
+        .find(|l| l.starts_with("ERROR [main] -: cannot write run summary: "))
+        .unwrap_or_else(|| panic!("no summary error in {err}"));
+    assert!(error.contains(why), "{error}");
 
     let shown = status_of_runs(&t);
     assert!(
