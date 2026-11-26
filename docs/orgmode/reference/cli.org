@@ -72,6 +72,7 @@ Companion commands from this package:
   eb-test-map
   eb-junit
   eb-cvmfs
+  eb-admin-report
 
 Configuration: every flag above falls back to an EB_PIPELINE_<FLAG> variable
 (EB_PIPELINE_SITE, EB_PIPELINE_LIST, EB_PIPELINE_PACKAGE_PLAN,
@@ -553,6 +554,14 @@ See [[file:test-map.org][The test map]] for all options and exit statuses.
 
 =eb-cvmfs= brackets one cache synchronization command in a CVMFS transaction, with optional archive-manifest checks, verification, timeouts, tagging, integrity checks, and Prometheus metrics.
 See [[file:cvmfs.org][The eb-cvmfs command]] for all options and exit statuses.
+
+*** eb-admin-report
+
+=eb-admin-report= reads one result file from =eb-pipeline run --result= and prints a markdown triage report: run metadata, status counts, failure signatures from =eb-stack stack bot-classify=, whether the failure is systemic, and the unfinished lines with log tails.
+
+#+begin_example
+eb-admin-report --result FILE [--out FILE] [--max-lines N] [--log-tail-lines N]
+#+end_example
 
 ** See also
 

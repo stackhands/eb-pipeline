@@ -44,6 +44,7 @@ The one shell that eb-pipeline starts is the module wrapper, which a =[modules]=
 *** The other tools stay programs of their own
 
 eb-pipeline starts eb-stack, eb-keep-logs and eb-staged-rebuild as programs, and never links them in.
+It does link the rfc9162 library, which =verify= uses to check an inclusion proof, and attestation starts =rfc9162-sidecar= as a program.
 Each keeps its own releases, its own command line and its own documentation, and a site can run each one by hand.
 A =min_version= in =[site.tools]= is checked before any work, and the exit statuses of each tool are read as that tool defines them, then mapped onto the statuses of a run, as [[file:phases.org][How a run goes through its phases]] describes.
 
