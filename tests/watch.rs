@@ -975,7 +975,9 @@ fn watch_adopt_dry_run_removes_work_when_stdout_cannot_be_written() {
 #[test]
 fn without_eb_stack_watch_says_what_to_rebuild_and_refuses_to_guess_the_rest() {
     let t = built("");
-    let vars = eessi_vars(&t, "2023.06");
+    let mut vars = eessi_vars(&t, "2023.06");
+    // An eb-stack on the caller's PATH would answer in place of the removed stub.
+    vars.push(("PATH", format!("{}:/usr/bin:/bin", t.stubs.display())));
     t.eessi_module("CMake", "3.27.6-GCCcore-13.2.0");
     std::fs::remove_file(t.stubs.join("eb-stack")).unwrap();
     let builds = t.calls("eb");
