@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::Read;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 /// One file in an offline bundle.
@@ -102,9 +103,9 @@ fn files_under(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), Fail> {
     Ok(())
 }
 
-fn encode_locator(text: &str) -> String {
+fn encode_locator(bytes: &[u8]) -> String {
     let mut out = String::new();
-    for byte in text.bytes() {
+    for &byte in bytes {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'-') {
             out.push(byte as char);
         } else {
@@ -233,7 +234,7 @@ pub fn write(root: &Path, scope: &Scope<'_>, assets: &[OfflineAsset]) -> Result<
             entries.insert(Entry {
                 url: format!(
                     "eb-stack-planner:{}",
-                    encode_locator(&rel.to_string_lossy())
+                    encode_locator(rel.as_os_str().as_bytes())
                 ),
                 sha256: digest.clone(),
                 local_name: local_name(&path)?,
@@ -273,7 +274,7 @@ pub fn write(root: &Path, scope: &Scope<'_>, assets: &[OfflineAsset]) -> Result<
             entries.insert(Entry {
                 url: format!(
                     "easybuild-source:{}",
-                    encode_locator(&rel.to_string_lossy())
+                    encode_locator(rel.as_os_str().as_bytes())
                 ),
                 sha256: digest.clone(),
                 local_name: local_name(&path)?,
@@ -468,6 +469,52 @@ mod tests {
                 AtomicWriteOp::SyncParentDir(expected_parent),
             ]
         );
+    }
+
+    #[test]
+    fn a_non_utf8_directory_keeps_its_bytes_in_the_locator() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("sources");
+        let odd = source.join(OsString::from_vec(vec![0xff]));
+        std::fs::create_dir_all(&odd).unwrap();
+        let payload = odd.join("data.txt");
+        std::fs::write(&payload, b"payload\n").unwrap();
+
+        let planner = root.path().join("bundle/planner");
+        let planned = planner.join(OsString::from_vec(vec![0xfe]));
+        std::fs::create_dir_all(&planned).unwrap();
+        std::fs::write(planned.join("plan.txt"), b"plan\n").unwrap();
+
+        let mut site = minimal_site();
+        site.filesystems.source_paths = vec![source.to_str().unwrap().to_string()];
+        let scope = Scope {
+            site: &site,
+            site_file: None,
+            target: site.target("cpu").unwrap(),
+            build_type: None,
+            run_id: "run".into(),
+            log_stamp: "20261121_220000".into(),
+        };
+        let bundle = root.path().join("bundle");
+        let manifest = write(&bundle, &scope, &[]).unwrap();
+        let urls: Vec<_> = manifest
+            .files
+            .iter()
+            .map(|entry| entry.url.as_str())
+            .collect();
+        assert_eq!(
+            urls,
+            [
+                "easybuild-source:%FF/data.txt",
+                "eb-stack-planner:%FE/plan.txt",
+            ]
+        );
+        assert_eq!(manifest.files[0].local_name, "data.txt");
+        assert_eq!(manifest.files[0].sha256, sha256(&payload).unwrap());
+        assert_eq!(manifest.files[1].local_name, "plan.txt");
     }
 
     #[test]
