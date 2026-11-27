@@ -6,7 +6,7 @@
 
 Install the =eb-pipeline= command for the account that runs the builds, from a release or from source.
 
-These pages describe the development branch. The latest release is 0.5.0.
+These pages describe the development branch. The latest release is 0.6.0.
 Release 0.3.1 is older: it has no =audit=, =verify=, =completions= or =man= command, no =check --stack-checks= or =check --check-from-commit=, no =aliases= or =exclude_option= in =[targets.select]=, and no offline source bundle.
 The [[https://github.com/stackhands/eb-pipeline/blob/main/CHANGELOG.md][changelog]] lists the rest.
 
@@ -27,11 +27,11 @@ The [[https://github.com/stackhands/eb-pipeline/blob/main/CHANGELOG.md][changelo
 
 ** Install a release
 
-1. Download the archive of release 0.5.0 and its checksum, and check the archive:
+1. Download the archive of release 0.6.0 and its checksum, and check the archive:
 
    #+begin_src bash
-   curl -fsSLO https://github.com/stackhands/eb-pipeline/releases/download/v0.5.0/eb-pipeline-x86_64-unknown-linux-musl.tar.xz
-   curl -fsSLO https://github.com/stackhands/eb-pipeline/releases/download/v0.5.0/eb-pipeline-x86_64-unknown-linux-musl.tar.xz.sha256
+   curl -fsSLO https://github.com/stackhands/eb-pipeline/releases/download/v0.6.0/eb-pipeline-x86_64-unknown-linux-musl.tar.xz
+   curl -fsSLO https://github.com/stackhands/eb-pipeline/releases/download/v0.6.0/eb-pipeline-x86_64-unknown-linux-musl.tar.xz.sha256
    sha256sum -c eb-pipeline-x86_64-unknown-linux-musl.tar.xz.sha256
    #+end_src
 
@@ -51,6 +51,7 @@ The [[https://github.com/stackhands/eb-pipeline/blob/main/CHANGELOG.md][changelo
    CHANGELOG.md
    LICENSE
    README.md
+   eb-admin-report
    eb-cvmfs
    eb-junit
    eb-pipeline
@@ -59,12 +60,12 @@ The [[https://github.com/stackhands/eb-pipeline/blob/main/CHANGELOG.md][changelo
    eb-test-map
    #+end_example
 
-   Release 0.3.0 ships =eb-pipeline= alone; releases 0.3.1 to 0.5.0 ship these six commands, and =eb-admin-report= comes from a source install.
+   Release 0.3.0 ships =eb-pipeline= alone; releases 0.3.1 to 0.5.0 ship the six commands without =eb-admin-report=, which comes from a source install there; release 0.6.0 ships all seven.
 
-3. Install the six commands of the release:
+3. Install the seven commands of the release:
 
    #+begin_src bash
-   for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cvmfs; do
+   for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cvmfs eb-admin-report; do
      install -D -m 755 "eb-pipeline-x86_64-unknown-linux-musl/$cmd" "$HOME/.local/bin/$cmd"
    done
    #+end_src
