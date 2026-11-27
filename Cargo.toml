@@ -41,6 +41,7 @@ serde_yaml = "0.9"
 sha2 = "0.10.9"
 shell-words = "1.1.1"
 toml = "1.2"
+unsafe-libyaml = "0.2.11"
 
 [dev-dependencies]
 tempfile = "3"

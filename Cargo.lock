@@ -256,6 +256,7 @@ dependencies = [
  "shell-words",
  "tempfile",
  "toml",
+ "unsafe-libyaml",
 ]
 
 [[package]]
