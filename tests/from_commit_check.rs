@@ -1,4 +1,5 @@
 //! Opt-in `check --check-from-commit` delegation to `eb-stack`.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 
@@ -207,7 +208,7 @@ fn from_commit_reports_a_stdout_write_failure() {
 
     assert_eq!(code(&output), 1, "{}", stderr(&output));
     assert!(
-        stderr(&output).contains("cannot print eb-stack output"),
+        stderr(&output).contains("cannot write stdout:"),
         "{}",
         stderr(&output)
     );

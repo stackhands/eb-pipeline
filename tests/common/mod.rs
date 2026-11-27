@@ -2,14 +2,16 @@
 //! `eb-stack` binaries, and a fake EESSI tree, for the tests of the run
 //! summary, `watch` and what reads them. Each test file uses a part of it.
 #![allow(dead_code)]
+#![allow(clippy::disallowed_methods)]
 #[path = "exec_stub.rs"]
 mod exec_stub_shared;
 
-pub use exec_stub_shared::CommandSyncExt;
 use serde_json::Value;
-use std::os::fd::FromRawFd;
+use std::io::{BufRead, Read};
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, ChildStdin, Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 pub const STAMP: &str = "20260101_000000";
 
@@ -23,6 +25,91 @@ pub fn closed_stdout() -> Stdio {
         assert_eq!(libc::close(fds[0]), 0);
         Stdio::from_raw_fd(fds[1])
     }
+}
+
+/// A `flock(2)` lock on a file, held by a separate process until released.
+///
+/// A descriptor for the lock file in this multithreaded process can be copied
+/// by another test thread's fork and kept until that child execs. The lock
+/// then outlives the test's release and the next lock attempt fails. The
+/// holder is one process that owns the only descriptor, and `release` returns
+/// only after it is dead, so the lock is free from then on. It is stopped with
+/// a signal, not by closing a pipe, because a forked copy of a pipe end would
+/// keep the holder alive in the same way.
+pub struct LockHolder {
+    child: Child,
+    _stdin: Option<ChildStdin>,
+}
+
+impl LockHolder {
+    pub fn shared(path: &Path) -> Self {
+        Self::hold("--shared", path)
+    }
+
+    pub fn exclusive(path: &Path) -> Self {
+        Self::hold("--exclusive", path)
+    }
+
+    fn hold(mode: &str, path: &Path) -> Self {
+        let script = r#"exec 9>>"$1" || exit 98; flock "$2" --timeout 20 9 || exit 99; echo held; exec cat >/dev/null"#;
+        let mut child = Command::new("sh")
+            .args(["-c", script, "lock-holder"])
+            .arg(path)
+            .arg(mode)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("cannot start the lock holder");
+        let stdin = child.stdin.take();
+        let mut line = String::new();
+        std::io::BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        assert_eq!(line, "held\n", "cannot lock {}", path.display());
+        Self {
+            child,
+            _stdin: stdin,
+        }
+    }
+
+    pub fn release(mut self) {
+        self.stop();
+    }
+
+    fn stop(&mut self) {
+        kill_and_reap(&mut self.child);
+    }
+}
+
+impl Drop for LockHolder {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// Take an advisory lock in this process, as another writer would.
+pub fn hold_lock(path: &Path, posix: bool) -> std::fs::File {
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    // SAFETY: the descriptor is open, and a zeroed `libc::flock` is a valid
+    // value of that plain C struct.
+    let rc = unsafe {
+        if posix {
+            let mut l: libc::flock = std::mem::zeroed();
+            l.l_type = libc::F_WRLCK as _;
+            l.l_whence = libc::SEEK_SET as _;
+            libc::fcntl(f.as_raw_fd(), libc::F_SETLK, &raw const l)
+        } else {
+            libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB)
+        }
+    };
+    assert_eq!(rc, 0, "{}", std::io::Error::last_os_error());
+    f
 }
 
 /// Fails the easyconfig stems listed in STUB_EB_FAIL. With STUB_EB_INSTALL
@@ -373,7 +460,7 @@ pub fn eb_pipeline(t: &T, args: &[&str], vars: &[(&str, &str)]) -> Output {
     for (k, v) in vars {
         c.env(k, v);
     }
-    c.sync_output()
+    c.output().unwrap()
 }
 
 /// `run` of `list` for `target` in the run directory `stamp`.
@@ -425,4 +512,112 @@ pub fn stdout(o: &Output) -> String {
 
 pub fn code(o: &Output) -> i32 {
     o.status.code().unwrap_or(-1)
+}
+
+/// Create an empty FIFO at `path`.
+pub fn make_fifo(path: &Path) {
+    use std::os::unix::ffi::OsStrExt;
+    let raw = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+}
+
+/// A named pipe a stub writes one byte into, so a test can wait without a poll.
+///
+/// Opened read-write: the open does not block, and a child that never writes
+/// does not look like end of file. Pass [`ReadyFifo::path`] as
+/// `STUB_READY_FIFO`. The stub runs `printf x > "$STUB_READY_FIFO"`.
+/// `wait` blocks until that byte arrives.
+pub struct ReadyFifo {
+    path: PathBuf,
+    reader: std::fs::File,
+}
+
+impl ReadyFifo {
+    pub fn open(path: &Path) -> Self {
+        make_fifo(path);
+        let reader = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        Self {
+            path: path.to_path_buf(),
+            reader,
+        }
+    }
+
+    pub fn path(&self) -> &str {
+        self.path.to_str().unwrap()
+    }
+
+    pub fn wait(mut self) {
+        let mut buf = [0u8; 1];
+        self.reader
+            .read_exact(&mut buf)
+            .expect("ready fifo closed before the child wrote");
+    }
+}
+
+/// Kill `child` if it still runs and reap it, so that a failed check after
+/// this leaves no process behind.
+pub fn kill_and_reap(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Spawn `cmd` and collect its output. A child still running after `limit`,
+/// or when a system call of the wait fails, is killed so the caller does not
+/// wait on a blocked read.
+pub fn output_within(cmd: &mut Command, limit: Duration) -> Output {
+    let mut child = cmd.spawn().unwrap();
+    let mut exited = || -> Result<bool, String> {
+        let pid = libc::pid_t::try_from(child.id()).map_err(|e| format!("pid: {e}"))?;
+        // SAFETY: `pid` is the live child just spawned, and `pidfd` is closed below.
+        let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+        if pidfd < 0 {
+            return Err(format!("pidfd_open: {}", std::io::Error::last_os_error()));
+        }
+        let pidfd = libc::c_int::try_from(pidfd).map_err(|e| format!("pidfd: {e}"))?;
+        let mut pollfd = libc::pollfd {
+            fd: pidfd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let start = Instant::now();
+        let mut left = limit;
+        let waited = loop {
+            let timeout = libc::c_int::try_from(left.as_nanos().div_ceil(1_000_000))
+                .unwrap_or(libc::c_int::MAX);
+            // SAFETY: `pollfd` is a valid one-element list and `pidfd` stays open.
+            let waited = unsafe { libc::poll(&mut pollfd, 1, timeout) };
+            if waited >= 0 {
+                break Ok(waited > 0);
+            }
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                break Err(format!("poll: {error}"));
+            }
+            left = limit.saturating_sub(start.elapsed());
+            if left.is_zero() {
+                break Ok(false);
+            }
+        };
+        // SAFETY: `pidfd` is the descriptor opened above and is not used again.
+        unsafe { libc::close(pidfd) };
+        Ok(waited?
+            && child
+                .try_wait()
+                .map_err(|e| format!("try_wait: {e}"))?
+                .is_some())
+    };
+    match exited() {
+        Ok(true) => child.wait_with_output().unwrap(),
+        result => {
+            kill_and_reap(&mut child);
+            let message = result
+                .err()
+                .unwrap_or_else(|| format!("command still running after {limit:?}"));
+            panic!("{message}");
+        }
+    }
 }

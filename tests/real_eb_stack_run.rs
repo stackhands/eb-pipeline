@@ -1,11 +1,11 @@
 //! `run` with sharding, admission and resume against an unmodified eb-stack
 //! binary. The stub programs of the other run tests answer in the shape their
 //! authors expect; this file reads what eb-stack prints and writes.
+#![allow(clippy::disallowed_methods)]
 
 #[path = "common/exec_stub.rs"]
 mod exec_stub;
 
-use exec_stub::CommandSyncExt;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -135,7 +135,8 @@ fn run(w: &World, run_id: &str, extra: &[&str]) -> (i32, String, Value) {
         )
         .env("STUB_DIR", &w.stubs)
         .env("SLURM_JOB_ID", "4411")
-        .sync_output();
+        .output()
+        .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     let value = std::fs::read_to_string(&result)
         .ok()

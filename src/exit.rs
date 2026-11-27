@@ -1,5 +1,6 @@
 //! Exit-code contract.
 
+use std::io::Read;
 use std::path::Path;
 
 /// All work succeeded.
@@ -100,12 +101,16 @@ pub fn read_json_output(
     producer: &str,
     error_code: i32,
 ) -> Result<(Vec<u8>, serde_json::Value), Fail> {
-    let bytes = std::fs::read(path).map_err(|error| {
+    let cannot_read = |error: std::io::Error| {
         Fail::new(
             error_code,
             format!("cannot read {}: {error}", path.display()),
         )
-    })?;
+    };
+    let mut bytes = Vec::new();
+    crate::util::open_regular_file(path)
+        .and_then(|mut file| file.read_to_end(&mut bytes))
+        .map_err(cannot_read)?;
     let value = parse_json_output(&bytes, path, producer, error_code)?;
     Ok((bytes, value))
 }

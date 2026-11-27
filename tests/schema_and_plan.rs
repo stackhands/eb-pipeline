@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use eb_pipeline::{plan, resolve, schema::Site, site, util};
@@ -45,7 +47,7 @@ init = []
 
 #[test]
 fn examples_round_trip() {
-    for f in ["small-cluster.toml", "eessi-site.toml"] {
+    for f in ["workstation.toml", "small-cluster.toml", "eessi-site.toml"] {
         let text = std::fs::read_to_string(example(f)).unwrap();
         let a: Site = site::parse(&text).unwrap();
         let again = toml::to_string(&a).unwrap();
@@ -72,10 +74,19 @@ fn unknown_keys_are_rejected() {
 
 #[test]
 fn missing_required_sections_are_rejected() {
-    for cut in ["[scheduler]\nkind = \"slurm\"\n", "[modules]\ninit = []\n"] {
-        let text = MINIMAL.replace(cut, "");
-        assert!(site::parse(&text).is_err(), "{cut}");
-    }
+    let cut = "[scheduler]\nkind = \"slurm\"\n";
+    assert!(MINIMAL.contains(cut));
+    assert!(site::parse(&MINIMAL.replace(cut, "")).is_err(), "{cut}");
+}
+
+#[test]
+fn a_site_without_modules_loads_nothing() {
+    let cut = "[modules]\ninit = []\n";
+    assert!(MINIMAL.contains(cut));
+    let s = site::parse(&MINIMAL.replace(cut, "")).expect("[modules] is optional");
+    assert!(s.modules.init.is_empty());
+    assert!(s.modules.shell_init.is_none());
+    assert!(site::validate(&s, None).is_empty());
 }
 
 #[test]
@@ -562,6 +573,42 @@ fn plan_shows_job_id_placeholder_and_default_footprint() {
         .as_str()
         .unwrap()
         .ends_with("/<log-stamp>/cpu-a"));
+}
+
+#[test]
+fn workstation_template_plans_no_scheduler_command() {
+    let d = tempfile::tempdir().unwrap();
+    let list = d.path().join("l.txt");
+    std::fs::write(&list, "Foo-1.0-foss-2025a.eb\n").unwrap();
+    let o = bin()
+        .args(["plan", "--site"])
+        .arg(example("workstation.toml"))
+        .arg("--list")
+        .arg(&list)
+        .args(["--target", "cpu", "--build-type", "production"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    let phases = v["phases"].as_array().unwrap();
+    assert!(phases.iter().any(|p| p["name"] == "build"));
+    for p in phases {
+        for c in p["commands"].as_array().unwrap() {
+            let argv = argv_of(c);
+            assert!(
+                !argv
+                    .iter()
+                    .any(|a| a == "srun" || a == "sbatch" || a == "salloc"),
+                "{}: {argv:?}",
+                p["name"]
+            );
+        }
+    }
 }
 
 #[test]

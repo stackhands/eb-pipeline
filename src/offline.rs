@@ -7,7 +7,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// One file in an offline bundle.
@@ -137,41 +137,29 @@ fn store(root: &Path, path: &Path, digest: &str) -> Result<String, Fail> {
             format!("cannot create {}: {e}", parent.display()),
         )
     })?;
-    let tmp = parent.join(format!(".{digest}.tmp-{}", std::process::id()));
-    std::fs::copy(path, &tmp).map_err(|e| {
-        Fail::new(
-            exit::FAILED,
-            format!(
-                "cannot copy offline asset {} to {}: {e}",
-                path.display(),
-                tmp.display()
-            ),
-        )
-    })?;
-    let copied = match sha256(&tmp) {
-        Ok(copied) => copied,
-        Err(failure) => {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(failure);
-        }
-    };
-    if copied != digest {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(Fail::new(
-            exit::FAILED,
-            format!(
-                "offline asset {} changed while it was copied: expected SHA-256 {digest}, copied {copied}",
-                path.display()
-            ),
-        ));
-    }
-    std::fs::rename(&tmp, &dest).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        Fail::new(
-            exit::FAILED,
-            format!("cannot publish offline object {}: {e}", dest.display()),
-        )
-    })?;
+    crate::util::copy_atomic_checked(
+        path,
+        &dest,
+        |temporary| {
+            let copied = sha256(temporary)?;
+            if copied != digest {
+                return Err(Fail::new(
+                    exit::FAILED,
+                    format!(
+                        "offline asset {} changed while it was copied: expected SHA-256 {digest}, copied {copied}",
+                        path.display()
+                    ),
+                ));
+            }
+            Ok(())
+        },
+        |e| {
+            Fail::new(
+                exit::FAILED,
+                format!("cannot publish offline object {}: {e}", dest.display()),
+            )
+        },
+    )?;
     Ok(rel)
 }
 
@@ -336,21 +324,11 @@ pub fn write(root: &Path, scope: &Scope<'_>, assets: &[OfflineAsset]) -> Result<
         kind: "offline-bundle",
         files: entries.into_iter().collect(),
     };
-    let text = serde_json::to_vec_pretty(&manifest)
+    let mut text = serde_json::to_vec_pretty(&manifest)
         .map_err(|e| Fail::new(exit::FAILED, format!("cannot render offline manifest: {e}")))?;
-    let tmp = root.join(format!(".manifest.json.tmp-{}", std::process::id()));
-    let mut file = File::create(&tmp).map_err(|e| {
-        Fail::new(
-            exit::FAILED,
-            format!("cannot create {}: {e}", tmp.display()),
-        )
-    })?;
-    file.write_all(&text)
-        .and_then(|()| file.write_all(b"\n"))
-        .and_then(|()| file.sync_all())
-        .map_err(|e| Fail::new(exit::FAILED, format!("cannot write {}: {e}", tmp.display())))?;
-    std::fs::rename(&tmp, root.join("manifest.json")).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
+    text.push(b'\n');
+    let manifest_path = root.join("manifest.json");
+    crate::util::write_atomic(&manifest_path, &text).map_err(|e| {
         Fail::new(
             exit::FAILED,
             format!("cannot publish offline manifest: {e}"),
@@ -360,8 +338,13 @@ pub fn write(root: &Path, scope: &Scope<'_>, assets: &[OfflineAsset]) -> Result<
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
-    use super::{validate_locators, Entry};
+    use super::{sha256, store, validate_locators, write, Entry};
+    use crate::resolve::Scope;
+    use crate::util::{
+        atomic_test_support, atomic_write_trace, dir_sync_fault_hook, AtomicWriteOp,
+    };
     use std::collections::BTreeSet;
 
     fn entry(digest: &str) -> Entry {
@@ -374,10 +357,150 @@ mod tests {
         }
     }
 
+    fn minimal_site() -> crate::schema::Site {
+        let mut site = crate::site::parse(include_str!("../templates/small-cluster.toml")).unwrap();
+        site.filesystems.source_paths.clear();
+        site
+    }
+
     #[test]
     fn conflicting_consumer_locators_are_refused() {
         let entries = BTreeSet::from([entry("first"), entry("second")]);
         let failure = validate_locators(&entries).unwrap_err();
         assert!(failure.msg.contains("conflicting offline locator"));
+    }
+
+    #[test]
+    fn manifest_write_uses_atomic_writer_with_parent_dir_sync() {
+        let site = minimal_site();
+        let scope = Scope {
+            site: &site,
+            site_file: None,
+            target: site.target("cpu").unwrap(),
+            build_type: None,
+            run_id: "run".into(),
+            log_stamp: "20261121_220000".into(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+
+        let trace = atomic_write_trace::Guard::start();
+        let manifest = write(dir.path(), &scope, &[]).unwrap();
+        let ops = trace.take();
+
+        assert_eq!(manifest.kind, "offline-bundle");
+        assert_eq!(
+            ops,
+            vec![
+                AtomicWriteOp::SyncTemp,
+                AtomicWriteOp::Rename,
+                AtomicWriteOp::SyncParentDir(dir.path().to_path_buf()),
+            ]
+        );
+        let bytes = std::fs::read(dir.path().join("manifest.json")).unwrap();
+        assert!(bytes.ends_with(b"\n"));
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed["kind"], "offline-bundle");
+    }
+
+    #[test]
+    fn manifest_write_refuses_symlink_destination() {
+        let site = minimal_site();
+        let scope = Scope {
+            site: &site,
+            site_file: None,
+            target: site.target("cpu").unwrap(),
+            build_type: None,
+            run_id: "run".into(),
+            log_stamp: "20261121_220000".into(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim.json");
+        std::fs::write(&victim, b"original\n").unwrap();
+        let manifest_link = dir.path().join("manifest.json");
+        std::os::unix::fs::symlink(&victim, &manifest_link).unwrap();
+
+        let failure = write(dir.path(), &scope, &[]).unwrap_err();
+
+        assert!(failure.msg.contains("cannot publish offline manifest"));
+        assert!(manifest_link.is_symlink());
+        assert_eq!(std::fs::read(&victim).unwrap(), b"original\n");
+    }
+
+    #[test]
+    fn object_store_propagates_parent_dir_sync_errors_except_unsupported() {
+        let _guard = atomic_test_support::guard();
+        let src_dir = tempfile::tempdir().unwrap();
+        let src = src_dir.path().join("asset.tar.gz");
+        std::fs::write(&src, b"offline payload\n").unwrap();
+        let digest = sha256(&src).unwrap();
+
+        for errno in [libc::EIO, libc::ENOSPC] {
+            let root = tempfile::tempdir().unwrap();
+            let _fault = dir_sync_fault_hook::Guard::inject(errno);
+            let failure = store(root.path(), &src, &digest).unwrap_err();
+            assert!(
+                failure.msg.contains("cannot publish offline object"),
+                "errno {errno}: {}",
+                failure.msg
+            );
+        }
+
+        for errno in [libc::EINVAL, libc::ENOTSUP, libc::EBADF] {
+            let root = tempfile::tempdir().unwrap();
+            let _fault = dir_sync_fault_hook::Guard::inject(errno);
+            let rel = store(root.path(), &src, &digest).unwrap();
+            assert_eq!(
+                std::fs::read(root.path().join(&rel)).unwrap(),
+                b"offline payload\n"
+            );
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let trace = atomic_write_trace::Guard::start();
+        let rel = store(root.path(), &src, &digest).unwrap();
+        let ops = trace.take();
+        let expected_parent = root.path().join(&rel).parent().unwrap().to_path_buf();
+        assert_eq!(
+            ops,
+            vec![
+                AtomicWriteOp::SyncTemp,
+                AtomicWriteOp::Rename,
+                AtomicWriteOp::SyncParentDir(expected_parent),
+            ]
+        );
+    }
+
+    #[test]
+    fn object_store_reaps_stale_local_temp_and_keeps_foreign_temp() {
+        let _guard = atomic_test_support::guard();
+        let _override = atomic_test_support::install_reap_safe_identity();
+        let src_dir = tempfile::tempdir().unwrap();
+        let src = src_dir.path().join("asset.tar.gz");
+        std::fs::write(&src, b"offline payload\n").unwrap();
+        let digest = sha256(&src).unwrap();
+
+        let root = tempfile::tempdir().unwrap();
+        let obj_dir = root.path().join("objects/sha256").join(&digest[..2]);
+        std::fs::create_dir_all(&obj_dir).unwrap();
+
+        let stale_local = obj_dir.join(atomic_test_support::dead_local_temp_name(&digest, 1));
+        let foreign = obj_dir.join(atomic_test_support::foreign_host_temp_name(&digest, 1));
+        std::fs::write(&stale_local, b"stale local object temp\n").unwrap();
+        std::fs::write(&foreign, b"foreign host object temp\n").unwrap();
+
+        let rel = store(root.path(), &src, &digest).unwrap();
+
+        assert_eq!(
+            std::fs::read(root.path().join(&rel)).unwrap(),
+            b"offline payload\n"
+        );
+        assert!(
+            !stale_local.exists(),
+            "stale local temporary file was not reaped when storing offline object"
+        );
+        assert!(
+            foreign.exists(),
+            "foreign-host temporary file was unexpectedly removed"
+        );
     }
 }

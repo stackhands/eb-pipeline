@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH eb-pipeline 1  "eb-pipeline 0.5.0" 
+.TH eb-pipeline 1  "eb-pipeline 0.6.0" 
 .SH NAME
 eb\-pipeline \- Site\-neutral EasyBuild pipeline driver configured by a per\-site TOML file
 .SH SYNOPSIS
@@ -73,6 +73,7 @@ Companion commands from this package:
   eb\-test\-map
   eb\-junit
   eb\-cvmfs
+  eb\-admin\-report
 
 Configuration: every flag above falls back to an EB_PIPELINE_<FLAG> variable
 (EB_PIPELINE_SITE, EB_PIPELINE_LIST, EB_PIPELINE_PACKAGE_PLAN,
@@ -116,4 +117,4 @@ Sibling tool codes are mapped explicitly:
 A signal (130, 143) or a usage error (2) ends the run with that code. Otherwise,
 when several apply: 1, then 78, then 75, then 0. Codes are never summed.
 .SH VERSION
-v0.5.0
+v0.6.0

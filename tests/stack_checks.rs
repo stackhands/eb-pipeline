@@ -1,4 +1,5 @@
 //! Opt-in `check --stack-checks` delegation to an eb-stack subprocess.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 
@@ -118,6 +119,27 @@ fn no_stack_checks_preserves_plain_check_and_a_failure_fails_check() {
 }
 
 #[test]
+fn the_target_variable_alone_does_not_ask_for_stack_checks() {
+    let t = configured();
+    let site = t.site.display().to_string();
+    let inherited = eb_pipeline(
+        &t,
+        &["check", "--site", &site],
+        &[("EB_PIPELINE_TARGET", "cpu")],
+    );
+    assert_eq!(code(&inherited), 0, "{}", stderr(&inherited));
+    assert!(t.calls("ebstack").is_empty());
+
+    let typed = eb_pipeline(&t, &["check", "--site", &site, "--target", "cpu"], &[]);
+    assert_eq!(code(&typed), 2, "{}", stderr(&typed));
+    assert!(
+        stderr(&typed).contains("requires '--stack-checks"),
+        "{}",
+        stderr(&typed)
+    );
+}
+
+#[test]
 fn a_stack_check_usage_exit_is_preserved() {
     let t = configured();
     let list = t.root().join("stack.yml");
@@ -178,56 +200,51 @@ fn stack_checks_require_a_list_and_validate_the_target_before_starting() {
 
 #[test]
 fn easystack_checks_refuse_a_plain_build_list() {
-    let t = configured();
-    let list = t.root().join("build.list");
-    std::fs::write(&list, "Pkg-1.0.eb\n").unwrap();
-    let output = eb_pipeline(
-        &t,
-        &[
-            "check",
-            "--site",
-            &t.site.display().to_string(),
-            "--list",
-            &list.display().to_string(),
-            "--stack-checks",
+    let rows = [
+        (
+            "build.list",
+            "Pkg-1.0.eb\n",
             "generation",
-        ],
-        &[],
-    );
-    assert_eq!(code(&output), 2, "{}", stderr(&output));
-    assert!(t.calls("ebstack").is_empty());
-    assert!(
-        stderr(&output).contains("needs an easystack .yml or .yaml path"),
-        "{}",
-        stderr(&output)
-    );
-}
-
-#[test]
-fn provided_cannot_share_an_input_with_easystack_checks() {
-    let t = configured();
-    let list = t.root().join("stack.yml");
-    std::fs::write(&list, "easyconfigs: []\n").unwrap();
-    let output = eb_pipeline(
-        &t,
-        &[
-            "check",
-            "--site",
-            &t.site.display().to_string(),
-            "--list",
-            &list.display().to_string(),
-            "--stack-checks",
+            "needs an easystack .yml or .yaml path",
+        ),
+        (
+            "stack.yml",
+            "easyconfigs: []\n",
             "provided,files",
-        ],
-        &[],
-    );
-    assert_eq!(code(&output), 2, "{}", stderr(&output));
-    assert!(t.calls("ebstack").is_empty());
-    assert!(
-        stderr(&output).contains("cannot combine provided with easystack checks"),
-        "{}",
-        stderr(&output)
-    );
+            "cannot combine provided with easystack checks",
+        ),
+        (
+            "stack.yml",
+            "easyconfigs: []\n",
+            "generation,buildenv,provided",
+            "cannot combine buildenv and provided with easystack checks",
+        ),
+    ];
+    for (name, body, checks, phrase) in rows {
+        let t = configured();
+        let list = t.root().join(name);
+        std::fs::write(&list, body).unwrap();
+        let output = eb_pipeline(
+            &t,
+            &[
+                "check",
+                "--site",
+                &t.site.display().to_string(),
+                "--list",
+                &list.display().to_string(),
+                "--stack-checks",
+                checks,
+            ],
+            &[],
+        );
+        assert_eq!(code(&output), 2, "{phrase} {}", stderr(&output));
+        assert!(t.calls("ebstack").is_empty(), "{phrase}");
+        assert!(
+            stderr(&output).contains(phrase),
+            "{phrase} {}",
+            stderr(&output)
+        );
+    }
 }
 
 #[test]
@@ -339,31 +356,4 @@ fn plain_list_checks_run_together_on_one_build_list() {
     .join("\n")
         + "\n";
     assert_eq!(t.calls("ebstack"), expected);
-}
-
-#[test]
-fn buildenv_cannot_share_an_input_with_easystack_checks() {
-    let t = configured();
-    let list = t.root().join("stack.yml");
-    std::fs::write(&list, "easyconfigs: []\n").unwrap();
-    let output = eb_pipeline(
-        &t,
-        &[
-            "check",
-            "--site",
-            &t.site.display().to_string(),
-            "--list",
-            &list.display().to_string(),
-            "--stack-checks",
-            "generation,buildenv,provided",
-        ],
-        &[],
-    );
-    assert_eq!(code(&output), 2, "{}", stderr(&output));
-    assert!(t.calls("ebstack").is_empty());
-    assert!(
-        stderr(&output).contains("cannot combine buildenv and provided with easystack checks"),
-        "{}",
-        stderr(&output)
-    );
 }

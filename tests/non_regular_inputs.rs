@@ -1,4 +1,5 @@
 //! Non-regular input paths are refused promptly across sibling binaries.
+#![allow(clippy::disallowed_methods)]
 
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
@@ -67,18 +68,15 @@ fn binaries_refuse_or_finish_promptly_for_fifo_and_directory_inputs() {
         }
 
         // eb-test-map --list (plain path)
-        let output = wait_output_with_timeout(
-            Command::new(env!("CARGO_BIN_EXE_eb-test-map"))
-                .args(["--map"])
-                .arg(&map)
-                .args(["--list"])
-                .arg(&plain)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap(),
-            &format!("eb-test-map plain {bad_kind}"),
-        );
+        let output = Command::new(env!("CARGO_BIN_EXE_eb-test-map"))
+            .args(["--map"])
+            .arg(&map)
+            .args(["--list"])
+            .arg(&plain)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .unwrap();
         assert_eq!(output.status.code(), Some(2));
         assert_eq!(output.stdout, b"");
         assert!(
@@ -88,18 +86,15 @@ fn binaries_refuse_or_finish_promptly_for_fifo_and_directory_inputs() {
         );
 
         // eb-test-map --list (easystack path)
-        let output = wait_output_with_timeout(
-            Command::new(env!("CARGO_BIN_EXE_eb-test-map"))
-                .args(["--map"])
-                .arg(&map)
-                .args(["--list"])
-                .arg(&yaml)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap(),
-            &format!("eb-test-map yaml {bad_kind}"),
-        );
+        let output = Command::new(env!("CARGO_BIN_EXE_eb-test-map"))
+            .args(["--map"])
+            .arg(&map)
+            .args(["--list"])
+            .arg(&yaml)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .unwrap();
         assert_eq!(output.status.code(), Some(2));
         assert_eq!(output.stdout, b"");
         assert!(
@@ -109,18 +104,15 @@ fn binaries_refuse_or_finish_promptly_for_fifo_and_directory_inputs() {
         );
 
         // eb-retry-list --list (plain path)
-        let output = wait_output_with_timeout(
-            Command::new(env!("CARGO_BIN_EXE_eb-retry-list"))
-                .args(["--result"])
-                .arg(&result)
-                .args(["--list"])
-                .arg(&plain)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap(),
-            &format!("eb-retry-list plain {bad_kind}"),
-        );
+        let output = Command::new(env!("CARGO_BIN_EXE_eb-retry-list"))
+            .args(["--result"])
+            .arg(&result)
+            .args(["--list"])
+            .arg(&plain)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .unwrap();
         assert_eq!(output.status.code(), Some(2));
         assert_eq!(output.stdout, b"");
         assert!(
@@ -130,18 +122,15 @@ fn binaries_refuse_or_finish_promptly_for_fifo_and_directory_inputs() {
         );
 
         // eb-retry-list --list (easystack path)
-        let output = wait_output_with_timeout(
-            Command::new(env!("CARGO_BIN_EXE_eb-retry-list"))
-                .args(["--result"])
-                .arg(&result)
-                .args(["--list"])
-                .arg(&yaml)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap(),
-            &format!("eb-retry-list yaml {bad_kind}"),
-        );
+        let output = Command::new(env!("CARGO_BIN_EXE_eb-retry-list"))
+            .args(["--result"])
+            .arg(&result)
+            .args(["--list"])
+            .arg(&yaml)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .unwrap();
         assert_eq!(output.status.code(), Some(2));
         assert_eq!(output.stdout, b"");
         assert!(
@@ -151,18 +140,15 @@ fn binaries_refuse_or_finish_promptly_for_fifo_and_directory_inputs() {
         );
 
         // eb-shard-weights --existing
-        let output = wait_output_with_timeout(
-            Command::new(env!("CARGO_BIN_EXE_eb-shard-weights"))
-                .args(["--result"])
-                .arg(&result)
-                .args(["--existing"])
-                .arg(&existing)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap(),
-            &format!("eb-shard-weights {bad_kind}"),
-        );
+        let output = Command::new(env!("CARGO_BIN_EXE_eb-shard-weights"))
+            .args(["--result"])
+            .arg(&result)
+            .args(["--existing"])
+            .arg(&existing)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .unwrap();
         assert_eq!(output.status.code(), Some(2));
         assert_eq!(output.stdout, b"");
         assert!(
@@ -172,19 +158,16 @@ fn binaries_refuse_or_finish_promptly_for_fifo_and_directory_inputs() {
         );
 
         // eb-cvmfs --metrics-file
-        let output = wait_output_with_timeout(
-            Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
-                .args(["--dry-run", "--metrics-file"])
-                .arg(&metrics)
-                .arg("repo.example.org")
-                .arg("--")
-                .arg("true")
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap(),
-            &format!("eb-cvmfs {bad_kind}"),
-        );
+        let output = Command::new(env!("CARGO_BIN_EXE_eb-cvmfs"))
+            .args(["--dry-run", "--metrics-file"])
+            .arg(&metrics)
+            .arg("repo.example.org")
+            .arg("--")
+            .arg("true")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .unwrap();
         // Directory metrics path cannot be replaced atomically and fails.
         // FIFO metrics path may be replaced by the atomic writer, but it
         // must never block while reading previous metrics content.
@@ -199,4 +182,35 @@ fn binaries_refuse_or_finish_promptly_for_fifo_and_directory_inputs() {
             assert!(output.status.code().is_some(), "{output:?}");
         }
     }
+}
+
+#[test]
+fn shard_weights_log_root_refuses_a_fifo_summary_promptly() {
+    let dir = tempfile::tempdir().unwrap();
+    let logs = dir.path().join("logs");
+    let run = logs.join("20261118_230000");
+    std::fs::create_dir_all(&run).unwrap();
+    let summary = run.join("summary.json");
+    make_fifo(&summary);
+
+    let output = wait_output_with_timeout(
+        Command::new(env!("CARGO_BIN_EXE_eb-shard-weights"))
+            .args(["--log-root"])
+            .arg(&logs)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+        "eb-shard-weights --log-root",
+    );
+
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert_eq!(output.stdout, b"");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        format!(
+            "eb-shard-weights: cannot read {}: not a regular file\n",
+            summary.display()
+        )
+    );
 }

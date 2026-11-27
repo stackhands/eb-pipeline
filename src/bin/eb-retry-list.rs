@@ -6,6 +6,7 @@
 use eb_pipeline::classify;
 use eb_pipeline::easystack;
 use eb_pipeline::exit;
+use eb_pipeline::run;
 use eb_pipeline::util::{self, ListLine};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -58,7 +59,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(msg) => {
-            eprintln!("eb-retry-list: {msg}");
+            run::log_line(&format!("eb-retry-list: {msg}"));
             ExitCode::from(2)
         }
     }
@@ -747,7 +748,7 @@ fn filter_oom(
         }
     }
     for hit in &hits {
-        eprintln!("eb-retry-list: {}", hit.line);
+        run::log_line(&format!("eb-retry-list: {}", hit.line));
     }
     Ok(lines
         .into_iter()
@@ -779,7 +780,8 @@ fn write_easystack(path: &Path, lines: &[RetryLine]) -> Result<(), String> {
     );
     let value = serde_yaml::Value::Mapping(document);
     let text = serde_yaml::to_string(&value).map_err(|e| format!("cannot make easystack: {e}"))?;
-    fs::write(path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))
+    util::write_atomic(path, text.as_bytes())
+        .map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
 fn easystack_entry(name: &str, args: &[String]) -> Result<serde_yaml::Value, String> {
@@ -922,6 +924,7 @@ fn basename(path: &str) -> &str {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 
@@ -1025,40 +1028,51 @@ oom=2 fits=1 builds=3 nodes=1
 
     #[test]
     fn generated_easystacks_keep_short_easybuild_options() {
-        let entry = easystack_entry("Big-1.0.eb", &["-f".into()]).unwrap();
-        let document = serde_yaml::Value::Mapping(serde_yaml::Mapping::from_iter([(
-            serde_yaml::Value::String("easyconfigs".into()),
-            serde_yaml::Value::Sequence(vec![entry]),
-        )]));
-        let text = serde_yaml::to_string(&document).unwrap();
-        let lines = easystack::parse(&text).unwrap();
-        assert_eq!(lines[0].args, ["-f"]);
+        let rows: &[(&[&str], &[&str])] = &[
+            (&["-f"], &["-f"]),
+            (
+                &[
+                    "--try-amend=versionsuffix=-a",
+                    "--try-amend",
+                    "toolchain=foss,2025a",
+                ],
+                &[
+                    "--try-amend=versionsuffix=-a",
+                    "--try-amend=toolchain=foss,2025a",
+                ],
+            ),
+        ];
+        for (input, want) in rows {
+            let owned: Vec<String> = input.iter().map(|arg| (*arg).to_string()).collect();
+            let entry = easystack_entry("Big-1.0.eb", &owned).unwrap();
+            let document = serde_yaml::Value::Mapping(serde_yaml::Mapping::from_iter([(
+                serde_yaml::Value::String("easyconfigs".into()),
+                serde_yaml::Value::Sequence(vec![entry]),
+            )]));
+            let text = serde_yaml::to_string(&document).unwrap();
+            let lines = easystack::parse(&text).unwrap();
+            assert_eq!(lines[0].args, *want);
+        }
     }
 
     #[test]
-    fn generated_easystacks_keep_repeated_amend_options() {
-        let entry = easystack_entry(
-            "Big-1.0.eb",
-            &[
-                "--try-amend=versionsuffix=-a".into(),
-                "--try-amend".into(),
-                "toolchain=foss,2025a".into(),
-            ],
-        )
-        .unwrap();
-        let document = serde_yaml::Value::Mapping(serde_yaml::Mapping::from_iter([(
-            serde_yaml::Value::String("easyconfigs".into()),
-            serde_yaml::Value::Sequence(vec![entry]),
-        )]));
-        let text = serde_yaml::to_string(&document).unwrap();
-        let lines = easystack::parse(&text).unwrap();
-        assert_eq!(
-            lines[0].args,
-            [
-                "--try-amend=versionsuffix=-a",
-                "--try-amend=toolchain=foss,2025a"
-            ]
-        );
+    fn write_easystack_refuses_a_symlink_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim.yaml");
+        std::fs::write(&victim, "sentinel\n").unwrap();
+        let out = dir.path().join("retry.yaml");
+        std::os::unix::fs::symlink(&victim, &out).unwrap();
+        let lines = vec![RetryLine {
+            raw: "Big-1.0.eb".into(),
+            easyconfig: "Big-1.0.eb".into(),
+            args: Vec::new(),
+            log: None,
+        }];
+
+        let error = write_easystack(&out, &lines).unwrap_err();
+
+        assert!(error.contains("cannot write"), "{error}");
+        assert_eq!(std::fs::read_to_string(victim).unwrap(), "sentinel\n");
     }
 
     fn outcome(status: &str) -> Outcome {

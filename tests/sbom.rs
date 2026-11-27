@@ -1,4 +1,5 @@
 //! After a clean build, `eb-stack stack sbom --lock` writes CycloneDX beside the summary.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 use common::{code, run, run_extra, setup, stderr, write_exec, STAMP};
@@ -110,36 +111,24 @@ fn a_success_without_a_new_document_does_not_accept_a_stale_one() {
 
 #[test]
 fn a_success_with_an_empty_document_fails_the_run() {
-    let t = setup("[sbom]\nlock = \"@ROOT@/stack.lock.json\"\n");
-    write_exec(&t.stubs.join("eb-stack"), EMPTY_SBOM);
-    let output = run(&t, "cpu", STAMP, LIST, &[]);
-    let document = t.run_dir(STAMP).join("sbom.cdx.json");
+    for (stub, phrase) in [
+        (EMPTY_SBOM, "wrote no non-empty"),
+        (TRUNCATED_SBOM, "wrote invalid JSON"),
+    ] {
+        let t = setup("[sbom]\nlock = \"@ROOT@/stack.lock.json\"\n");
+        write_exec(&t.stubs.join("eb-stack"), stub);
+        let output = run(&t, "cpu", STAMP, LIST, &[]);
+        let document = t.run_dir(STAMP).join("sbom.cdx.json");
 
-    assert_eq!(code(&output), 1, "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("wrote no non-empty"),
-        "{}",
-        stderr(&output)
-    );
-    assert!(!document.exists());
-    assert_eq!(t.summary(STAMP)["exit_code"], 1);
-}
-
-#[test]
-fn a_success_with_truncated_json_fails_the_run() {
-    let t = setup("[sbom]\nlock = \"@ROOT@/stack.lock.json\"\n");
-    write_exec(&t.stubs.join("eb-stack"), TRUNCATED_SBOM);
-    let output = run(&t, "cpu", STAMP, LIST, &[]);
-    let document = t.run_dir(STAMP).join("sbom.cdx.json");
-
-    assert_eq!(code(&output), 1, "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("wrote invalid JSON"),
-        "{}",
-        stderr(&output)
-    );
-    assert!(!document.exists());
-    assert_eq!(t.summary(STAMP)["exit_code"], 1);
+        assert_eq!(code(&output), 1, "{phrase} {}", stderr(&output));
+        assert!(
+            stderr(&output).contains(phrase),
+            "{phrase} {}",
+            stderr(&output)
+        );
+        assert!(!document.exists(), "{phrase}");
+        assert_eq!(t.summary(STAMP)["exit_code"], 1, "{phrase}");
+    }
 }
 
 #[test]

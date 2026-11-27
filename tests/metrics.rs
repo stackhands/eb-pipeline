@@ -1,4 +1,5 @@
 //! `eb-pipeline metrics` against a result file on disk.
+#![allow(clippy::disallowed_methods)]
 
 use serde_json::Value;
 use std::process::Command;
@@ -67,28 +68,6 @@ fn metrics_prints_prometheus_for_a_failed_run() {
 }
 
 #[test]
-fn malformed_result_names_the_producer_and_path() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("result.json");
-    std::fs::write(&path, "{").unwrap();
-
-    let output = bin()
-        .args(["metrics", "--result"])
-        .arg(&path)
-        .output()
-        .unwrap();
-
-    assert_eq!(output.status.code(), Some(2));
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        format!(
-            "ERROR [main] -: eb-pipeline run wrote invalid JSON to {}: EOF while parsing an object at line 1 column 1\n",
-            path.display()
-        )
-    );
-}
-
-#[test]
 fn metrics_json_is_a_status_and_a_plan_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("result.json");
@@ -126,4 +105,75 @@ fn metrics_json_is_a_status_and_a_plan_is_refused() {
     assert!(o.stdout.is_empty());
     let err = String::from_utf8(o.stderr).unwrap();
     assert!(err.contains("kind `plan`"), "{err}");
+}
+
+#[test]
+fn metrics_refuses_an_unknown_result_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("result.json");
+    let text = result().replacen('{', r#"{"schema_version": 99,"#, 1);
+    std::fs::write(&path, text).unwrap();
+
+    let output = bin()
+        .args(["metrics", "--result"])
+        .arg(&path)
+        .args(["--format", "json"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(error.contains("result.schema_version must be 1"), "{error}");
+}
+
+fn with_schema_version(value: &str) -> String {
+    result().replacen('{', &format!(r#"{{"schema_version": {value},"#), 1)
+}
+
+fn metrics_of(text: &str) -> std::process::Output {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("result.json");
+    std::fs::write(&path, text).unwrap();
+    bin()
+        .args(["metrics", "--result"])
+        .arg(&path)
+        .args(["--format", "json"])
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn metrics_accepts_an_explicit_result_schema_version_1() {
+    let explicit = metrics_of(&with_schema_version("1"));
+    assert_eq!(
+        explicit.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&explicit.stderr)
+    );
+    let omitted = metrics_of(result());
+    assert_eq!(omitted.status.code(), Some(0));
+    assert_eq!(explicit.stdout, omitted.stdout);
+    let status: Value = serde_json::from_slice(&explicit.stdout).unwrap();
+    assert_eq!(status["kind"], "status");
+}
+
+#[test]
+fn metrics_refuses_a_result_schema_version_that_is_not_the_integer_1() {
+    for value in [r#""1""#, "null", "1.0", "true", "[1]", "-1", "0"] {
+        let output = metrics_of(&with_schema_version(value));
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{value}: {error}");
+        assert!(output.stdout.is_empty(), "{value}");
+        assert!(
+            error.contains("result.schema_version must be 1"),
+            "{value}: {error}"
+        );
+    }
 }

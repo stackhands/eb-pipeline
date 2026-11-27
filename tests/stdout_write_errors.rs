@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -49,13 +51,8 @@ fn canonical_stdout_error(stderr: &str) -> Option<String> {
         .next_back()
 }
 
-fn stdout_error_mismatch(
-    spec: BinarySpec,
-    kind: OutputKind,
-    root: &Path,
-    expected_message: &mut Option<String>,
-) -> Option<String> {
-    let command = match kind {
+fn command_for(spec: BinarySpec, kind: OutputKind, root: &Path) -> Command {
+    match kind {
         OutputKind::Report => (spec.report)(root),
         OutputKind::Help => {
             let mut c = binary(spec.name);
@@ -67,7 +64,16 @@ fn stdout_error_mismatch(
             c.arg("--version");
             c
         }
-    };
+    }
+}
+
+fn stdout_error_mismatch(
+    spec: BinarySpec,
+    kind: OutputKind,
+    root: &Path,
+    expected_message: &mut Option<String>,
+) -> Option<String> {
+    let command = command_for(spec, kind, root);
     let (code, stderr) = run_with_full_stdout(command);
     if code != spec.expected_exit {
         return Some(format!(
@@ -207,11 +213,8 @@ fn report_test_map(root: &Path) -> Command {
     c
 }
 
-#[test]
-fn every_binary_names_stdout_and_fails_when_stdout_write_fails() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut failures = Vec::new();
-    let specs = [
+fn specs() -> [BinarySpec; 6] {
+    [
         BinarySpec {
             name: "eb-pipeline",
             expected_exit: 1,
@@ -242,7 +245,14 @@ fn every_binary_names_stdout_and_fails_when_stdout_write_fails() {
             expected_exit: 2,
             report: report_test_map,
         },
-    ];
+    ]
+}
+
+#[test]
+fn every_binary_names_stdout_and_fails_when_stdout_write_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut failures = Vec::new();
+    let specs = specs();
     let mut expected_message = None;
     for spec in specs {
         for kind in [OutputKind::Report, OutputKind::Help, OutputKind::Version] {
@@ -256,6 +266,91 @@ fn every_binary_names_stdout_and_fails_when_stdout_write_fails() {
     assert!(
         failures.is_empty(),
         "stdout write contract mismatches:\n{}",
+        failures.join("\n")
+    );
+}
+
+#[derive(Clone, Copy, Debug)]
+enum StderrFault {
+    Full,
+    ClosedPipe,
+}
+
+fn stderr_stdio(fault: StderrFault) -> Stdio {
+    match fault {
+        StderrFault::Full => Stdio::from(
+            fs::OpenOptions::new()
+                .write(true)
+                .open("/dev/full")
+                .unwrap(),
+        ),
+        StderrFault::ClosedPipe => {
+            let (reader, writer) = std::io::pipe().unwrap();
+            drop(reader);
+            Stdio::from(writer)
+        }
+    }
+}
+
+fn exit_with_unwritable_stderr(mut command: Command, stdout_full: bool, fault: StderrFault) -> i32 {
+    command.stderr(stderr_stdio(fault));
+    if stdout_full {
+        command.stdout(Stdio::from(
+            fs::OpenOptions::new()
+                .write(true)
+                .open("/dev/full")
+                .unwrap(),
+        ));
+    } else {
+        command.stdout(Stdio::null());
+    }
+    command.status().unwrap().code().unwrap_or(-1)
+}
+
+#[test]
+fn every_binary_keeps_its_exit_code_when_stdout_and_stderr_are_unwritable() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut failures = Vec::new();
+    for spec in specs() {
+        for kind in [OutputKind::Report, OutputKind::Help, OutputKind::Version] {
+            for fault in [StderrFault::Full, StderrFault::ClosedPipe] {
+                let code =
+                    exit_with_unwritable_stderr(command_for(spec, kind, dir.path()), true, fault);
+                if code != spec.expected_exit {
+                    failures.push(format!(
+                        "{} {kind:?} with stdout and stderr {fault:?} exited with {code}, expected {}",
+                        spec.name, spec.expected_exit
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "an unwritable stderr changed an exit code:\n{}",
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn every_binary_keeps_its_usage_exit_code_when_stderr_is_unwritable() {
+    let mut failures = Vec::new();
+    for spec in specs() {
+        for fault in [StderrFault::Full, StderrFault::ClosedPipe] {
+            let mut command = binary(spec.name);
+            command.arg("--no-such-option");
+            let code = exit_with_unwritable_stderr(command, false, fault);
+            if code != 2 {
+                failures.push(format!(
+                    "{} with stderr {fault:?} exited with {code}, expected 2",
+                    spec.name
+                ));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "an unwritable stderr changed a usage exit code:\n{}",
         failures.join("\n")
     );
 }

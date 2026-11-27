@@ -7,7 +7,7 @@
 
 use crate::exit::{self, Fail};
 use crate::schema::Site;
-use crate::util::{package_of, ListLine};
+use crate::util::{package_of, read_text_file, ListLine};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -114,7 +114,7 @@ pub fn workspace_key(repo: &str) -> String {
 
 /// Read a result file written by a run that recorded an input digest.
 pub fn load(path: &Path) -> Result<Prior, Fail> {
-    let text = std::fs::read_to_string(path)
+    let text = read_text_file(path)
         .map_err(|e| Fail::usage(format!("cannot read {}: {e}", path.display())))?;
     let v: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| Fail::usage(format!("{}: {e}", path.display())))?;
@@ -326,8 +326,29 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    #[test]
+    fn resume_result_reader_refuses_a_fifo_promptly() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("result.json");
+        let raw = CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+        let (send, receive) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            send.send(load(&path)).unwrap();
+        });
+        let error = receive
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("resume reader blocked")
+            .unwrap_err();
+        assert!(error.msg.contains("not a regular file"), "{error:?}");
+        reader.join().unwrap();
+    }
 
     fn line(easyconfig: &str) -> ListLine {
         ListLine {
@@ -373,6 +394,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let output = dir.path().join("mod.lua");
         std::fs::write(&output, "module\n").unwrap();
+        let kept = output.display().to_string();
         let prior = Prior {
             digest: "aa".into(),
             lines: vec![
@@ -384,7 +406,7 @@ mod tests {
                 PriorLine {
                     easyconfig: "Foo-1.0.eb".into(),
                     status: "success".into(),
-                    outputs: vec![output.display().to_string()],
+                    outputs: vec![kept],
                 },
             ],
         };
@@ -395,11 +417,7 @@ mod tests {
             &prior,
         );
         assert!(skip.is_empty(), "{skip:?}");
-    }
 
-    #[test]
-    fn a_successful_shard_is_skipped_when_its_outputs_remain() {
-        let dir = tempfile::tempdir().unwrap();
         let foo = dir.path().join("foo.lua");
         std::fs::write(&foo, "module\n").unwrap();
         let prior = Prior {
@@ -424,10 +442,7 @@ mod tests {
             &prior,
         );
         assert_eq!(skip.into_iter().collect::<Vec<_>>(), ["shard-01"]);
-    }
 
-    #[test]
-    fn a_missing_output_is_not_skipped() {
         let prior = Prior {
             digest: "aa".into(),
             lines: vec![PriorLine {

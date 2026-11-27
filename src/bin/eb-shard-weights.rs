@@ -6,7 +6,7 @@
 
 use eb_pipeline::plan::module_rel;
 use eb_pipeline::summary::{self, Summary};
-use eb_pipeline::{exit, util};
+use eb_pipeline::{exit, run, util};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -43,7 +43,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(msg) => {
-            eprintln!("eb-shard-weights: {msg}");
+            run::log_line(&format!("eb-shard-weights: {msg}"));
             ExitCode::from(2)
         }
     }
@@ -601,6 +601,27 @@ fn merge_weights(weights: &mut BTreeMap<String, u64>, obs: &[Observation], mode:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    #[test]
+    fn result_reader_refuses_a_fifo_promptly() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("result.json");
+        let raw = CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+        let (send, receive) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            send.send(collect_result(&path, None, &mut Vec::new(), &mut 0))
+                .unwrap();
+        });
+        let error = receive
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("result reader blocked")
+            .unwrap_err();
+        assert!(error.contains("not a regular file"), "{error}");
+        reader.join().unwrap();
+    }
 
     fn obs(module: &str, seconds: f64, ended_at: &str, seq: usize) -> Observation {
         Observation {

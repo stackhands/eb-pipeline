@@ -106,6 +106,36 @@ fn yaml_diagnostic(text: &str, error: serde_yaml::Error) -> Diagnostic {
     Diagnostic { message, location }
 }
 
+/// Lines as libyaml counts them.
+///
+/// A break is LF, CRLF, a bare CR, U+0085, U+2028 or U+2029. `str::lines`
+/// does not split on the last four, which would leave a repeated key
+/// reported on the first key.
+fn yaml_lines(text: &str) -> Vec<&str> {
+    let mut lines = Vec::new();
+    let mut start = 0;
+    let mut chars = text.char_indices().peekable();
+    while let Some((index, ch)) = chars.next() {
+        let break_len = match ch {
+            '\r' if chars.peek().is_some_and(|(_, next)| *next == '\n') => {
+                chars.next();
+                2
+            }
+            '\n' | '\r' | '\u{0085}' | '\u{2028}' | '\u{2029}' => ch.len_utf8(),
+            _ => 0,
+        };
+        if break_len == 0 {
+            continue;
+        }
+        lines.push(&text[start..index]);
+        start = index + break_len;
+    }
+    if start < text.len() {
+        lines.push(&text[start..]);
+    }
+    lines
+}
+
 fn duplicate_key_location(text: &str, message: &str) -> Option<(usize, usize)> {
     let encoded = message
         .rsplit(": ")
@@ -114,7 +144,7 @@ fn duplicate_key_location(text: &str, message: &str) -> Option<(usize, usize)> {
     let key: String = serde_json::from_str(encoded).ok()?;
     let mut scopes = Vec::<(usize, usize)>::new();
     let mut seen = std::collections::BTreeSet::new();
-    for (index, line) in text.lines().enumerate() {
+    for (index, line) in yaml_lines(text).into_iter().enumerate() {
         let line = line.trim_end_matches('\r');
         let indent = line.len() - line.trim_start_matches(' ').len();
         let content = &line[indent..];
@@ -320,13 +350,86 @@ fn text(k: &str, v: &Value) -> Result<String, String> {
         Value::Bool(b) => Ok(python_bool(*b).into()),
         Value::Null => Ok("None".into()),
         Value::Number(n) if n.is_i64() || n.is_u64() => Ok(n.to_string()),
-        Value::Number(n) => Err(format!(
-            "the option `{k}`: put `{n}` in quotes; Python and eb-pipeline write a number with a point differently"
-        )),
+        Value::Number(n) => {
+            Ok(python_float(n.as_f64().ok_or_else(|| {
+                format!("the option `{k}`: `{n}` is not a finite number")
+            })?))
+        }
         _ => Err(format!(
             "the option `{k}`: a value is text, a number, a boolean or a list of them"
         )),
     }
+}
+
+/// Format a binary float as Python's `str(float)` does.
+fn python_float(value: f64) -> String {
+    if value.is_nan() {
+        return "nan".into();
+    }
+    if value == f64::INFINITY {
+        return "inf".into();
+    }
+    if value == f64::NEG_INFINITY {
+        return "-inf".into();
+    }
+
+    // Ryu follows round-to-nearest, ties-to-even when two shortest decimal
+    // representations round back to the same binary float. This is the rule
+    // used by CPython's dtoa mode 0; Rust's Display implementation may choose
+    // the other decimal in that case.
+    let mut buffer = ryu::Buffer::new();
+    let lexical = buffer.format_finite(value);
+    let (negative, unsigned) = lexical
+        .strip_prefix('-')
+        .map_or((false, lexical), |s| (true, s));
+    let (mantissa, explicit_exponent) = unsigned
+        .split_once(['e', 'E'])
+        .map_or((unsigned, 0), |(m, e)| (m, e.parse::<i32>().unwrap()));
+    let (integer, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let raw_digits = format!("{integer}{fraction}");
+
+    if raw_digits.bytes().all(|b| b == b'0') {
+        return if negative { "-0.0" } else { "0.0" }.into();
+    }
+
+    let leading = raw_digits.bytes().take_while(|b| *b == b'0').count();
+    let mut digits = raw_digits[leading..].trim_end_matches('0').to_string();
+    let exponent = if integer.bytes().any(|b| b != b'0') {
+        integer.len() as i32 - integer.bytes().take_while(|b| *b == b'0').count() as i32 - 1
+    } else {
+        -(fraction.bytes().take_while(|b| *b == b'0').count() as i32) - 1
+    } + explicit_exponent;
+
+    let mut result = String::new();
+    if negative {
+        result.push('-');
+    }
+    if !(-4..16).contains(&exponent) {
+        result.push(digits.remove(0));
+        if !digits.is_empty() {
+            result.push('.');
+            result.push_str(&digits);
+        }
+        result.push('e');
+        result.push(if exponent < 0 { '-' } else { '+' });
+        result.push_str(&format!("{:02}", exponent.unsigned_abs()));
+    } else if exponent < 0 {
+        result.push_str("0.");
+        result.extend(std::iter::repeat_n('0', (-exponent - 1) as usize));
+        result.push_str(&digits);
+    } else {
+        let decimal = exponent as usize + 1;
+        if digits.len() <= decimal {
+            result.push_str(&digits);
+            result.extend(std::iter::repeat_n('0', decimal - digits.len()));
+            result.push_str(".0");
+        } else {
+            result.push_str(&digits[..decimal]);
+            result.push('.');
+            result.push_str(&digits[decimal..]);
+        }
+    }
+    result
 }
 
 fn python_bool(b: bool) -> &'static str {
@@ -476,6 +579,57 @@ easyconfigs:
     }
 
     #[test]
+    fn decimal_option_values_are_written_as_in_easybuild() {
+        let l = &parse(
+            "easyconfigs:\n  - x.eb: {options: {amend: 2.5, large: 1.0e+20, nan: .nan, negative: -.inf, parallel: 1.5, positive: .inf, ratios: [2.5, 3.25], small: 0.000001}}\n",
+        )
+        .unwrap()[0];
+        assert_eq!(
+            l.args,
+            [
+                "--amend=2.5",
+                "--large=1e+20",
+                "--nan=nan",
+                "--negative=-inf",
+                "--parallel=1.5",
+                "--positive=inf",
+                "--ratios=2.5,3.25",
+                "--small=1e-06"
+            ]
+        );
+    }
+
+    #[test]
+    fn decimal_tie_is_written_as_in_python() {
+        let l = &parse("easyconfigs:\n  - x.eb: {options: {parallel: 1136789840277548.3}}\n")
+            .unwrap()[0];
+        assert_eq!(l.args, ["--parallel=1136789840277548.2"]);
+    }
+
+    #[test]
+    fn finite_floats_are_written_as_in_python() {
+        for (line_number, line) in include_str!("../tests/data/python-float-repr.tsv")
+            .lines()
+            .enumerate()
+        {
+            if line.starts_with('#') {
+                continue;
+            }
+            let (bits, expected) = line
+                .split_once('\t')
+                .unwrap_or_else(|| panic!("fixture line {} has no tab", line_number + 1));
+            let bits = u64::from_str_radix(bits, 16)
+                .unwrap_or_else(|_| panic!("fixture line {} has invalid bits", line_number + 1));
+            assert_eq!(
+                python_float(f64::from_bits(bits)),
+                expected,
+                "fixture line {} for bits {bits:016x}",
+                line_number + 1
+            );
+        }
+    }
+
+    #[test]
     fn ordinary_option_output_keeps_its_exact_bytes() {
         let l = &parse(
             "easyconfigs:\n  - x.eb: {options: {rebuild: true, parallel: 4, robot: false}}\n",
@@ -522,10 +676,6 @@ easyconfigs:
                 "without its dashes",
             ),
             (
-                "easyconfigs:\n  - x.eb: {options: {parallel: 1.5}}\n",
-                "put `1.5` in quotes",
-            ),
-            (
                 "easyconfigs:\n  - x.eb: {options: {hooks: {a: b}}}\n",
                 "a value is text",
             ),
@@ -561,6 +711,39 @@ easyconfigs:
             ("yml", false),
         ] {
             assert_eq!(is_easystack(Path::new(p)), want, "{p}");
+        }
+    }
+
+    #[test]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "this seeds a temporary easystack, not a user-visible output path"
+    )]
+    fn a_duplicate_key_after_a_unicode_line_break_points_at_the_repeat() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("input.yml");
+        // An empty YAML line sits between the two keys when the gap is two breaks.
+        for (gap, line) in [
+            ("\u{2028}", 5),
+            ("\u{2029}", 5),
+            ("\u{0085}", 5),
+            ("\r", 5),
+            ("\u{2028}\u{2028}", 6),
+        ] {
+            let text = format!(
+                "easyconfigs:\n  - x.eb:\n      options:\n        rebuild: true{gap}        rebuild: false\n"
+            );
+            std::fs::write(&path, &text).unwrap();
+            let err = read(&path).unwrap_err();
+            assert_eq!(
+                err,
+                format!(
+                    "easystack {}:{}:9: easyconfigs[0].x.eb.options: duplicate entry with key \"rebuild\"",
+                    path.display(),
+                    line
+                ),
+                "{gap:?}"
+            );
         }
     }
 }

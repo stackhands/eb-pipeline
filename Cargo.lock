@@ -238,7 +238,7 @@ dependencies = [
 
 [[package]]
 name = "eb-pipeline"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64",
  "chrono",
@@ -248,6 +248,7 @@ dependencies = [
  "flate2",
  "libc",
  "rfc9162",
+ "ryu",
  "serde",
  "serde_json",
  "serde_yaml",

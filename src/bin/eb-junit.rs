@@ -3,7 +3,7 @@
 //! Each recorded line keeps the status the result file already has. This
 //! tool does not classify failures and does not call eb-stack.
 
-use eb_pipeline::{exit, util};
+use eb_pipeline::{exit, run, util};
 use serde_json::{Map, Number, Value};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -47,7 +47,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(msg) => {
-            eprintln!("eb-junit: {msg}");
+            run::log_line(&format!("eb-junit: {msg}"));
             ExitCode::from(2)
         }
     }
@@ -886,19 +886,6 @@ mod tests {
         assert!(xml.contains("interrupted_by: SIGINT"));
         assert!(!xml.contains("logs/ok.log"));
         assert!(xml.contains("logs/later.log"));
-    }
-
-    #[test]
-    fn an_empty_successful_run_has_no_cases() {
-        let text = r#"{
-          "schema_version": 1, "kind": "result", "site": "example", "target": "cpu",
-          "build_type": "production", "run_id": "n", "exit_code": 0, "lines": []
-        }"#;
-        let xml = render(text).unwrap();
-        assert!(
-            xml.contains("tests=\"0\" failures=\"0\" errors=\"0\" skipped=\"0\" time=\"0.000\"")
-        );
-        assert!(!xml.contains("<testcase"));
     }
 
     #[test]

@@ -1,10 +1,11 @@
-use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::parser::ValueSource;
+use clap::{ArgMatches, Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use clap_complete::{generate_to, shells};
 use eb_pipeline::exit::{self, Fail};
 use eb_pipeline::package_plan;
 use eb_pipeline::plan::{build_plan, read_units, Planner};
 use eb_pipeline::resolve::{explain, Scope};
-use eb_pipeline::run::{install_handlers, log, run, signal_exit, Options, RunResult};
+use eb_pipeline::run::{apply_pending_signal, install_handlers, log, run, Options, RunResult};
 use eb_pipeline::{
     audit, easystack, eessi, from_commit, metrics, notify, sbom, schema, site, stack_checks,
     summary, templates, tools, util, watch,
@@ -32,6 +33,7 @@ Companion commands from this package:
   eb-test-map
   eb-junit
   eb-cvmfs
+  eb-admin-report
 
 Configuration: every flag above falls back to an EB_PIPELINE_<FLAG> variable
 (EB_PIPELINE_SITE, EB_PIPELINE_LIST, EB_PIPELINE_PACKAGE_PLAN,
@@ -98,14 +100,16 @@ enum Cmd {
         /// Directory that must hold every build list a target names.
         #[arg(long, env = "EB_PIPELINE_LISTS_DIR")]
         lists_dir: Option<PathBuf>,
-        /// Run each needed tool's `--version` and enforce min_version.
+        /// Run each needed tool's `--version` and enforce min_version. On a
+        /// `local` site, also warn when this host lacks `eb` or the module
+        /// tool EasyBuild uses.
         #[arg(long)]
         probe_tools: bool,
         /// Build list or easystack to pass to requested eb-stack checks.
         #[arg(long, env = "EB_PIPELINE_LIST")]
         list: Option<PathBuf>,
         /// Limit target-dependent settings to this target.
-        #[arg(long, env = "EB_PIPELINE_TARGET", requires = "stack_checks")]
+        #[arg(long, env = "EB_PIPELINE_TARGET")]
         target: Option<String>,
         /// Comma-separated eb-stack checks to run before any allocation.
         #[arg(long, value_delimiter = ',', requires = "list", value_enum)]
@@ -247,8 +251,7 @@ enum Cmd {
         #[arg(
             long,
             env = "EB_PIPELINE_LIST",
-            required_unless_present = "recorded_list",
-            conflicts_with = "recorded_list"
+            required_unless_present = "recorded_list"
         )]
         list: Option<PathBuf>,
         /// Read the list path recorded in the plan or result.
@@ -417,8 +420,7 @@ fn to_sorted<T: Serialize>(v: &T) -> serde_json::Value {
 }
 
 fn write_stdout_text(text: &str) -> Result<(), Fail> {
-    util::write_stdout(text.as_bytes())
-        .map_err(|e| Fail::new(exit::FAILED, format!("cannot write stdout: {e}")))
+    util::write_stdout_checked(text.as_bytes()).map_err(|e| Fail::new(exit::FAILED, e))
 }
 
 fn write_stderr_text(text: &str) -> Result<(), Fail> {
@@ -525,6 +527,16 @@ fn cmd_check(
             }
         }
         if probe {
+            for p in eb_pipeline::host::local_problems(
+                s,
+                &|k| std::env::var(k).ok(),
+                &eb_pipeline::host::on_path,
+            ) {
+                log("WARN", "check", &s.site.name, &p);
+            }
+            if let Some(p) = eb_pipeline::host::eb_problem(s) {
+                log("WARN", "check", &s.site.name, &p);
+            }
             tools::check_versions(s, true)?;
         }
         if !stack_checks.is_empty() {
@@ -800,7 +812,7 @@ fn cmd_man(out_dir: &Path) -> Result<i32, Fail> {
         )
     })?;
     let path = out_dir.join("eb-pipeline.1");
-    std::fs::write(&path, out).map_err(|e| {
+    util::write_atomic(&path, &out).map_err(|e| {
         Fail::new(
             exit::FAILED,
             format!("cannot write {}: {e}", path.display()),
@@ -1105,11 +1117,18 @@ fn cmd_plan_or_run(c: &Common, m: Mode) -> Result<i32, Fail> {
         if let Some(before) = &before {
             watch::record_run(&planner, &lines, &res, before);
         }
-        apply_pending_signal(&mut res);
-        write_summary(&s, &res, "run", result, None, &planner.offline_wrapper);
-        apply_pending_signal(&mut res);
-        let value = to_sorted(&res);
         let mut output_errors = Vec::new();
+        if let Err(f) = write_summary_with_pending_signal(
+            &s,
+            &mut res,
+            "run",
+            result,
+            None,
+            &planner.offline_wrapper,
+        ) {
+            output_errors.push(f.msg);
+        }
+        let value = to_sorted(&res);
         if let Some(p) = result {
             if let Err(f) = write_json(&value, Some(p)) {
                 output_errors.push(f.msg);
@@ -1144,23 +1163,22 @@ fn signal_outranks(run_code: i32, failure: Fail) -> Fail {
     }
 }
 
-fn apply_pending_signal(res: &mut RunResult) {
-    let Some(code) = signal_exit() else {
-        return;
-    };
-    if res.interrupted_by.is_none() {
-        let name = if code == exit::SIGINT {
-            "SIGINT"
-        } else {
-            "SIGTERM"
-        };
-        res.interrupted_by = Some(name.into());
-    }
-    res.exit_code = code;
+fn write_summary_with_pending_signal(
+    s: &schema::Site,
+    res: &mut RunResult,
+    command: &str,
+    result: Option<&Path>,
+    watch: Option<serde_json::Value>,
+    offline_wrapper: &[String],
+) -> Result<(), Fail> {
+    apply_pending_signal(&mut res.exit_code, &mut res.interrupted_by);
+    let written = write_summary(s, res, command, result, watch, offline_wrapper);
+    apply_pending_signal(&mut res.exit_code, &mut res.interrupted_by);
+    written
 }
 
-/// Merge a target's run into its run directory's summary; a problem is a
-/// warning and leaves the run's exit code as it is.
+/// Merge a target's run into its run directory's summary. A problem writing
+/// the summary fails the command.
 fn write_summary(
     s: &schema::Site,
     res: &RunResult,
@@ -1168,7 +1186,7 @@ fn write_summary(
     result: Option<&Path>,
     watch: Option<serde_json::Value>,
     offline_wrapper: &[String],
-) {
+) -> Result<(), Fail> {
     let dir = summary::run_dir(res);
     let entry = summary::entry(res, command, result, watch);
     match summary::record(&s.site.name, entry, &dir) {
@@ -1191,13 +1209,12 @@ fn write_summary(
                 &dir.join(summary::JSON),
                 offline_wrapper,
             );
+            Ok(())
         }
-        Err(e) => log(
-            "WARN",
-            "summary",
-            &res.target,
-            &format!("no summary written: {e}"),
-        ),
+        Err(e) => Err(Fail::new(
+            exit::FAILED,
+            format!("cannot write run summary: {e}"),
+        )),
     }
 }
 
@@ -1586,13 +1603,14 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             format!("cannot create {}: {e}", log_dir.display()),
         )
     })?;
-    std::fs::write(&list, doc.rebuild.join("\n") + "\n")
+    let rebuild_list = doc.rebuild.join("\n") + "\n";
+    util::write_atomic(Path::new(&list), rebuild_list.as_bytes())
         .map_err(|e| Fail::new(exit::FAILED, format!("cannot write {list}: {e}")))?;
     write_json(&to_sorted(&doc), Some(&log_dir.join("watch-plan.json")))?;
     let lines = util::parse_list(&(doc.rebuild.join("\n") + "\n"))?;
     tools::check_versions(&s, false)?;
     let before = watch::listings(&planner, &lines);
-    let res = run(
+    let mut res = run(
         &planner,
         &lines,
         &Options {
@@ -1636,9 +1654,27 @@ fn cmd_watch(w: &WatchArgs) -> Result<i32, Fail> {
             ),
         }
     }
-    write_summary(&s, &res, "watch", w.result, Some(to_sorted(&doc)), &[]);
+    let mut output_errors = Vec::new();
+    if let Err(f) = write_summary_with_pending_signal(
+        &s,
+        &mut res,
+        "watch",
+        w.result,
+        Some(to_sorted(&doc)),
+        &[],
+    ) {
+        output_errors.push(f.msg);
+    }
     if let Some(p) = w.result {
-        write_json(&to_sorted(&res), Some(p)).map_err(|f| signal_outranks(res.exit_code, f))?;
+        if let Err(f) = write_json(&to_sorted(&res), Some(p)) {
+            output_errors.push(f.msg);
+        }
+    }
+    if !output_errors.is_empty() {
+        return Err(signal_outranks(
+            res.exit_code,
+            Fail::new(exit::FAILED, output_errors.join("; ")),
+        ));
     }
     Ok(res.exit_code)
 }
@@ -1726,14 +1762,69 @@ fn cmd_verify(
     Ok(exit::OK)
 }
 
+/// Whether the value of `arg` of subcommand `sub` was typed on the command
+/// line. Clap also counts a value read from an environment variable as
+/// present, so a declared requirement or conflict cannot tell the two apart.
+fn typed_on_command_line(matches: &ArgMatches, sub: &str, arg: &str) -> bool {
+    matches
+        .subcommand_matches(sub)
+        .and_then(|matches| matches.value_source(arg))
+        == Some(ValueSource::CommandLine)
+}
+
+/// `check --target` selects what the stack checks read, so on the command
+/// line it needs `--stack-checks`. The variable `EB_PIPELINE_TARGET` is set
+/// for every command of a run, `check` included, and is not an error there.
+fn refuse_target_without_checks(cli: &Cli, matches: &ArgMatches) {
+    let Cmd::Check {
+        target: Some(_),
+        stack_checks,
+        ..
+    } = &cli.command
+    else {
+        return;
+    };
+    if typed_on_command_line(matches, "check", "target") && stack_checks.is_empty() {
+        Cli::command()
+            .error(
+                clap::error::ErrorKind::MissingRequiredArgument,
+                "the argument '--target <TARGET>' requires '--stack-checks <STACK_CHECKS>'",
+            )
+            .exit();
+    }
+}
+
+/// `verify --recorded-list` replaces the list, so an explicit list option
+/// conflicts with it. `EB_PIPELINE_LIST` is exported for a whole run and is
+/// only a fallback: the recorded path wins over it, as it does in
+/// `eb-retry-list`.
+fn refuse_list_with_recorded_list(cli: &Cli, matches: &ArgMatches) {
+    let Cmd::Verify {
+        list: Some(_),
+        recorded_list: true,
+        ..
+    } = &cli.command
+    else {
+        return;
+    };
+    if typed_on_command_line(matches, "verify", "list") {
+        Cli::command()
+            .error(
+                clap::error::ErrorKind::ArgumentConflict,
+                "the argument '--list <LIST>' cannot be used with '--recorded-list'",
+            )
+            .exit();
+    }
+}
+
 fn main() {
-    let cli = match Cli::try_parse() {
-        Ok(cli) => cli,
+    let matches = match Cli::command().try_get_matches() {
+        Ok(matches) => matches,
         Err(error) => match error.kind() {
             clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => {
                 let text = error.to_string();
-                if let Err(write_error) = util::write_stdout(text.as_bytes()) {
-                    eprintln!("ERROR [main] -: cannot write stdout: {write_error}");
+                if let Err(message) = util::write_stdout_checked(text.as_bytes()) {
+                    log("ERROR", "main", "-", &message);
                     std::process::exit(exit::FAILED);
                 }
                 std::process::exit(exit::OK);
@@ -1741,6 +1832,9 @@ fn main() {
             _ => error.exit(),
         },
     };
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    refuse_target_without_checks(&cli, &matches);
+    refuse_list_with_recorded_list(&cli, &matches);
     let r = match &cli.command {
         Cmd::Check {
             site,

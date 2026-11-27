@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+title: 'eb-pipeline: a site-neutral EasyBuild pipeline driver'
+message: If you use eb-pipeline, please cite it using the metadata below.
+type: software
+authors:
+- given-names: Rohit
+  family-names: Goswami
+  email: rgoswami@ieee.org
+  orcid: https://orcid.org/0000-0002-2393-8056
+license: MIT
+repository-code: https://github.com/stackhands/eb-pipeline
+url: https://stackhands.github.io/eb-pipeline/
+keywords:
+- EasyBuild
+- HPC
+- Slurm
+- pipeline
+- continuous integration
+abstract: 'Site-neutral EasyBuild pipeline driver: one per-site TOML file turns
+  a build list and a target into ordered eb-stack, eb-keep-logs, eb-staged-rebuild
+  and eb subprocesses, with a result file and exit-code contract for CI.'

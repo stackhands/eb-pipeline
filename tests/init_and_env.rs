@@ -1,4 +1,5 @@
 //! `init` templates and configuration from the environment.
+#![allow(clippy::disallowed_methods)]
 
 use std::fs::OpenOptions;
 use std::path::PathBuf;
@@ -183,6 +184,22 @@ fn help_and_version_report_stdout_write_failures() {
             err.contains("ERROR [main] -: cannot write stdout:"),
             "{option}: {err}"
         );
+    }
+}
+
+#[test]
+fn help_and_version_stdout_failures_do_not_panic_when_stderr_is_unwritable() {
+    for option in ["--help", "--version"] {
+        let full = OpenOptions::new().write(true).open("/dev/full").unwrap();
+        let full_err = OpenOptions::new().write(true).open("/dev/full").unwrap();
+        let output = bin()
+            .arg(option)
+            .stdout(Stdio::from(full))
+            .stderr(Stdio::from(full_err))
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{option}: {}", text(&output));
+        assert!(output.stderr.is_empty(), "{option}: {}", text(&output));
     }
 }
 

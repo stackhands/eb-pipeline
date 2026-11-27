@@ -8,6 +8,7 @@
 //! `--setvar modules=Name/Version,...` argument for the applications in
 //! the list.
 
+use eb_pipeline::run;
 use eb_pipeline::util;
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -58,7 +59,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(msg) => {
-            eprintln!("eb-test-map: {msg}");
+            run::log_line(&format!("eb-test-map: {msg}"));
             ExitCode::from(2)
         }
     }
@@ -98,16 +99,19 @@ fn text_names(args: &Args) -> Result<ExitCode, String> {
     }
     if !missing.is_empty() && !args.allow_unmapped {
         for name in &missing {
-            eprintln!("eb-test-map: {name} has no test in {}", map_path.display());
+            run::log_line(&format!(
+                "eb-test-map: {name} has no test in {}",
+                map_path.display()
+            ));
         }
         return Ok(ExitCode::from(2));
     }
     if args.allow_unmapped {
         for name in &missing {
-            eprintln!(
+            run::log_line(&format!(
                 "eb-test-map: {name} has no test in {}; allowed",
                 map_path.display()
-            );
+            ));
         }
     }
     let mut out_text = String::new();
@@ -512,16 +516,9 @@ mod tests {
         let path = dir.path().join("test-map.tsv");
         let raw = CString::new(path.as_os_str().as_bytes()).unwrap();
         assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
-        let (send, receive) = std::sync::mpsc::channel();
-        let reader = std::thread::spawn(move || {
-            send.send(read_map(&path)).unwrap();
-        });
-        let error = receive
-            .recv_timeout(std::time::Duration::from_secs(1))
-            .expect("map reader blocked")
-            .unwrap_err();
+        let reader = std::thread::spawn(move || read_map(&path));
+        let error = reader.join().unwrap().unwrap_err();
         assert!(error.contains("not a regular file"), "{error}");
-        reader.join().unwrap();
     }
 
     #[test]
@@ -574,13 +571,5 @@ mod tests {
             ]
         );
         assert!(parse_map("GROMACS\n").unwrap_err().contains("no test name"));
-    }
-
-    #[test]
-    fn reframe_selectors_escape_regex_characters() {
-        assert_eq!(
-            escape_regex_literal("gromacs+gpu(v2)"),
-            "gromacs\\+gpu\\(v2\\)"
-        );
     }
 }

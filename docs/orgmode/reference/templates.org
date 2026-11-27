@@ -4,7 +4,7 @@
 
 * The site file templates
 
-=eb-pipeline init= writes a site file from one of two built-in templates.
+=eb-pipeline init= writes a site file from one of three built-in templates.
 Each is a complete site file that =check= finds valid, with placeholder values only: names in angle brackets, such as =<build-user>=, and paths and names, such as =/opt/eb= and =small-lab=, that stand for the site's own.
 The examples on this page come from =docs/examples/templates.sh=.
 
@@ -13,12 +13,14 @@ eb-pipeline init --list
 #+end_src
 
 #+begin_example
+workstation      One machine, no scheduler: every phase runs on this host; no EESSI, quota or licences
 small-cluster    Slurm, one CPU target; no EESSI, inode quota or licences
 eessi-site       Slurm, CPU and GPU targets on an EESSI site layer, with quota, caches and licences
 #+end_example
 
 | Template        | Targets                            | Phases it turns on, besides =preflight= and =build=              |
 |-----------------+------------------------------------+------------------------------------------------------------------|
+| =workstation=   | =cpu=                              | none                                                             |
 | =small-cluster= | =cpu=                              | =logs=                                                           |
 | =eessi-site=    | =cpu-a=, =cpu-b=, =gpu-a=, =gpu-b= | =licences=, =shard=, =sources=, =admission=, =caches= and =logs= |
 
@@ -44,6 +46,16 @@ eb-pipeline init --template small-cluster --out small-cluster.toml
 #+begin_example
 ERROR [main] -: cannot create small-cluster.toml: File exists (os error 17)
 #+end_example
+
+** =workstation=
+
+One machine with no scheduler, such as a workstation, a lab server or a continuous integration runner.
+=kind = "local"= starts every command of a run on this host as a plain process, so no command goes through =srun=.
+No module is loaded before a build: =eb= comes from =PATH=, for example from =pip install easybuild=.
+EasyBuild still needs a module tool to write and find modules: source EESSI's init, which provides Lmod, or install Lmod, and set =EASYBUILD_MODULES_TOOL=Lmod=. =eb-pipeline check --site site.toml --probe-tools= says when this host has neither =eb= nor the module tool.
+Each line runs as its own =eb= command with the line's options only, so a line whose dependencies are not installed yet needs =--robot= on the line.
+
+#+INCLUDE: "../../../templates/workstation.toml" src toml
 
 ** =small-cluster=
 

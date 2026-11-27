@@ -1,4 +1,5 @@
 //! XML-safe testcase name handling for `eb-junit`.
+#![allow(clippy::disallowed_methods)]
 
 use std::process::Command;
 

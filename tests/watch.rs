@@ -1,12 +1,14 @@
 //! `watch` compares what runs recorded with the EESSI the module
 //! environment loads now, and rebuilds only the installs a change reaches,
 //! in the order eb-stack gives.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 
 use common::*;
+use serde_json::Value;
 use std::process::{Command, Output, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const WATCH: &str = "[watch]\neasyconfigs = [\"@ROOT@/robot\"]\n";
 
@@ -131,6 +133,113 @@ fn watch(t: &T, stamp: &str, extra: &[&str], vars: &[(&str, &str)]) -> Output {
     ];
     args.extend(extra);
     eb_pipeline(t, &args, vars)
+}
+
+#[test]
+fn a_signal_while_watch_waits_for_the_summary_lock_preserves_signal_exit() {
+    let t = built("");
+    change(&t);
+    let vars = eessi_vars(&t, "2023.06");
+    let lock = t.root().join(format!("logs/{LATER}/.summary.lock"));
+    std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
+    let held = LockHolder::exclusive(&lock);
+    let lock = std::fs::canonicalize(&lock).unwrap();
+    let result = t.root().join("watch-result.json");
+    let site = t.site.display().to_string();
+    let result_arg = result.display().to_string();
+    let path = format!(
+        "{}:{}",
+        t.stubs.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut command = Command::new(env!("CARGO_BIN_EXE_eb-pipeline"));
+    without_host_eessi(&mut command)
+        .args([
+            "watch",
+            "--site",
+            &site,
+            "--target",
+            "cpu",
+            "--build-type",
+            "production",
+            "--log-stamp",
+            LATER,
+            "--result",
+            &result_arg,
+        ])
+        .env("PATH", path)
+        .env("STUB_DIR", t.root())
+        .env_remove("EB_PIPELINE_RUN_ID")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, value) in &vars {
+        command.env(key, value);
+    }
+    let mut child = command.spawn().unwrap();
+    let pid = child.id();
+    let fds = format!("/proc/{pid}/fd");
+    let opened = || {
+        std::fs::read_dir(&fds)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|entry| std::fs::read_link(entry.path()).is_ok_and(|path| path == lock))
+    };
+    let start = Instant::now();
+    while !opened() {
+        let ended = child.try_wait().unwrap().is_some();
+        if ended || start.elapsed() >= Duration::from_secs(20) {
+            let _ = child.kill();
+            let _ = child.wait();
+            assert!(!ended, "watch ended early");
+            panic!("watch never opened .summary.lock");
+        }
+        std::thread::yield_now();
+    }
+    // SAFETY: the pid is the child this test started.
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGTERM);
+    }
+    drop(held);
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(143),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: Value = serde_json::from_str(&std::fs::read_to_string(&result).unwrap()).unwrap();
+    assert_eq!(result["interrupted_by"], "SIGTERM", "{result}");
+    assert_eq!(result["exit_code"], 143, "{result}");
+}
+
+#[test]
+fn an_unwritable_run_summary_still_writes_the_result() {
+    let t = built("");
+    change(&t);
+    let run_dir = t.run_dir(LATER);
+    let log_dir = run_dir.join("cpu");
+    std::fs::create_dir_all(&log_dir).unwrap();
+    // A directory at the summary path fails the write for every user.
+    let summary = run_dir.join("summary.json");
+    std::fs::create_dir_all(&summary).unwrap();
+    let result = t.root().join("watch-result.json");
+    let result_arg = result.display().to_string();
+    let vars = eessi_vars(&t, "2023.06");
+    let output = watch(&t, LATER, &["--result", &result_arg], &with(&vars));
+
+    let err = stderr(&output);
+    assert_eq!(code(&output), 1, "{err}");
+    assert!(err.contains("cannot write run summary:"), "{err}");
+    assert!(err.contains(&summary.display().to_string()), "{err}");
+    assert!(summary.is_dir());
+    let text =
+        std::fs::read_to_string(&result).unwrap_or_else(|error| panic!("{result:?}: {error}"));
+    let written: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(written["kind"], "result", "{written}");
+    assert_eq!(written["target"], "cpu", "{written}");
+    assert_eq!(written["exit_code"], 0, "{written}");
 }
 
 const LATER: &str = "20260102_000000";
@@ -866,7 +975,9 @@ fn watch_adopt_dry_run_removes_work_when_stdout_cannot_be_written() {
 #[test]
 fn without_eb_stack_watch_says_what_to_rebuild_and_refuses_to_guess_the_rest() {
     let t = built("");
-    let vars = eessi_vars(&t, "2023.06");
+    let mut vars = eessi_vars(&t, "2023.06");
+    // An eb-stack on the caller's PATH would answer in place of the removed stub.
+    vars.push(("PATH", format!("{}:/usr/bin:/bin", t.stubs.display())));
     t.eessi_module("CMake", "3.27.6-GCCcore-13.2.0");
     std::fs::remove_file(t.stubs.join("eb-stack")).unwrap();
     let builds = t.calls("eb");
@@ -979,8 +1090,7 @@ fn watch_refuses_without_its_table_waits_for_another_watch_and_for_eessi() {
 
     let dir = t.root().join("install/.eb-pipeline-watch");
     std::fs::create_dir_all(&dir).unwrap();
-    let held = std::fs::File::create(dir.join("cpu.watch.lock")).unwrap();
-    held.lock().unwrap();
+    let held = LockHolder::exclusive(&dir.join("cpu.watch.lock"));
     let o = watch(&t, LATER, &[], &with(&vars));
     assert_eq!(code(&o), 75, "{}", stderr(&o));
     assert!(
@@ -988,7 +1098,7 @@ fn watch_refuses_without_its_table_waits_for_another_watch_and_for_eessi() {
         "{}",
         stderr(&o)
     );
-    drop(held);
+    held.release();
 
     let mut gone = with(&vars);
     gone.push(("EESSI_MODULEPATH", "/nonexistent/modules/all"));
@@ -1160,14 +1270,17 @@ fn watch_does_not_drop_an_install_recorded_while_it_rebuilds() {
 
     let real_eb = t.stubs.join("eb-real");
     std::fs::rename(t.stubs.join("eb"), &real_eb).unwrap();
+    let ready = ReadyFifo::open(&t.root().join("watch.ready.fifo"));
+    let release = t.root().join("watch-continue");
+    make_fifo(&release);
     write_exec(
         &t.stubs.join("eb"),
         &format!(
             r#"#!/bin/sh
 case " $* " in
   *" Foo-1.0-GCCcore-13.2.0.eb "*)
-    : > "$STUB_DIR/watch-paused"
-    while [ ! -e "$STUB_DIR/watch-continue" ]; do sleep 0.01; done
+    printf x > "$STUB_READY_FIFO"
+    read _ < "$STUB_DIR/watch-continue"
     ;;
 esac
 exec "{}" "$@"
@@ -1197,6 +1310,7 @@ exec "{}" "$@"
         ])
         .env("PATH", path)
         .env("STUB_DIR", t.root())
+        .env("STUB_READY_FIFO", ready.path())
         .env_remove("EB_PIPELINE_LOG_STAMP")
         .env_remove("EB_PIPELINE_RUN_ID")
         .stdin(Stdio::null())
@@ -1206,15 +1320,7 @@ exec "{}" "$@"
         command.env(key, value);
     }
     let child = command.spawn().unwrap();
-    let paused = t.root().join("watch-paused");
-    for _ in 0..1000 {
-        if paused.is_file() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    assert!(paused.is_file(), "watch did not reach the paused rebuild");
-
+    ready.wait();
     let rerun = run(
         &t,
         "cpu",
@@ -1222,13 +1328,20 @@ exec "{}" "$@"
         "Bar-2.0-GCCcore-13.2.0.eb\n",
         &with(&vars),
     );
-    assert_eq!(code(&rerun), 0, "{}", stderr(&rerun));
-    assert!(t.watch_state("cpu")["installs"]
-        .get("Bar/2.0-GCCcore-13.2.0")
-        .is_some());
+    let recorded = std::fs::read_to_string(t.root().join("install/.eb-pipeline-watch/cpu.json"));
 
-    std::fs::write(t.root().join("watch-continue"), "").unwrap();
+    // The stub blocks in `read` until this test writes the continue pipe.
+    {
+        let mut release_file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&release)
+            .unwrap();
+        std::io::Write::write_all(&mut release_file, b"x\n").unwrap();
+    }
     let output = child.wait_with_output().unwrap();
+    assert_eq!(code(&rerun), 0, "{}", stderr(&rerun));
+    let recorded: Value = serde_json::from_str(&recorded.unwrap()).unwrap();
+    assert!(recorded["installs"].get("Bar/2.0-GCCcore-13.2.0").is_some());
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(t.watch_state("cpu")["installs"]
         .get("Bar/2.0-GCCcore-13.2.0")

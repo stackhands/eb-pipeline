@@ -1565,6 +1565,7 @@ pub fn read_units(dir: &Path) -> Result<Vec<Unit>, Fail> {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod read_tests {
     use super::{push_eb_line, read_units};
 
@@ -1700,6 +1701,7 @@ mod read_tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod generation_tests {
     use super::{build_plan, Planner};
     use crate::resolve::Scope;
