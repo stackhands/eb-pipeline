@@ -351,22 +351,35 @@ fn read_existing(path: &Path) -> Result<BTreeMap<String, u64>, String> {
                     i + 1
                 )
             })?;
-        let secs: f64 = value.trim().parse().map_err(|_| {
+        let seconds_text = value.trim();
+        let secs: f64 = seconds_text.parse().map_err(|_| {
             format!(
                 "{} line {}: `{}` is not a number of seconds",
                 path.display(),
                 i + 1,
-                value.trim()
+                seconds_text
             )
         })?;
-        if util::checked_duration_seconds(secs, None).is_err() {
-            return Err(format!(
-                "{} line {}: `{}` is not a number of seconds",
-                path.display(),
-                i + 1,
-                value.trim()
-            ));
-        }
+        let weight = match existing_weight_seconds(seconds_text, secs) {
+            Ok(weight) => weight,
+            Err(util::DurationError::Invalid) => {
+                return Err(format!(
+                    "{} line {}: `{}` is not a number of seconds",
+                    path.display(),
+                    i + 1,
+                    seconds_text
+                ));
+            }
+            Err(util::DurationError::TooLarge) => {
+                return Err(format!(
+                    "{} line {}: `{}` exceeds {} seconds",
+                    path.display(),
+                    i + 1,
+                    seconds_text,
+                    u64::MAX
+                ));
+            }
+        };
         let module = module.trim();
         if let Some(first) = first_lines.insert(module.to_string(), i + 1) {
             return Err(format!(
@@ -375,7 +388,7 @@ fn read_existing(path: &Path) -> Result<BTreeMap<String, u64>, String> {
                 i + 1
             ));
         }
-        out.insert(module.to_string(), ceil_seconds(secs));
+        out.insert(module.to_string(), weight);
     }
     Ok(out)
 }
@@ -557,6 +570,122 @@ fn ceil_seconds(secs: f64) -> u64 {
     (secs.ceil() as u64).max(1)
 }
 
+/// 2^64, the first whole-second weight that does not fit in `u64`.
+///
+/// `u64::MAX as f64` rounds up to this value, so a float comparison refuses
+/// the largest weights that still fit.
+const TWO_POW_64_F64: f64 = 18446744073709551616.0;
+const TWO_POW_64_DIGITS: &str = "18446744073709551616";
+
+struct DecimalMagnitude {
+    /// Significant digits, with leading zeros removed. Empty means zero.
+    digits: String,
+    /// `value = int(digits) * 10^scale` when `digits` is non-empty.
+    scale: i64,
+}
+
+/// Whole-second weight for one `--existing` seconds cell.
+///
+/// A duration `f64` can tell apart from 2^64 uses the same ceiling as a
+/// result duration. A duration that rounds onto 2^64 is read from the
+/// original decimal text, because the float bound cannot see that it still
+/// fits in `u64`.
+fn existing_weight_seconds(text: &str, secs: f64) -> Result<u64, util::DurationError> {
+    util::checked_duration_seconds(secs, None)?;
+    if secs < TWO_POW_64_F64 {
+        return Ok(ceil_seconds(secs));
+    }
+    decimal_weight_below_two_pow_64(text).ok_or(util::DurationError::TooLarge)
+}
+
+fn decimal_weight_below_two_pow_64(text: &str) -> Option<u64> {
+    let DecimalMagnitude { digits, scale } = parse_decimal_magnitude(text)?;
+    if digits.is_empty() {
+        return Some(1);
+    }
+    if scale >= 0 {
+        let zeros = usize::try_from(scale).ok()?;
+        if digits.len().saturating_add(zeros) > TWO_POW_64_DIGITS.len() {
+            return None;
+        }
+        let mut whole = String::with_capacity(digits.len() + zeros);
+        whole.push_str(&digits);
+        whole.push_str(&"0".repeat(zeros));
+        if whole.len() == TWO_POW_64_DIGITS.len() && whole.as_str() >= TWO_POW_64_DIGITS {
+            return None;
+        }
+        return whole.parse().ok();
+    }
+    let shift = usize::try_from(-scale).ok()?;
+    if shift >= digits.len() {
+        return Some(1);
+    }
+    let split = digits.len() - shift;
+    let whole = &digits[..split];
+    if whole.len() > TWO_POW_64_DIGITS.len()
+        || (whole.len() == TWO_POW_64_DIGITS.len() && whole >= TWO_POW_64_DIGITS)
+    {
+        return None;
+    }
+    let mut weight: u64 = whole.parse().ok()?;
+    if digits[split..].bytes().any(|byte| byte != b'0') {
+        weight = weight.saturating_add(1);
+    }
+    Some(weight.max(1))
+}
+
+fn parse_decimal_magnitude(text: &str) -> Option<DecimalMagnitude> {
+    let text = text.trim();
+    let rest = text.strip_prefix('+').unwrap_or(text);
+    if rest.is_empty() || rest.starts_with('-') {
+        return None;
+    }
+    let (coeff, exp_text) = split_scientific(rest)?;
+    let exp: i32 = match exp_text {
+        Some(exp_text) => exp_text.parse().ok()?,
+        None => 0,
+    };
+    let (int_digits, frac_digits) = split_fraction(coeff)?;
+    if int_digits.is_empty() && frac_digits.is_empty() {
+        return None;
+    }
+    if !is_ascii_digits(int_digits) || !is_ascii_digits(frac_digits) {
+        return None;
+    }
+    let mut digits = String::with_capacity(int_digits.len() + frac_digits.len());
+    digits.push_str(int_digits);
+    digits.push_str(frac_digits);
+    let scale = i64::from(exp) - i64::try_from(frac_digits.len()).ok()?;
+    Some(DecimalMagnitude {
+        digits: digits.trim_start_matches('0').to_string(),
+        scale,
+    })
+}
+
+fn split_scientific(text: &str) -> Option<(&str, Option<&str>)> {
+    let mut parts = text.split(['e', 'E']);
+    let coeff = parts.next()?;
+    match parts.next() {
+        None => Some((coeff, None)),
+        Some(exp) if parts.next().is_none() => Some((coeff, Some(exp))),
+        Some(_) => None,
+    }
+}
+
+fn split_fraction(coeff: &str) -> Option<(&str, &str)> {
+    match coeff.split_once('.') {
+        Some((int_digits, frac_digits)) if !frac_digits.contains('.') => {
+            Some((int_digits, frac_digits))
+        }
+        Some(_) => None,
+        None => Some((coeff, "")),
+    }
+}
+
+fn is_ascii_digits(text: &str) -> bool {
+    text.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 fn merge_weights(weights: &mut BTreeMap<String, u64>, obs: &[Observation], mode: Mode) {
     match mode {
         Mode::Max => {
@@ -638,6 +767,36 @@ mod tests {
         assert_eq!(ceil_seconds(0.2), 1);
         assert_eq!(ceil_seconds(12.0), 12);
         assert_eq!(ceil_seconds(12.1), 13);
+    }
+
+    #[test]
+    fn existing_seconds_text_uses_an_exact_u64_limit() {
+        let cases = [
+            ("0", Ok(1)),
+            ("0.2", Ok(1)),
+            ("12.0", Ok(12)),
+            ("12.1", Ok(13)),
+            ("1e19", Ok(10_000_000_000_000_000_000)),
+            ("18446744073709549568", Ok(18_446_744_073_709_549_568)),
+            ("18446744073709550592", Ok(18_446_744_073_709_550_592)),
+            ("18446744073709551615", Ok(u64::MAX)),
+            ("18446744073709551614.5", Ok(u64::MAX)),
+            ("18446744073709551615.0", Ok(u64::MAX)),
+            ("+18446744073709551615", Ok(u64::MAX)),
+            ("1.8446744073709551615e19", Ok(u64::MAX)),
+            ("18446744073709551616", Err(util::DurationError::TooLarge)),
+            ("18446744073709551616.0", Err(util::DurationError::TooLarge)),
+            ("1e300", Err(util::DurationError::TooLarge)),
+            ("2e19", Err(util::DurationError::TooLarge)),
+            ("-1", Err(util::DurationError::Invalid)),
+            ("nan", Err(util::DurationError::Invalid)),
+            ("inf", Err(util::DurationError::Invalid)),
+            ("1e-400", Ok(1)),
+        ];
+        for (text, want) in cases {
+            let secs = text.parse::<f64>().unwrap();
+            assert_eq!(existing_weight_seconds(text, secs), want, "{text}");
+        }
     }
 
     #[test]
