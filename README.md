@@ -118,7 +118,7 @@ for cmd in eb-pipeline eb-retry-list eb-shard-weights eb-test-map eb-junit eb-cv
 done
 ```
 
-Release archives `0.3.1` to `0.5.0` carry the first six of them; `eb-admin-report` comes from a source install. `0.3.0` carries `eb-pipeline` only.
+Release archives from `0.6.0` carry all seven. Archives `0.3.1` to `0.5.0` carry the first six; `eb-admin-report` comes from a source install there. `0.3.0` carries `eb-pipeline` only.
 
 [Install eb-pipeline](docs/orgmode/howto/install.org) has the release binaries
 and what to do when the build fails.

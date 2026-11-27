@@ -120,7 +120,7 @@ when several apply: 1, then 78, then 75, then 0. Codes are never summed.
 =eb-pipeline --version= prints the version of the crate, the same for a release and for a build from source:
 
 #+begin_example
-eb-pipeline 0.5.0
+eb-pipeline 0.6.0
 #+end_example
 
 ** Arguments

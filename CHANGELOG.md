@@ -4,6 +4,113 @@ All notable changes to this project are documented here.
 
 <!-- towncrier release notes start -->
 
+## 0.6.0 (2026-11-27)
+
+### Features
+
+- Add `eb-admin-report`, a markdown triage view for `eb-pipeline run --result`
+  records. The report includes run metadata, status counts, failed-line
+  classification signatures from `eb-stack stack bot-classify`, shared
+  infrastructure failure detection, and actionable line entries with log tails.
+- Record content digests for the site file and configured easyconfig trees in
+  watch state.
+- The `[modules]` table and its `init` key are optional; absent, no module is loaded and no module wrapper starts, as with `init = []`.
+- `check --probe-tools` on a `local` site warns when this host has no `eb` on PATH or no module tool that EasyBuild can use (Lmod through LMOD_CMD or `lmod`, or the tool EASYBUILD_MODULES_TOOL names).
+- `init --template workstation` writes a site file for one machine with no scheduler: every phase runs on the host, and `eb` comes from `PATH`.
+
+### Fixes
+
+- A signal that arrives while `watch` awaits the summary lock keeps its exit code and `interrupted_by` in the result file.
+- A signal that arrives while the summary lock is awaited is recorded in `summary.json` as `interrupted_by` and the signal exit code.
+- Attestation reads easyconfigs, patches and easyblocks through the shared regular-file reader. A named-pipe easyconfig now fails at once instead of blocking.
+- Bind signed input records to the selected target.
+- Match CPython when more than one shortest decimal represents a floating-point option value.
+- Point a duplicate easystack key at the repeated line when a Unicode line break separates it from the first.
+- Read the `kind` and `schema_version` of a `summary.json` before its other keys, so `run` leaves another artifact of the tool in its place and `status` names its kind, and a summary of a later schema version is replaced.
+- Refuse special files before reading resume results.
+- Refuse special files before reading run summaries.
+- Refuse special files before reading shard-weight inputs.
+- Refuse special manifest and archive inputs before CVMFS ingestion.
+- Refuse special package-plan manifest files before reading them.
+- Reject result artifacts with an unsupported schema version in `eb-pipeline metrics`.
+- Render numeric easystack option values the same way as EasyBuild.
+- Return a failed status when a run summary cannot be written.
+- Route remaining user-visible state writes through `util::write_atomic` and
+  add clippy disallowed-method guards so new direct `std::fs::write` or
+  `std::fs::File::create` output writers are rejected in library and binary
+  code.
+- Standard output is flushed before a write is checked, so output without a
+  trailing newline, such as the help and version text and the `from-commit` and
+  `gap` output, that the consumer cannot take is reported as
+  `cannot write stdout: ...` instead of being lost at exit.
+- The release publishes the completions and man page as `eb-pipeline-cli-assets.tar.gz`, listed in `sha256.sum`; a release asset cannot be a directory, so the 0.4.0 and 0.5.0 publish steps failed.
+- Write `--result` when `watch` cannot write the run summary, and exit 1.
+- `check` accepts `EB_PIPELINE_TARGET` without stack checks. Only a target given
+  as an option still needs them.
+- `eb-pipeline --help` and `--version`, eb-cvmfs, eb-junit, eb-retry-list,
+  eb-shard-weights and eb-test-map no longer panic with exit 101 when a
+  diagnostic cannot be written because stderr is closed or full. They keep their
+  documented exit status, including when stdout cannot be written either.
+- `eb-pipeline man --out-dir` now writes `eb-pipeline.1` through
+  `util::write_atomic`, preventing writes through a pre-existing output
+  symlink.
+- `eb-pipeline watch` now writes `<target>.json` through `util::write_atomic`
+  instead of a predictable `.<target>.json.tmp` path, avoiding writes through
+  pre-existing temporary symlinks.
+- `eb-retry-list --easystack` now writes through `util::write_atomic`, so a
+  pre-existing symlink at the output path is refused instead of being
+  followed.
+- `offline::write` publishes `manifest.json` through `util::write_atomic`
+  so offline manifests share stale temporary cleanup, symlink checks, and
+  parent directory sync.
+- `offline::write` publishes content-addressed objects through a shared
+  `util::copy_atomic_checked` helper. Objects share temporary naming,
+  stale local cleanup, file sync, atomic rename, and parent directory
+  sync with `util::write_atomic`.
+- `util::write_atomic` syncs the parent directory after renaming the
+  temporary file into place. It ignores only `EINVAL`, `ENOTSUP`, and
+  `EBADF` from directory sync and returns all other errors. Bare output
+  file names resolve against the current directory through the shared
+  parent helper.
+- `util::write_atomic` tags temporary files with kernel host, machine,
+  boot, process ID namespace, process ID, and process start time identity.
+  It reaps a stale temporary file once the writer exits on the same boot.
+  A changed start time counts as an exit. The file must come from this
+  host and namespace. After a reboot, it reaps entries only when host and
+  machine ID match. It skips malformed names, non-UTF-8 entries,
+  non-positive process IDs, and files whose identity it cannot read.
+- `verify` with the recorded list switch works when `EB_PIPELINE_LIST` is set.
+  Only a list given as an option conflicts with it.
+
+### Documentation
+
+- Make the README list every command and capability the code implements, the binaries `cargo install` builds, and the libraries and programs it links or starts.
+- New tutorial, Build with EasyBuild on your own machine: the workstation template, `check --probe-tools`, and a module built with real EasyBuild and loaded.
+- The install guide downloads release 0.6.0 and installs all seven commands from its archive.
+- The install guide installs eb-stack, eb-keep-logs and eb-staged-rebuild from their releases, each checked against its checksums.
+
+### Miscellaneous
+
+- Add a test that `eb-junit` refuses a named pipe as a report input without blocking.
+- Install test stubs from a child process, so that no test thread keeps a writable descriptor open for another thread's fork to inherit.
+- On a failed timeout or check, the `run_stubs` tests kill and reap the run they started. Their waiting stubs end once the test directory is gone.
+- Remove the spawn mutex from the run_stubs tests.
+- Run test commands directly, without a retry wrapper for the "Text file busy" error or a process-wide lock.
+- Take lock files in tests from a separate process, so that a concurrent fork cannot keep a released lock alive.
+- The `descendant` stub of the `run_stubs` tests polls in 0.1 s steps with a 30 s bound, and the test helpers in `tests/common` share `kill_and_reap`.
+- The `watch` rebuild test reaps its `eb-pipeline watch` child before any assert runs. Its stub `eb` also stops waiting once `STUB_DIR` is gone, so a failing test leaves no process behind.
+- The `watch` summary lock signal test stops and reaps its `eb-pipeline watch` child before it fails, and clears `EB_PIPELINE_RUN_ID` so an inherited value cannot change the run.
+- The lock-holding test helper lives in `tests/common`, so test files share one copy.
+- The pending-signal helper lives in `run`, so the summary writer can call it.
+- The rotate-overlap test's keep-logs stub waits only until the sibling target
+  enters rotation or finishes, with a marker file per target instead of a shared
+  temporary, and the eb-cvmfs shared-metrics lock test releases its first run
+  before asserting, so a failed wait no longer leaves the child blocked.
+- When `pidfd_open` or `poll` fails in the `output_within` test helper, it kills and reaps the child before the panic, and the panic names the failing call and its error. A signal that interrupts `poll` resumes the wait for the rest of the time limit.
+- `util::parse_proc_stat` shares process state and start time parsing
+  between `src/util.rs` and `tests/cvmfs.rs`.
+
+
 ## 0.5.0 (2026-11-24)
 
 ### Features

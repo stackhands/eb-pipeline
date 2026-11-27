@@ -351,12 +351,19 @@ fn driver_named(
 /// Block until `child` has `lock` open. The child's exit is the failure.
 fn wait_until_lock_fd(child: &mut std::process::Child, lock: &Path) {
     let fds = format!("/proc/{}/fd", child.id());
+    let exe = format!("/proc/{}/exe", child.id());
+    let binary = std::fs::canonicalize(env!("CARGO_BIN_EXE_eb-pipeline")).unwrap();
     loop {
-        let opened = std::fs::read_dir(&fds)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .any(|entry| std::fs::read_link(entry.path()).is_ok_and(|path| path == lock));
+        // A forked child that has not yet exec'd the binary still holds the
+        // descriptors of this process, the lock among them, and has no
+        // signal handlers; only the exec'd binary counts.
+        let exec_done = std::fs::read_link(&exe).is_ok_and(|path| path == binary);
+        let opened = exec_done
+            && std::fs::read_dir(&fds)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .any(|entry| std::fs::read_link(entry.path()).is_ok_and(|path| path == lock));
         if opened {
             return;
         }
