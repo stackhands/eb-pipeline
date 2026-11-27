@@ -128,7 +128,7 @@ impl<'a> Scope<'a> {
         self.per_target(&self.site.filesystems.build_path)
     }
 
-    /// EASYBUILD_SOURCEPATH entries of the target.
+    /// Entries of `EASYBUILD_SOURCEPATH` and `EASYBUILD_SOURCEPATH_DATA`.
     pub fn source_paths(&self) -> Vec<String> {
         let paths = &self.site.filesystems.source_paths;
         paths.iter().map(|p| self.per_target(p)).collect()
@@ -431,7 +431,12 @@ impl<'a> Scope<'a> {
             }
         }
         if !fs.source_paths.is_empty() {
-            put("EASYBUILD_SOURCEPATH", self.source_paths().join(":"));
+            let paths = self.source_paths().join(":");
+            put("EASYBUILD_SOURCEPATH", paths.clone());
+            // EasyBuild copies sourcepath into sourcepath-data only while nothing
+            // sets it, so a configuration file or the parent environment could
+            // share one data directory. Exporting it here overrides both.
+            put("EASYBUILD_SOURCEPATH_DATA", paths);
         }
         if fs.export_install_vars == "split" {
             put("EASYBUILD_INSTALLPATH_SOFTWARE", self.software_root());
