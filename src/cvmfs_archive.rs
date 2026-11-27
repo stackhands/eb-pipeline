@@ -464,7 +464,7 @@ fn require_ancestors(path: &str, tree: &Tree) -> Result<(), String> {
 }
 
 fn normalize(raw: &str, directory: bool) -> Option<String> {
-    if raw.len() > MAX_MEMBER_PATH || raw.contains('\0') || raw.contains('\\') {
+    if raw.contains('\0') || raw.contains('\\') {
         return None;
     }
     let path = if directory {
@@ -478,7 +478,7 @@ fn normalize(raw: &str, directory: bool) -> Option<String> {
     } else {
         raw
     };
-    if path.is_empty() || path.starts_with('/') {
+    if path.len() > MAX_MEMBER_PATH || path.is_empty() || path.starts_with('/') {
         return None;
     }
     if path
@@ -1039,6 +1039,30 @@ mod tests {
         body.extend(std::iter::repeat_n(0u8, 1024));
         let manifest = place(root.path(), "cache.tar", &body);
         check(&manifest).unwrap();
+    }
+
+    #[test]
+    fn a_directory_slash_does_not_count_toward_the_path_limit() {
+        fn long_directory(name: &str) -> Vec<u8> {
+            let stored = format!("{name}/");
+            let mut bytes = header("././@LongLink", b'L', 0, 0, stored.len() as u64 + 1).to_vec();
+            bytes.extend(stored.as_bytes());
+            bytes.push(0);
+            let pad = (512 - ((stored.len() + 1) % 512)) % 512;
+            bytes.extend(std::iter::repeat_n(0u8, pad));
+            bytes.extend(header("entry/", b'5', 0, 0, 0));
+            archive(&[bytes])
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let at_limit = long_directory(&"a".repeat(MAX_MEMBER_PATH));
+        let manifest = place(root.path(), "cache.tar", &at_limit);
+        check(&manifest).unwrap();
+
+        let over = long_directory(&"b".repeat(MAX_MEMBER_PATH + 1));
+        let manifest = place(root.path(), "cache.tar", &over);
+        let error = check(&manifest).unwrap_err();
+        assert!(error.contains("is not normalized"), "{error}");
     }
 
     #[test]
