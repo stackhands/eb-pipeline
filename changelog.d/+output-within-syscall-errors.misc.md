@@ -1,1 +1,0 @@
-When `pidfd_open` or `poll` fails in the `output_within` test helper, it kills and reaps the child before the panic, and the panic names the failing call and its error. A signal that interrupts `poll` resumes the wait for the rest of the time limit.
