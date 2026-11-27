@@ -528,7 +528,18 @@ fn route_receipt(req: &Request<'_>) -> Value {
 }
 
 /// A quoted literal that ends in `.patch`.
+///
+/// The lookup fills `name`, `version`, `versionsuffix` and `namelower`.
+/// An absent `versionsuffix` is empty. A `versionsuffix` that is not one
+/// quoted string leaves `%(versionsuffix)s` in place.
 fn patch_literals(text: &str) -> Result<Vec<String>, &'static str> {
+    let name = string_assignment(text, "name");
+    let version = string_assignment(text, "version");
+    let versionsuffix = match quoted_assignment(text, "versionsuffix") {
+        QuotedAssignment::Absent => Some(String::new()),
+        QuotedAssignment::Value(value) => Some(value),
+        QuotedAssignment::NotAString => None,
+    };
     let mut out = Vec::new();
     for statement in python_statements(text) {
         let Some(rest) = statement.trim().strip_prefix("patches") else {
@@ -546,12 +557,95 @@ fn patch_literals(text: &str) -> Result<Vec<String>, &'static str> {
             out.clear();
         }
         for literal in python_string_literals(rhs)? {
+            let literal = expand_patch_template(
+                &literal,
+                name.as_deref(),
+                version.as_deref(),
+                versionsuffix.as_deref(),
+            );
             if literal.ends_with(".patch") && literal != ".patch" {
                 out.push(literal);
             }
         }
     }
     Ok(out)
+}
+
+/// Fill `name`, `version`, `versionsuffix` and `namelower` in a patch name.
+///
+/// `None` for `versionsuffix` leaves `%(versionsuffix)s` in place. An empty
+/// string is an absent `versionsuffix`. A value may itself hold a token, so
+/// the scan runs twice. `%%` is one literal percent, so `%%(version)s` stays
+/// `%(version)s`.
+fn expand_patch_template(
+    literal: &str,
+    name: Option<&str>,
+    version: Option<&str>,
+    versionsuffix: Option<&str>,
+) -> String {
+    let lower = name.unwrap_or("").to_ascii_lowercase();
+    let mut pairs = Vec::new();
+    if let Some(versionsuffix) = versionsuffix {
+        pairs.push(("versionsuffix", versionsuffix));
+    }
+    if let Some(name) = name {
+        pairs.push(("name", name));
+        pairs.push(("namelower", lower.as_str()));
+    }
+    if let Some(version) = version {
+        pairs.push(("version", version));
+    }
+    // Hold `%%` out of the scan. A second pass must not read that percent as a token.
+    let sentinel = percent_sentinel(literal, &pairs);
+    let mut current = hide_escaped_percents(literal, sentinel);
+    for _ in 0..2 {
+        let mut next = String::new();
+        let mut rest = current.as_str();
+        let mut changed = false;
+        while let Some(start) = rest.find("%(") {
+            next.push_str(&rest[..start]);
+            let after = &rest[start + 2..];
+            if let Some((key, tail)) = after.split_once(")s") {
+                if let Some((_, value)) = pairs.iter().find(|(token, _)| *token == key) {
+                    next.push_str(value);
+                    changed = true;
+                    rest = tail;
+                    continue;
+                }
+            }
+            next.push_str("%(");
+            rest = after;
+        }
+        next.push_str(rest);
+        current = next;
+        if !changed {
+            break;
+        }
+    }
+    current.replace(sentinel, "%")
+}
+
+/// A character that does not occur in `literal` or in any template value.
+fn percent_sentinel(literal: &str, pairs: &[(&str, &str)]) -> char {
+    ('\u{E000}'..='\u{F8FF}')
+        .find(|candidate| {
+            !literal.contains(*candidate)
+                && pairs.iter().all(|(_, value)| !value.contains(*candidate))
+        })
+        .unwrap_or('\u{E000}')
+}
+
+/// Replace each `%%` with `sentinel` so the following text is not a template.
+fn hide_escaped_percents(literal: &str, sentinel: char) -> String {
+    let mut out = String::with_capacity(literal.len());
+    let mut rest = literal;
+    while let Some(index) = rest.find("%%") {
+        out.push_str(&rest[..index]);
+        out.push(sentinel);
+        rest = &rest[index + 2..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn python_string_literals(text: &str) -> Result<Vec<String>, &'static str> {
@@ -674,31 +768,60 @@ fn python_statements(text: &str) -> Vec<String> {
 
 /// `easyblock = 'Class'` on its own, ignoring a trailing `#` comment.
 fn easyblock_literal(text: &str) -> Option<String> {
-    let mut literal = None;
+    string_assignment(text, "easyblock").filter(|name| is_ident(name))
+}
+
+/// The last plain string assigned to `key`, or nothing when a later
+/// assignment is not one quoted string.
+fn string_assignment(text: &str, key: &str) -> Option<String> {
+    match quoted_assignment(text, key) {
+        QuotedAssignment::Value(value) => Some(value),
+        QuotedAssignment::Absent | QuotedAssignment::NotAString => None,
+    }
+}
+
+enum QuotedAssignment {
+    Absent,
+    Value(String),
+    NotAString,
+}
+
+/// The last `key = '...'` assignment.
+///
+/// `Absent` means `key` has no assignment. `NotAString` means the last
+/// assignment is not one quoted string.
+fn quoted_assignment(text: &str, key: &str) -> QuotedAssignment {
+    let mut seen = false;
+    let mut found = None;
     for statement in python_statements(text) {
-        let Some(rest) = statement.trim().strip_prefix("easyblock") else {
+        let Some(rest) = statement.trim().strip_prefix(key) else {
             continue;
         };
         let Some(rest) = rest.trim().strip_prefix('=') else {
             continue;
         };
-        literal = None;
-        let Some(quote) = rest.trim().chars().next() else {
+        seen = true;
+        found = None;
+        let rest = rest.trim();
+        let Some(quote) = rest.chars().next() else {
             continue;
         };
         if quote != '\'' && quote != '"' {
             continue;
         }
-        let body = &rest.trim()[quote.len_utf8()..];
+        let body = &rest[quote.len_utf8()..];
         let Some(end) = body.find(quote) else {
             continue;
         };
-        let name = &body[..end];
-        if body[end + quote.len_utf8()..].trim().is_empty() && is_ident(name) {
-            literal = Some(name.to_string());
+        if body[end + quote.len_utf8()..].trim().is_empty() {
+            found = Some(body[..end].to_string());
         }
     }
-    literal
+    match found {
+        Some(value) => QuotedAssignment::Value(value),
+        None if seen => QuotedAssignment::NotAString,
+        None => QuotedAssignment::Absent,
+    }
 }
 
 fn is_ident(name: &str) -> bool {
@@ -949,7 +1072,9 @@ impl Drop for RemoveDir {
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 mod tests {
-    use super::{easyblock_literal, find_easyblock, index_files, patch_literals, run};
+    use super::{
+        easyblock_literal, find_easyblock, index_files, patch_literals, resolve_patch, run,
+    };
     use crate::exit;
 
     #[test]
@@ -1007,6 +1132,64 @@ patches += ['extra.patch']
     fn adjacent_patch_string_literals_are_concatenated() {
         let text = "patches = ['a' '.patch', 'dir/' \"b.patch\"]\n";
         assert_eq!(patch_literals(text).unwrap(), ["a.patch", "dir/b.patch"]);
+    }
+
+    #[test]
+    fn a_version_template_in_a_patch_name_names_the_file() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path();
+        let patch = dir.join("bzip2-1.0.8-pkgconfig.patch");
+        std::fs::write(&patch, "pkgconfig\n").unwrap();
+        let text = "\
+name = 'bzip2'
+version = '1.0.8'
+patches = ['%(name)s-%(version)s-pkgconfig.patch']
+";
+        let names = patch_literals(text).unwrap();
+        assert_eq!(names, ["bzip2-1.0.8-pkgconfig.patch"]);
+        let index = index_files(&[dir.to_path_buf()], ".patch").unwrap();
+        let resolved = resolve_patch(&names[0], &[dir.to_path_buf()], &index).unwrap();
+        assert_eq!(resolved.path, patch);
+        let suffixed = "\
+name = 'bzip2'
+version = '1.0.8'
+versionsuffix = '-static'
+patches = ['%(name)s-%(version)s%(versionsuffix)s.patch']
+";
+        assert_eq!(
+            patch_literals(suffixed).unwrap(),
+            ["bzip2-1.0.8-static.patch"]
+        );
+    }
+
+    #[test]
+    fn an_absent_versionsuffix_is_empty_and_a_non_string_stays() {
+        let computed = "\
+name = 'bzip2'
+version = '1.0.8'
+versionsuffix = '-Python-' + pyver
+patches = ['%(name)s-%(version)s%(versionsuffix)s.patch']
+";
+        assert_eq!(
+            patch_literals(computed).unwrap(),
+            ["bzip2-1.0.8%(versionsuffix)s.patch"]
+        );
+        let omitted = "\
+name = 'bzip2'
+version = '1.0.8'
+patches = ['%(name)s-%(version)s%(versionsuffix)s.patch']
+";
+        assert_eq!(patch_literals(omitted).unwrap(), ["bzip2-1.0.8.patch"]);
+    }
+
+    #[test]
+    fn a_doubled_percent_is_a_literal_percent() {
+        let text = "\
+name = 'bzip2'
+version = '1.0.8'
+patches = ['%%(version)s.patch']
+";
+        assert_eq!(patch_literals(text).unwrap(), ["%(version)s.patch"]);
     }
 
     #[test]
