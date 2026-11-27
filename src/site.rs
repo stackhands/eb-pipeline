@@ -4,7 +4,10 @@ use crate::exit::Fail;
 use crate::resolve::{Scope, MODULE_SHELLS};
 use crate::schema::*;
 use crate::util::{parse_version, read_text_file, split_args};
+use serde::de::{self, Deserializer, MapAccess, SeqAccess, Visitor};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::path::Path;
 
 /// Parse a site file from text. Unknown keys and type errors are usage errors.
@@ -48,19 +51,27 @@ pub const OVERRIDE_PREFIX: &str = "EB_PIPELINE__";
 /// per-target values stay in the file. The result is checked by the same
 /// schema as the file, so an unknown key or a wrong type is a usage error.
 /// Pairs apply in name order, so the outcome does not depend on the order of
-/// the environment.
+/// the environment. An integer keeps the range of its schema field, including
+/// a value past the signed 64-bit maximum.
 pub fn parse_with_overrides(text: &str, vars: &[(String, String)]) -> Result<Site, Fail> {
     if vars.is_empty() {
         return parse(text);
     }
-    let mut table: toml::Table =
+    // `toml::Value` stores an integer as `i64`. A site field of type `u64`
+    // accepts a larger value, and that value has to survive the round trip.
+    let mut table: BTreeMap<String, Node> =
         toml::from_str(text).map_err(|e| Fail::usage(format!("invalid site file: {e}")))?;
     let mut sorted: Vec<&(String, String)> = vars.iter().collect();
     sorted.sort();
     for (name, raw) in sorted {
         apply_override(&mut table, name, raw)?;
     }
-    toml::Value::Table(table).try_into::<Site>().map_err(|e| {
+    let rendered = toml::to_string(&table).map_err(|e| {
+        Fail::usage(format!(
+            "invalid site file after environment overrides: {e}"
+        ))
+    })?;
+    toml::from_str(&rendered).map_err(|e| {
         Fail::usage(format!(
             "invalid site file after environment overrides: {e}"
         ))
@@ -83,23 +94,23 @@ fn override_path(name: &str) -> Result<Vec<String>, Fail> {
     Ok(parts)
 }
 
-fn override_value(raw: &str) -> toml::Value {
-    toml::from_str::<toml::Table>(&format!("v = {raw}"))
+fn override_value(raw: &str) -> Node {
+    toml::from_str::<BTreeMap<String, Node>>(&format!("v = {raw}"))
         .ok()
         .and_then(|mut t| t.remove("v"))
-        .unwrap_or_else(|| toml::Value::String(raw.to_string()))
+        .unwrap_or_else(|| Node::String(raw.to_string()))
 }
 
-fn apply_override(table: &mut toml::Table, name: &str, raw: &str) -> Result<(), Fail> {
+fn apply_override(table: &mut BTreeMap<String, Node>, name: &str, raw: &str) -> Result<(), Fail> {
     let path = override_path(name)?;
     let (last, parents) = path.split_last().expect("split yields one part");
     let mut here = table;
     for (i, part) in parents.iter().enumerate() {
         let entry = here
             .entry(part.clone())
-            .or_insert(toml::Value::Table(toml::Table::new()));
+            .or_insert_with(|| Node::Table(BTreeMap::new()));
         here = match entry {
-            toml::Value::Table(t) => t,
+            Node::Table(t) => t,
             _ => {
                 return Err(Fail::usage(format!(
                     "{name}: `{}` is not a table; an override cannot reach inside it",
@@ -109,13 +120,13 @@ fn apply_override(table: &mut toml::Table, name: &str, raw: &str) -> Result<(), 
         };
     }
     match here.get(last) {
-        Some(toml::Value::Array(a)) if a.iter().any(|x| x.is_table()) => {
+        Some(Node::Array(a)) if a.iter().any(|x| matches!(x, Node::Table(_))) => {
             return Err(Fail::usage(format!(
                 "{name}: `{}` is an array of tables; set it in the site file",
                 path.join(".")
             )))
         }
-        Some(toml::Value::Table(_)) => {
+        Some(Node::Table(_)) => {
             return Err(Fail::usage(format!(
                 "{name}: `{}` is a table; name one of its keys",
                 path.join(".")
@@ -131,6 +142,101 @@ fn apply_override(table: &mut toml::Table, name: &str, raw: &str) -> Result<(), 
     );
     here.insert(last.clone(), override_value(raw));
     Ok(())
+}
+
+/// One TOML value, with whole numbers kept up to `u64::MAX`.
+///
+/// The `toml` crate's `Value` type rejects an integer past `i64::MAX`.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum Node {
+    String(String),
+    Integer(i64),
+    Whole(u64),
+    Float(f64),
+    Boolean(bool),
+    Datetime(toml::value::Datetime),
+    Array(Vec<Node>),
+    Table(BTreeMap<String, Node>),
+}
+
+/// Field name `toml` uses when it presents a datetime as a map.
+const TOML_DATETIME_FIELD: &str = "$__toml_private_datetime";
+
+impl<'de> Deserialize<'de> for Node {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(NodeVisitor)
+    }
+}
+
+struct NodeVisitor;
+
+impl<'de> Visitor<'de> for NodeVisitor {
+    type Value = Node;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a TOML value")
+    }
+
+    fn visit_bool<E>(self, value: bool) -> Result<Node, E> {
+        Ok(Node::Boolean(value))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Node, E> {
+        Ok(Node::Integer(value))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Node, E> {
+        Ok(Node::Whole(value))
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Node, E> {
+        Ok(Node::Float(value))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Node, E> {
+        Ok(Node::String(value.to_string()))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Node, E> {
+        Ok(Node::String(value))
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Node, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+        while let Some(item) = seq.next_element()? {
+            out.push(item);
+        }
+        Ok(Node::Array(out))
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Node, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let Some(key) = map.next_key::<String>()? else {
+            return Ok(Node::Table(BTreeMap::new()));
+        };
+        if key == TOML_DATETIME_FIELD {
+            let text: String = map.next_value()?;
+            let datetime = text.parse().map_err(de::Error::custom)?;
+            return Ok(Node::Datetime(datetime));
+        }
+        let mut table = BTreeMap::new();
+        table.insert(key, map.next_value()?);
+        while let Some(key) = map.next_key::<String>()? {
+            if table.insert(key.clone(), map.next_value()?).is_some() {
+                return Err(de::Error::custom(format!("duplicate key: `{key}`")));
+            }
+        }
+        Ok(Node::Table(table))
+    }
 }
 
 const PLACEHOLDERS: &[&str] = &["project", "build", "phase", "target"];
@@ -1253,6 +1359,27 @@ mod override_tests {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[test]
+    fn an_override_keeps_a_whole_number_past_i64_max() {
+        let text = format!("{BASE}\n[rebuild]\nlock_timeout = 18446744073709551615\n");
+        let plain = parse(&text).unwrap();
+        assert_eq!(plain.rebuild.unwrap().lock_timeout, u64::MAX);
+
+        let kept = parse_with_overrides(
+            &text,
+            &[(
+                "EB_PIPELINE__FILESYSTEMS__SCRATCH".to_string(),
+                "/scratch/other".to_string(),
+            )],
+        )
+        .unwrap();
+        assert_eq!(kept.filesystems.scratch, "/scratch/other");
+        assert_eq!(kept.rebuild.unwrap().lock_timeout, u64::MAX);
+
+        let set = set(&[("EB_PIPELINE__REBUILD__LOCK_TIMEOUT", "18446744073709551615")]).unwrap();
+        assert_eq!(set.rebuild.unwrap().lock_timeout, u64::MAX);
     }
 }
 
