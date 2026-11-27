@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::env;
 use std::ffi::OsString;
 use std::fs;
+use std::num::IntErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -411,19 +412,59 @@ fn check_node(text: &str) -> Result<(), String> {
         Some((memory, target)) => (memory, Some(target)),
         None => (rest, None),
     };
-    let cores: u32 = cores
-        .parse()
-        .map_err(|_| format!("--node {text} cores are not an integer"))?;
-    let memory_mib: u64 = memory
-        .parse()
-        .map_err(|_| format!("--node {text} memory is not an integer number of MiB"))?;
-    if cores == 0 || memory_mib == 0 {
-        return Err(format!("--node {text} needs positive cores and memory"));
+    if let Err(kind) = node_count::<u32>(cores) {
+        return Err(node_count_message(text, "cores", kind, u64::from(u32::MAX)));
+    }
+    if let Err(kind) = node_count::<u64>(memory) {
+        return Err(node_count_message(text, "memory", kind, u64::MAX));
     }
     if target.is_some_and(str::is_empty) {
         return Err(format!("--node {text} has an empty target"));
     }
     Ok(())
+}
+
+enum NodeCount {
+    NotInteger,
+    NotPositive,
+    TooLarge,
+}
+
+fn node_count_message(text: &str, field: &str, kind: NodeCount, limit: u64) -> String {
+    match kind {
+        NodeCount::NotPositive => format!("--node {text} needs positive cores and memory"),
+        NodeCount::TooLarge if field == "memory" => {
+            format!("--node {text} memory must be at most {limit} MiB")
+        }
+        NodeCount::TooLarge => format!("--node {text} cores must be at most {limit}"),
+        NodeCount::NotInteger if field == "memory" => {
+            format!("--node {text} memory is not an integer number of MiB")
+        }
+        NodeCount::NotInteger => format!("--node {text} cores are not an integer"),
+    }
+}
+
+fn node_count<T>(token: &str) -> Result<T, NodeCount>
+where
+    T: std::str::FromStr<Err = std::num::ParseIntError> + PartialEq + From<u8>,
+{
+    match token.parse::<T>() {
+        Ok(value) if value == T::from(0) => Err(NodeCount::NotPositive),
+        Ok(value) => Ok(value),
+        Err(error) => Err(match error.kind() {
+            IntErrorKind::PosOverflow => NodeCount::TooLarge,
+            IntErrorKind::NegOverflow => NodeCount::NotPositive,
+            _ if negative_integer(token) => NodeCount::NotPositive,
+            _ => NodeCount::NotInteger,
+        }),
+    }
+}
+
+fn negative_integer(token: &str) -> bool {
+    let Some(digits) = token.strip_prefix('-') else {
+        return false;
+    };
+    !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn read_result(path: &Path) -> Result<RunOutcomes, String> {
