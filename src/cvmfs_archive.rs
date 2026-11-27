@@ -527,10 +527,13 @@ fn pax_records(payload: &[u8]) -> Result<Vec<(String, String)>, String> {
             .ok()
             .and_then(|text| text.parse().ok())
             .ok_or_else(|| fail("unrecognized archive"))?;
-        if length < space + 2 || index + length > payload.len() {
+        let Some(end) = index.checked_add(length) else {
+            return Err(fail("unrecognized archive"));
+        };
+        if length < space + 2 || end > payload.len() {
             return Err(fail("unrecognized archive"));
         }
-        let record = &payload[index..index + length];
+        let record = &payload[index..end];
         if record.last() != Some(&b'\n') {
             return Err(fail("unrecognized archive"));
         }
@@ -545,7 +548,7 @@ fn pax_records(payload: &[u8]) -> Result<Vec<(String, String)>, String> {
             .map_err(|_| fail("unrecognized archive"))?
             .to_string();
         records.push((key, value));
-        index += length;
+        index = end;
     }
     Ok(records)
 }
@@ -1036,6 +1039,33 @@ mod tests {
         body.extend(std::iter::repeat_n(0u8, 1024));
         let manifest = place(root.path(), "cache.tar", &body);
         check(&manifest).unwrap();
+    }
+
+    #[test]
+    fn a_pax_record_length_that_overflows_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let suffix = " k=v\n";
+        let mut length = suffix.len();
+        let first = loop {
+            let text = format!("{length}{suffix}");
+            if text.len() == length {
+                break text;
+            }
+            length = text.len();
+        };
+        let mut payload = first.into_bytes();
+        payload.extend(format!("{} x=\n", usize::MAX).into_bytes());
+        let mut block = header("./PaxHeaders/item", b'x', 0, 0, payload.len() as u64);
+        block[0..17].copy_from_slice(b"./PaxHeaders/item");
+        finish(&mut block);
+        let mut bytes = block.to_vec();
+        bytes.extend(&payload);
+        let pad = (512 - (payload.len() % 512)) % 512;
+        bytes.extend(std::iter::repeat_n(0u8, pad));
+        bytes.extend(std::iter::repeat_n(0u8, 1024));
+        let manifest = place(root.path(), "cache.tar", &bytes);
+        let error = check(&manifest).unwrap_err();
+        assert!(error.contains("unrecognized archive"), "{error}");
     }
 
     #[test]
