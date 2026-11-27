@@ -258,7 +258,7 @@ fn default_list_plan_is_byte_identical_to_main() {
         .replace(root.path().to_str().unwrap(), "/tmp/eb-pipeline-default");
     assert_eq!(
         format!("{:x}", Sha256::digest(normalized.as_bytes())),
-        "8d858f0a8fbd3c91b7959d155a36e8b1c61feb9808576bf70fa7bf43797e93ec",
+        "348241a4d8493b218c1aad6eac85b7f79de297034ad5a6d47161f39e7f4a5d1f",
         "ordinary --list plan bytes changed from main"
     );
 }

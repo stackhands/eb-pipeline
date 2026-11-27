@@ -1750,6 +1750,24 @@ fn a_target_source_path_gives_each_target_its_own_download_directory() {
 }
 
 #[test]
+fn data_downloads_use_the_configured_source_paths() {
+    let site = MINIMAL.replace(
+        "build_path = \"/scratch/x/build\"",
+        "build_path = \"/scratch/x/build\"\nsource_paths = [\"/scratch/x/sources/{target}\", \"/opt/eb/sources\"]",
+    ) + "[sources]\n";
+    assert!(site::validate(&site::parse(&site).unwrap(), None).is_empty());
+    for t in ["cpu", "other"] {
+        let v = plan_of(&site, "Foo-1.0.eb\n", t);
+        let expect = format!("/scratch/x/sources/{t}:/opt/eb/sources");
+        for p in ["sources", "build"] {
+            let env = &phase(&v, p)["env"];
+            assert_eq!(env["EASYBUILD_SOURCEPATH"], expect, "{p}");
+            assert_eq!(env["EASYBUILD_SOURCEPATH_DATA"], expect, "{p}");
+        }
+    }
+}
+
+#[test]
 fn work_dir_is_the_target_build_path() {
     let site = with_target(
         "[targets.route]\nkind = \"command\"\ncommand = \"/opt/r/route\"\nargs = [\"--rw\", \"{work_dir}\"]\n",

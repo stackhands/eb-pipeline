@@ -14,6 +14,7 @@ When two targets build at once with the same paths:
 - EasyBuild builds an easyconfig in =BUILD_PATH/NAME/VERSION/TOOLCHAIN-TOOLCHAIN_VERSION=, followed by the version suffix of the easyconfig, with no target in the path, and removes that directory when the build starts and again after it installs.
   Two targets that build one easyconfig at once remove each other's build directory, and the build that loses it fails.
 - EasyBuild downloads a missing source into the first entry of =source_paths=, and writes the file in place.
+  A data file uses that same first entry.
   A target that looks for a source that another target is still downloading finds the part that is written, and fails its checksum.
 - eb-staged-rebuild holds the lock of its state root for the whole of a staged build and publish, so the staged lines of targets that share a state root take turns.
 - =stack shard= writes its plan into =SHARD_DIR/RUN_ID=, which has no target in it, and eb-staged-rebuild refuses a run id it already holds, so two targets that run with one run id write their shard plans into one directory, and pass eb-staged-rebuild the same =RUN_ID-STEM=.
