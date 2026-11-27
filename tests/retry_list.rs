@@ -1532,6 +1532,75 @@ fn node_options_without_classify_or_node_are_usage_errors() {
 }
 
 #[test]
+fn node_size_errors_distinguish_sign_magnitude_and_suffix() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = dir.path().join("build.list");
+    let result = dir.path().join("result.json");
+    std::fs::write(&list, "Foo.eb\n").unwrap();
+    std::fs::write(
+        &result,
+        r#"{"kind":"result","exit_code":1,"lines":[{"easyconfig":"Foo.eb","status":"failed"}]}"#,
+    )
+    .unwrap();
+    let list = list.to_str().unwrap();
+    let result = result.to_str().unwrap();
+    let refused = [
+        ("-4:8192", "needs positive cores and memory"),
+        ("8:-512", "needs positive cores and memory"),
+        ("4294967296:1024", "cores must be at most 4294967295"),
+        (
+            "8:18446744073709551616",
+            "memory must be at most 18446744073709551615 MiB",
+        ),
+        ("8:32G", "memory is not an integer number of MiB"),
+        ("8:32Gi", "memory is not an integer number of MiB"),
+        ("8:1e3", "memory is not an integer number of MiB"),
+    ];
+    for (node, message) in refused {
+        let o = bin()
+            .args([
+                "--result",
+                result,
+                "--list",
+                list,
+                "--classify",
+                "--node",
+                node,
+            ])
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&o.stderr);
+        assert_eq!(o.status.code(), Some(2), "node={node} stderr={stderr}");
+        assert!(
+            stderr.contains(message),
+            "node={node} expected {message} stderr={stderr}"
+        );
+        assert!(o.stdout.is_empty(), "node={node}");
+    }
+    for node in ["4294967295:1", "1:18446744073709551615", "+8:+1024"] {
+        let o = bin()
+            .args([
+                "--result",
+                result,
+                "--list",
+                list,
+                "--classify",
+                "--node",
+                node,
+            ])
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&o.stderr);
+        assert!(
+            !stderr.contains("must be at most")
+                && !stderr.contains("not an integer")
+                && !stderr.contains("needs positive"),
+            "node={node} stderr={stderr}"
+        );
+    }
+}
+
+#[test]
 fn oom_failures_and_a_count_mismatch_write_no_retry_list() {
     let dir = tempfile::tempdir().unwrap();
     let (list, result) = class_fixture(dir.path(), &[("Big.eb", "timeout")]);
